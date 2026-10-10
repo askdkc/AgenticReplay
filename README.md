@@ -19,13 +19,6 @@ its `kiokuko mcp` child. Native Kiokuko DSH needs the companion recorder changes
 Provider-hidden reasoning and SDK changes before the capture boundary are not observable.
 
 [![License](https://img.shields.io/badge/code-Apache--2.0-blue)](LICENSE)
-[![Spec](https://img.shields.io/badge/trace%20spec-CC%20BY%204.0-blue)](spec/agenticreplay-trace-v0.md)
-[![Node](https://img.shields.io/badge/node-20%2B-brightgreen)](#install)
-[![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Agents%20SDK%20%C2%B7%20AI%20SDK%20%C2%B7%20any-black)](#which-agents)
-[![Good first issues](https://img.shields.io/badge/good%20first%20issues-12-orange)](docs/good-first-issues.md)
-[![Mentioned in Awesome Claude Code](https://awesome.re/mentioned-badge.svg)](https://github.com/hesreallyhim/awesome-claude-code)
-
-![Recording a Claude Code run, replaying it offline, then forking it onto two models](docs/demo-cli.gif)
 
 <sup>Real output from one session — a Claude Code run recorded, replayed against the recording, then
 forked at checkpoint 4 onto two models and graded by `npx tsc --noEmit`. Nothing here is mocked up.</sup>
