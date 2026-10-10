@@ -970,14 +970,3 @@ If it saved you an afternoon, a ⭐ helps other people find it.
 
 Apache-2.0 for the code. The trace specification is CC BY 4.0, so anyone may reimplement it.
 
----
-
-<img src="ORCAREPLAYLOGO.png?raw=true" alt="OrcaReplay" height="383" width="320">
-<sub>
-Built by the OrcaRouter team ·
-<a href="https://www.orcarouter.ai">orcarouter.ai</a> ·
-<a href="https://www.orcarouter.ai/models">all models</a> ·
-<a href="https://www.orcarouter.ai/code-review">OrcaCode Review</a> ·
-<a href="https://x.com/OrcaRouter">X</a> ·
-<a href="https://huggingface.co/orcarouter">Hugging Face</a>
-</sub>
