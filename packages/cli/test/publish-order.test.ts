@@ -25,6 +25,17 @@ const manifest = (
  * public registry.
  */
 describe('publish order', () => {
+  it('prevents publishing the monorepo root as the CLI package', () => {
+    const root = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+    const cli = manifest('packages/cli');
+    const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'));
+
+    expect(root.private, 'npm publish from the root must be refused').toBe(true);
+    expect(root.name, 'the root must not shadow the CLI workspace').not.toBe(cli.name);
+    expect(root.name).toBe(lock.packages[''].name);
+    expect(root.version).toBe(lock.packages[''].version);
+  });
+
   it('puts every package after all of its internal dependencies', () => {
     const published = new Set<string>();
     for (const dir of order()) {
