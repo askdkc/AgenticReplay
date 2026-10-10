@@ -12,7 +12,7 @@ const cli = join(here, '..', 'dist', 'cli.js');
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-detect-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-detect-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -25,25 +25,25 @@ afterEach(async () => {
  * `detect` is machine-wide by construction — every adapter's is `detectAgent(binaries, homePaths)`,
  * which asks whether a binary is on PATH or a directory exists under `$HOME`. Neither is a fact
  * about `cwd`. That is the right question for "is this agent even installed", and the wrong one for
- * "what should I launch", and `orca record -- python my_graph.py` was answering the second with the
+ * "what should I launch", and `agenticreplay record -- python my_graph.py` was answering the second with the
  * first:
  *
- *     $ orca record -- python my_graph.py     # in a LangGraph project
+ *     $ agenticreplay record -- python my_graph.py     # in a LangGraph project
  *     info adapter.detected id=claude-code
  *     API Error: 400 unknown provider for model claude-opus-5
  *
  * Claude Code ran. `python my_graph.py` was handed to it as arguments and never launched. The run
- * was recorded, so the failure looks like a bad API key rather than like orca starting the wrong
+ * was recorded, so the failure looks like a bad API key rather than like agenticreplay starting the wrong
  * program.
  *
  * A command after `--` is not a hint about the environment. It is the answer.
  */
-describe('orca record, when the command line already says what to run', () => {
+describe('agenticreplay record, when the command line already says what to run', () => {
   const timeout = 60_000;
   const bare = { ...process.env, NO_COLOR: '1', OPENAI_API_KEY: 'stub-key' };
 
   /** Run the built CLI, returning what it printed whether or not it succeeded. */
-  async function orca(
+  async function agenticreplay(
     argv: string[],
     env: NodeJS.ProcessEnv = {},
   ): Promise<{ code: number; said: string }> {
@@ -64,7 +64,7 @@ describe('orca record, when the command line already says what to run', () => {
     'does not detect an agent when a command was given after --',
     async () => {
       await writeFile(join(dir, 'agent.mjs'), "process.stdout.write('MINE RAN');\n");
-      const { said } = await orca(['record', '--', 'node', 'agent.mjs']);
+      const { said } = await agenticreplay(['record', '--', 'node', 'agent.mjs']);
 
       expect(said, 'it picked an agent instead of running the command').not.toMatch(
         /adapter\.detected/,
@@ -91,7 +91,7 @@ describe('orca record, when the command line already says what to run', () => {
         join(dir, 'shows-env.mjs'),
         `process.stdout.write('BASE=' + (process.env.OPENAI_BASE_URL ?? 'unset'));${'\n'}`,
       );
-      const { said } = await orca(['record', '--', 'node', 'shows-env.mjs']);
+      const { said } = await agenticreplay(['record', '--', 'node', 'shows-env.mjs']);
       expect(said).toMatch(/BASE=http:\/\/127\.0\.0\.1:\d+/);
       expect(said, 'it fell back to something that redirects nothing').not.toMatch(
         /tls\.intercept_required/,
@@ -129,7 +129,7 @@ describe('orca record, when the command line already says what to run', () => {
       // the first adapter the registry tries, and PATH is walked in order, so the shim wins over
       // any real agent the machine running the suite happens to have installed.
       const path = `${bin}${delimiter}${process.env.PATH ?? ''}`;
-      const { said } = await orca(['record'], {
+      const { said } = await agenticreplay(['record'], {
         PATH: path,
         Path: path,
         HOME: dir,
@@ -147,7 +147,7 @@ describe('orca record, when the command line already says what to run', () => {
   it(
     'still uses the agent when one is named, even with a command after --',
     async () => {
-      const { said } = await orca(['record', 'generic-openai', '--', 'node', '-e', '0']);
+      const { said } = await agenticreplay(['record', 'generic-openai', '--', 'node', '-e', '0']);
       expect(said, 'a named agent should not be re-detected').not.toMatch(/adapter\.detected/);
       expect(said).toMatch(/adapter=generic-openai/);
     },

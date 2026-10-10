@@ -1,6 +1,6 @@
 # What a real agent found
 
-Everything in OrcaReplay `v0` was built against fixtures. Fixtures are written by the person who
+Everything in AgenticReplay `v0` was built against fixtures. Fixtures are written by the person who
 writes the code, so they encode what that person already believed — which is why the first run
 recorded through it against a *real* harness is worth writing down rather than quietly fixing.
 
@@ -36,7 +36,7 @@ credential rules, which is the distinction that makes the exemption safe.
 
 ## Replaying re-runs the tools
 
-Orca does not intercept tool execution, so the agent really runs `npm test` again and it really
+AgenticReplay does not intercept tool execution, so the agent really runs `npm test` again and it really
 reprints its own durations.
 
 A request whose only difference is inside tool output is now served from the recording as a `major`
@@ -44,9 +44,9 @@ divergence instead of halting the replay.
 
 ## Where that left it
 
-The run replays offline end to end — `reused=7/7 exact=2 divergences=5 unmatched=0 exit=0` — with
+The run replays offline end to end — `reused=7/7 canonical_exact=2 divergences=5 unmatched=0 exit=0` — with
 every approximation named, and a fork of it reaches the same tree the recording did.
 
-**If you have a recording orca still gets wrong, that is the single most useful thing you can
-send.** `orca export last -o bug.html` writes one self-contained file, and `orca scrub` is there for
+**If you have a recording agenticreplay still gets wrong, that is the single most useful thing you can
+send.** `agenticreplay export last -o bug.html` writes one self-contained file, and `agenticreplay scrub` is there for
 anything you need out of it first.

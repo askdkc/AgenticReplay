@@ -55,6 +55,6 @@ def test_shows_that_a_fork_target_moved(analysis: str) -> None:
 def test_runs_with_no_argument() -> None:
     """The default path is the repo's example trace, so `python3 examples/analyze.py` just works."""
     if repo_root() is None:
-        pytest.skip("not running inside an OrcaReplay checkout")
+        pytest.skip("not running inside an AgenticReplay checkout")
     result = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

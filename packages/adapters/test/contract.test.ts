@@ -1,4 +1,4 @@
-import type { Adapter, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, RecordContext } from '@agenticreplay/plugin-api';
 import { join, posix, win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -531,7 +531,7 @@ describe('checkAdapterContract', () => {
   /**
    * A reset path outside `capture` is a path the recording never held.
    *
-   * `orca record` forces only `artifacts.capture`; `orca replay` deletes `resetBeforeReplay` and
+   * `agenticreplay record` forces only `artifacts.capture`; `agenticreplay replay` deletes `resetBeforeReplay` and
    * restores the recording over the top. Declare one without the other and the reset empties a
    * directory instead of putting it back where the run began — and the declaration reads as
    * though it could not. The shipped adapter asserts this by hand in its own test; this is where

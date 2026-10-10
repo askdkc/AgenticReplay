@@ -3,13 +3,13 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { join } from 'node:path';
-import type { BlobRef, Manifest, TraceEvent } from '@orcareplay/schema';
+import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
 import {
   INLINE_PAYLOAD_LIMIT,
   RUN_ID_PATTERN,
   SCHEMA_VERSION,
   validateManifest,
-} from '@orcareplay/schema';
+} from '@agenticreplay/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BlobStore } from '../src/blobs.js';
 import { TraceWriter } from '../src/writer.js';
@@ -21,11 +21,11 @@ const INIT = {
   adapter: { id: 'claude-code', version: '0.1.0' },
   argv: ['claude', '--dangerously-skip-permissions'],
   cwd: '/workspace',
-  orcaVersion: '0.1.0',
+  agenticreplayVersion: '0.1.0',
 };
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'orca-writer-'));
+  root = await mkdtemp(join(tmpdir(), 'agenticreplay-writer-'));
   runs = join(root, 'runs');
 });
 
@@ -50,12 +50,12 @@ describe('events that happened before they were written', () => {
    * authoritative for duration, which it cannot be if it records the drain.
    */
   it('uses the time an event happened, not the time it was written', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-when-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-when-'));
     const writer = await TraceWriter.create(dir, {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
     });
     // The frame happened here, and is written 250ms later — the drain the real recorder does.
     const happened = new Date();
@@ -67,7 +67,7 @@ describe('events that happened before they were written', () => {
       occurredAt: happened,
       attrs: { argv: ['sh', '-c', 'true'] },
     });
-    const written = await writer.append({ type: 'note', actor: 'orca' });
+    const written = await writer.append({ type: 'note', actor: 'agenticreplay' });
     await writer.close(0);
 
     expect(event.ts).toBe(happened.toISOString());
@@ -81,12 +81,12 @@ describe('events that happened before they were written', () => {
   it('clamps an event that happened before the run to the start of it', async () => {
     // A shell frame can carry a clock reading fractionally behind the writer's own start, and a
     // negative offset into a run is not a thing spec §2.1 can express.
-    const dir = await mkdtemp(join(tmpdir(), 'orca-when-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-when-'));
     const writer = await TraceWriter.create(dir, {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
     });
     const event = await writer.append({
       type: 'shell.exec',
@@ -101,15 +101,19 @@ describe('events that happened before they were written', () => {
   });
 
   it('still stamps the clock itself when nothing is supplied', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-when-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-when-'));
     const writer = await TraceWriter.create(dir, {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
     });
     const before = Date.now();
-    const event = await writer.append({ type: 'note', actor: 'orca', attrs: { rule: 'x' } });
+    const event = await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      attrs: { rule: 'x' },
+    });
     await writer.close(0);
 
     expect(Date.parse(event.ts)).toBeGreaterThanOrEqual(before - 1000);
@@ -141,6 +145,20 @@ describe('TraceWriter.create', () => {
     await expect(TraceWriter.create(runs, { ...INIT, runId: 'nope' })).rejects.toThrow(/run id/i);
   });
 
+  it('preserves a valid high-entropy run id during manifest redaction', async () => {
+    // This is a real failing ID captured from the DSH acceptance failure. The
+    // previous whole-manifest entropy sweep replaced it with a secret marker,
+    // so schema validation rejected an otherwise valid recording.
+    const runId = 'run_d99a8e9bc33113e4658d6472';
+    const w = await TraceWriter.create(runs, { ...INIT, runId });
+    const manifest = JSON.parse(
+      await readFile(join(w.runDir, 'manifest.json'), 'utf8'),
+    ) as Manifest;
+    expect(manifest.run_id).toBe(runId);
+    expect(validateManifest(manifest).errors).toEqual([]);
+    await w.close();
+  });
+
   it('writes a manifest immediately, so a run that crashes is still readable', async () => {
     const w = await TraceWriter.create(runs, INIT);
     const m = JSON.parse(await readFile(join(w.runDir, 'manifest.json'), 'utf8')) as Manifest;
@@ -152,16 +170,19 @@ describe('TraceWriter.create', () => {
   });
 
   it('captures the environment by allowlist only', async () => {
-    process.env['ORCA_TEST_SECRET'] = 'sk-abcdefghijklmnop0123';
-    process.env['ORCA_TEST_OK'] = 'yes';
+    process.env['AGENTICREPLAY_TEST_SECRET'] = 'sk-abcdefghijklmnop0123';
+    process.env['AGENTICREPLAY_TEST_OK'] = 'yes';
     try {
-      const w = await TraceWriter.create(runs, { ...INIT, envAllowlist: ['ORCA_TEST_OK'] });
+      const w = await TraceWriter.create(runs, {
+        ...INIT,
+        envAllowlist: ['AGENTICREPLAY_TEST_OK'],
+      });
       const m = await w.close();
-      expect(m.env_allowlisted).toEqual({ ORCA_TEST_OK: 'yes' });
+      expect(m.env_allowlisted).toEqual({ AGENTICREPLAY_TEST_OK: 'yes' });
       expect(JSON.stringify(m)).not.toContain('sk-abcdef');
     } finally {
-      delete process.env['ORCA_TEST_SECRET'];
-      delete process.env['ORCA_TEST_OK'];
+      delete process.env['AGENTICREPLAY_TEST_SECRET'];
+      delete process.env['AGENTICREPLAY_TEST_OK'];
     }
   });
 
@@ -177,7 +198,7 @@ describe('TraceWriter.create', () => {
  *
  * Three commands broke this three different ways and every one of them shipped: `record
  * --mcp-config` put a note at seq 0, `attach` wrote neither bracket, and a fork opened on `fork`.
- * All three produce a trace that `orca show`, `orca replay` and the viewer render happily, and
+ * All three produce a trace that `agenticreplay show`, `agenticreplay replay` and the viewer render happily, and
  * that a gateway refuses on push — after the agent session is over and the recording is the only
  * copy of it.
  *
@@ -188,38 +209,42 @@ describe('TraceWriter.create', () => {
 describe('TraceWriter — the brackets a run is required to have', () => {
   it('refuses run.start anywhere but seq 0', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
-    await expect(w.append({ type: 'run.start', actor: 'orca' })).rejects.toThrow(/seq 0/);
+    await w.append({ type: 'note', actor: 'agenticreplay' });
+    await expect(w.append({ type: 'run.start', actor: 'agenticreplay' })).rejects.toThrow(/seq 0/);
     await w.close();
   });
 
   it('refuses a second run.start', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'run.start', actor: 'orca' });
-    await expect(w.append({ type: 'run.start', actor: 'orca' })).rejects.toThrow(/seq 0/);
+    await w.append({ type: 'run.start', actor: 'agenticreplay' });
+    await expect(w.append({ type: 'run.start', actor: 'agenticreplay' })).rejects.toThrow(/seq 0/);
     await w.close();
   });
 
   it('refuses run.end on a run that was never opened', async () => {
     const w = await TraceWriter.create(runs, INIT);
     await w.append({ type: 'model.request', actor: 'model' });
-    await expect(w.append({ type: 'run.end', actor: 'orca' })).rejects.toThrow(/no run.start/);
+    await expect(w.append({ type: 'run.end', actor: 'agenticreplay' })).rejects.toThrow(
+      /no run.start/,
+    );
     await w.close();
   });
 
   it('refuses a second run.end', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'run.start', actor: 'orca' });
-    await w.append({ type: 'run.end', actor: 'orca' });
-    await expect(w.append({ type: 'run.end', actor: 'orca' })).rejects.toThrow(/already has a run/);
+    await w.append({ type: 'run.start', actor: 'agenticreplay' });
+    await w.append({ type: 'run.end', actor: 'agenticreplay' });
+    await expect(w.append({ type: 'run.end', actor: 'agenticreplay' })).rejects.toThrow(
+      /already has a run/,
+    );
     await w.close();
   });
 
   it('leaves no hole in the dense order when it refuses one', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'run.start', actor: 'orca' });
-    await expect(w.append({ type: 'run.start', actor: 'orca' })).rejects.toThrow();
-    const after = await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'run.start', actor: 'agenticreplay' });
+    await expect(w.append({ type: 'run.start', actor: 'agenticreplay' })).rejects.toThrow();
+    const after = await w.append({ type: 'note', actor: 'agenticreplay' });
     // Spec §2.1: seq is a dense total order. A rejected write must not consume one.
     expect(after.seq).toBe(1);
     await w.close();
@@ -228,7 +253,7 @@ describe('TraceWriter — the brackets a run is required to have', () => {
   it('still lets a fragment be a fragment', async () => {
     const w = await TraceWriter.create(runs, INIT);
     await w.append({ type: 'model.request', actor: 'model' });
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     const events = await lines(w);
     expect(events.map((e) => e.type)).toEqual(['model.request', 'note']);
     await w.close();
@@ -238,7 +263,7 @@ describe('TraceWriter — the brackets a run is required to have', () => {
 describe('TraceWriter.append', () => {
   it('assigns a dense sequence from zero', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    for (let i = 0; i < 5; i++) await w.append({ type: 'note', actor: 'orca' });
+    for (let i = 0; i < 5; i++) await w.append({ type: 'note', actor: 'agenticreplay' });
     expect((await lines(w)).map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
     expect(w.seq).toBe(5);
     await w.close();
@@ -246,9 +271,9 @@ describe('TraceWriter.append', () => {
 
   it('stamps a wall clock and a monotonic clock', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const first = await w.append({ type: 'run.start', actor: 'orca' });
+    const first = await w.append({ type: 'run.start', actor: 'agenticreplay' });
     await new Promise((r) => setTimeout(r, 8));
-    const second = await w.append({ type: 'note', actor: 'orca' });
+    const second = await w.append({ type: 'note', actor: 'agenticreplay' });
     expect(Date.parse(first.ts)).not.toBeNaN();
     expect(first.mono_us).toBeGreaterThanOrEqual(0);
     expect(second.mono_us).toBeGreaterThan(first.mono_us);
@@ -258,8 +283,8 @@ describe('TraceWriter.append', () => {
 
   it('writes exactly one newline-terminated line per event', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     const raw = await readFile(join(w.runDir, 'events.jsonl'), 'utf8');
     expect(raw.endsWith('\n')).toBe(true);
     expect(raw.trimEnd().split('\n')).toHaveLength(2);
@@ -279,9 +304,9 @@ describe('TraceWriter.append', () => {
 
   it('defaults the turn to the last one used', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
-    await w.append({ type: 'note', actor: 'orca', turn: 2 });
-    const e = await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
+    await w.append({ type: 'note', actor: 'agenticreplay', turn: 2 });
+    const e = await w.append({ type: 'note', actor: 'agenticreplay' });
     expect(e.turn).toBe(2);
     expect((await lines(w)).map((x) => x.turn)).toEqual([0, 2, 2]);
     await w.close();
@@ -289,11 +314,11 @@ describe('TraceWriter.append', () => {
 
   it('validates before writing — an invalid event never reaches disk', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
-    await expect(w.append({ type: 'model.telepathy' as 'note', actor: 'orca' })).rejects.toThrow(
-      /invalid trace event/,
-    );
-    await expect(w.append({ type: 'note', actor: 'wizard' as 'orca' })).rejects.toThrow(
+    await w.append({ type: 'note', actor: 'agenticreplay' });
+    await expect(
+      w.append({ type: 'model.telepathy' as 'note', actor: 'agenticreplay' }),
+    ).rejects.toThrow(/invalid trace event/);
+    await expect(w.append({ type: 'note', actor: 'wizard' as 'agenticreplay' })).rejects.toThrow(
       /invalid trace event/,
     );
     expect(await lines(w)).toHaveLength(1);
@@ -302,7 +327,7 @@ describe('TraceWriter.append', () => {
 
   it('keeps a small payload inline', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const e = await w.append({ type: 'note', actor: 'orca', payload: { hello: 'world' } });
+    const e = await w.append({ type: 'note', actor: 'agenticreplay', payload: { hello: 'world' } });
     expect(e.payload).toEqual({ hello: 'world' });
     expect(await new BlobStore(join(w.runDir, 'blobs')).count()).toBe(0);
     await w.close();
@@ -336,13 +361,15 @@ describe('TraceWriter.append', () => {
   it('refuses to append after close', async () => {
     const w = await TraceWriter.create(runs, INIT);
     await w.close();
-    await expect(w.append({ type: 'note', actor: 'orca' })).rejects.toThrow(/closed/i);
+    await expect(w.append({ type: 'note', actor: 'agenticreplay' })).rejects.toThrow(/closed/i);
   });
 
   it('keeps concurrent appends dense and unmangled', async () => {
     const w = await TraceWriter.create(runs, INIT);
     await Promise.all(
-      Array.from({ length: 40 }, (_, i) => w.append({ type: 'note', actor: 'orca', attrs: { i } })),
+      Array.from({ length: 40 }, (_, i) =>
+        w.append({ type: 'note', actor: 'agenticreplay', attrs: { i } }),
+      ),
     );
     const written = await lines(w);
     expect(written.map((e) => e.seq)).toEqual(Array.from({ length: 40 }, (_, i) => i));
@@ -396,7 +423,7 @@ describe('redaction is on the write path', () => {
     const w = await TraceWriter.create(runs, INIT);
     const e = await w.append({
       type: 'note',
-      actor: 'orca',
+      actor: 'agenticreplay',
       payload: { key: 'sk-abcdefghijklmnop0123456789' },
     });
     expect(e.redacted?.length).toBeGreaterThan(0);
@@ -406,15 +433,27 @@ describe('redaction is on the write path', () => {
 
   it('leaves clean events without a redacted field', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const e = await w.append({ type: 'note', actor: 'orca', payload: { ok: 'nothing secret' } });
+    const e = await w.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      payload: { ok: 'nothing secret' },
+    });
     expect(e.redacted).toBeUndefined();
     await w.close();
   });
 
   it('gives one secret one placeholder across the whole run', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const a = await w.append({ type: 'note', actor: 'orca', payload: 'sk-abcdefghijklmnop0123' });
-    const b = await w.append({ type: 'note', actor: 'orca', payload: 'sk-abcdefghijklmnop0123' });
+    const a = await w.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      payload: 'sk-abcdefghijklmnop0123',
+    });
+    const b = await w.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      payload: 'sk-abcdefghijklmnop0123',
+    });
     expect(a.payload).toBe(b.payload);
     await w.close();
   });
@@ -423,8 +462,8 @@ describe('redaction is on the write path', () => {
 describe('TraceWriter.close', () => {
   it('seals the manifest with counts, integrity and exit code', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'run.start', actor: 'orca' });
-    await w.append({ type: 'run.end', actor: 'orca' });
+    await w.append({ type: 'run.start', actor: 'agenticreplay' });
+    await w.append({ type: 'run.end', actor: 'agenticreplay' });
     const m = await w.close(3);
     expect(validateManifest(m).errors).toEqual([]);
     expect(m.ended_at).toBeTruthy();
@@ -440,7 +479,7 @@ describe('TraceWriter.close', () => {
 
   it('records the sha256 of events.jsonl exactly (spec §6)', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca', payload: { a: 1 } });
+    await w.append({ type: 'note', actor: 'agenticreplay', payload: { a: 1 } });
     const m = await w.close();
     const raw = await readFile(join(w.runDir, 'events.jsonl'));
     expect(m.integrity?.events_sha256).toBe(createHash('sha256').update(raw).digest('hex'));
@@ -455,7 +494,11 @@ describe('TraceWriter.close', () => {
 
   it('writes redactions.json by rule and identifier, never by value', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca', payload: { k: 'sk-abcdefghijklmnop0123' } });
+    await w.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      payload: { k: 'sk-abcdefghijklmnop0123' },
+    });
     const m = await w.close();
     const raw = await readFile(join(w.runDir, 'redactions.json'), 'utf8');
     expect(raw).not.toContain('abcdefghij');
@@ -467,7 +510,7 @@ describe('TraceWriter.close', () => {
 
   it('is idempotent', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     const first = await w.close(0);
     expect(await w.close(0)).toEqual(first);
   });
@@ -478,7 +521,7 @@ describe('TraceWriter.close', () => {
   // 0o666 would stop noticing if it were lost on Linux too.
   it.skipIf(process.platform === 'win32')('keeps every file it writes owner-only', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     await w.close();
     for (const f of ['events.jsonl', 'manifest.json', 'redactions.json']) {
       const s = await stat(join(w.runDir, f));

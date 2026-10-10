@@ -477,7 +477,7 @@ describe('a batch whose order differs', () => {
     expect(rule.batch?.key({ model: 'm', input: ['one'] })).toBeUndefined();
     expect(rule.batch?.key({ model: 'm', input: 'a bare string' })).toBeUndefined();
     // Token ids are a different call: integers in a row are not obviously independent of one
-    // another the way texts are, so orca does not claim they are.
+    // another the way texts are, so agenticreplay does not claim they are.
     expect(rule.batch?.key({ model: 'm', input: [[1, 2], [3]] })).toBeUndefined();
   });
 
@@ -499,7 +499,7 @@ describe('a batch whose order differs', () => {
 
 describe('forking over a recorded index', () => {
   /**
-   * The point of `forkable: false`. `orca replay <run> --from 3 --model claude-opus-5` asks a
+   * The point of `forkable: false`. `agenticreplay replay <run> --from 3 --model claude-opus-5` asks a
    * different model the same questions over the same documents — so the chat turns go live and
    * every embedding is still answered from the recording. Re-embedding them would spend money to
    * recompute an identical value and leave the fork's index differing from its parent's.

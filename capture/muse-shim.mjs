@@ -1,29 +1,29 @@
 /**
- * Muse Code's capture needs one thing orca will not do, and this is the smallest thing that does
+ * Muse Code's capture needs one thing agenticreplay will not do, and this is the smallest thing that does
  * it.
  *
  * Muse fetches a model catalogue with `GET /muse-code/models` and refuses to build a turn until
- * that succeeds. orca's proxy answers 404 to every non-POST by design — "Only a POST is ever a
+ * that succeeds. agenticreplay's proxy answers 404 to every non-POST by design — "Only a POST is ever a
  * model call", and relaxing that once let a PUT be recorded as a model exchange. Neither side is
- * wrong, so the catalogue is answered here instead: this process sits in front of orca, serves
+ * wrong, so the catalogue is answered here instead: this process sits in front of agenticreplay, serves
  * that one GET itself, and forwards everything else byte for byte. The turn that carries the
- * prompt still goes to orca and is recorded as a `/responses` exchange, which is what the capture
+ * prompt still goes to agenticreplay and is recorded as a `/responses` exchange, which is what the capture
  * is for.
  *
  * The second thing it handles is smaller but just as fatal. Muse takes its origin from a
  * `--base-url` flag rather than a variable, and *discards any path on it* — measured: given
  * `http://127.0.0.1:47001/deep/path` it still requests `/muse-code/models` at the root. So
  * `/forward/<origin>`, which is how every other config-route capture here carries the operator's
- * own upstream, cannot be used: the path is the payload and Muse throws it away. orca's proxy
+ * own upstream, cannot be used: the path is the payload and Muse throws it away. agenticreplay's proxy
  * origin is passed in bare, through `MUSE_PROXY`.
  *
- * Launched by `capture.mjs muse`. `MUSE_PROXY` is set by orca itself, named through
- * `ORCA_BASE_URL_VARS`; `MUSE_BIN` overrides the binary for an install that is not on PATH.
+ * Launched by `capture.mjs muse`. `MUSE_PROXY` is set by agenticreplay itself, named through
+ * `AGENTICREPLAY_BASE_URL_VARS`; `MUSE_BIN` overrides the binary for an install that is not on PATH.
  */
 import { spawn } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 
-const PLACEHOLDER_KEY = 'orca-recorded';
+const PLACEHOLDER_KEY = 'agenticreplay-recorded';
 const prompt = process.argv[2] ?? '';
 const model = process.argv[3] || 'muse-spark-1.3';
 const bin = process.env.MUSE_BIN || 'muse';
@@ -31,7 +31,7 @@ const bin = process.env.MUSE_BIN || 'muse';
 const proxy = process.env.MUSE_PROXY;
 if (!proxy || !/^https?:\/\//.test(proxy)) {
   console.error(
-    'muse-shim: MUSE_PROXY is not an origin. It is set by orca from ORCA_BASE_URL_VARS; run this ' +
+    'muse-shim: MUSE_PROXY is not an origin. It is set by agenticreplay from AGENTICREPLAY_BASE_URL_VARS; run this ' +
       'through `capture.mjs muse` rather than directly.',
   );
   process.exit(2);

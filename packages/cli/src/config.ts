@@ -2,51 +2,24 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { restrictToOwner } from '@orcareplay/core';
+import { restrictToOwner } from '@agenticreplay/core';
 import type { ParsedArgs } from './args.js';
-// fetchPinned lives in @orcareplay/core so the CLI and the recording proxy cannot
+// fetchPinned lives in @agenticreplay/core so the CLI and the recording proxy cannot
 // each carry their own copy — see its doc comment.
-export { fetchPinned } from '@orcareplay/core';
+export { fetchPinned } from '@agenticreplay/core';
 
 /**
  * User-level configuration, which exists for exactly one job: let
- * `orca compare --models a,b,c` reach several models without re-typing a gateway URL and a key on
+ * `agenticreplay compare --models a,b,c` reach several models without re-typing a gateway URL and a key on
  * every invocation.
  *
  * That means this file holds a credential, and everything here follows from it. The file is
  * `0600` inside a `0700` directory, the key can live in an environment variable instead of on
  * disk, and nothing ever prints it back. The key itself never enters a trace either — the proxy
  * adds it to the outbound request only, while what gets recorded is derived from the *incoming*
- * request with auth stripped, so a gateway key orca injects is invisible to the recording by
+ * request with auth stripped, so a gateway key agenticreplay injects is invisible to the recording by
  * construction rather than by a rule someone has to remember.
  */
-/**
- * OrcaRouter, the gateway orca suggests when you do not name one.
- *
- * A default, never a redirect. It fills in the blank when you ask for a gateway — `orca setup` with
- * no `--gateway` — and nothing more: a run with no gateway configured still proxies the agent's own
- * traffic straight to the provider the agent was already talking to, on the agent's own key. Sending
- * that somewhere the user never named would mean posting their source code to a third party as a
- * side effect of pressing record, and their existing provider key would not authenticate there
- * anyway. Naming a default is a recommendation; rerouting unconfigured traffic would be a decision
- * taken on someone's behalf.
- *
- * The **origin**, deliberately without the `/v1` an OpenAI SDK wants. That SDK is configured with
- * `base_url=https://api.orcarouter.ai/v1` because it appends only `/chat/completions`; orca appends
- * the whole dialect path (`/v1/messages` or `/v1/chat/completions`) and probes `/v1/models`, so a
- * `/v1` here would produce `/v1/v1/chat/completions`. Confirmed against the maintainers' own
- * published action, whose `orcarouter-url` input defaults to
- * `https://api.orcarouter.ai/v1/chat/completions`.
- *
- * Model ids there are namespaced by provider — `anthropic/claude-sonnet-4.6`,
- * `openai/gpt-4o-mini`. Both places that read a model id already cope: dialect selection matches
- * `(?:.*\/)?claude[-.]`, and `resolveModelId` strips the namespace before pricing.
- */
-export const ORCAROUTER_URL = 'https://api.orcarouter.ai';
-
-/** Where a person gets a key for the default gateway. Printed, never fetched. */
-export const ORCAROUTER_CONSOLE = 'https://www.orcarouter.ai/console/token';
-
 export interface GatewayConfig {
   /** Origin that serves the model APIs. One gateway usually serves both wire formats. */
   url: string;
@@ -54,53 +27,43 @@ export interface GatewayConfig {
   api_key?: string;
   /** Name of an environment variable to read the key from at call time. */
   api_key_env?: string;
-  /**
-   * Where `url` came from: a destination the user NAMED, or `orca setup`'s own default.
-   *
-   * Model traffic does not care — proxying a call your agent was already making through
-   * OrcaRouter is the default `orca setup` exists to offer. A RUN does care: it holds source,
-   * shell output and workspace snapshots, and README's "Never a default destination" promises that
-   * push has no host of its own. Without this field the two are indistinguishable in the file, so
-   * `orca setup` followed by `orca push last` sent the whole recording to a host the user never
-   * typed.
-   *
-   * Absent in configs written before this field existed — see `namedPushDestination`, which
-   * resolves that case rather than guessing here.
-   */
+  /** Explicit selection provenance; implicit destinations are never eligible for upload. */
   url_source?: 'named' | 'default';
 }
 
-export interface OrcaConfig {
+export interface AgenticReplayConfig {
   gateway?: GatewayConfig;
-  /** Default model list for `orca compare` when `--models` is not given. */
+  /** Default model list for `agenticreplay compare` when `--models` is not given. */
   models?: string[];
 }
 
 /** XDG, with the documented fallback. Honours `XDG_CONFIG_HOME` so tests need no real home. */
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), '.config');
-  return join(base, 'orca', 'config.json');
+  return join(base, 'agenticreplay', 'config.json');
 }
 
 /**
  * Read the config, or an empty one.
  *
  * Never throws. A hand-edited file with a stray comma should cost you the gateway setting, not
- * every orca command — and a tool people reach for when something is already broken is the worst
+ * every agenticreplay command — and a tool people reach for when something is already broken is the worst
  * possible thing to have its own unrecoverable failure mode.
  */
-export async function readConfig(env: NodeJS.ProcessEnv = process.env): Promise<OrcaConfig> {
+export async function readConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<AgenticReplayConfig> {
   try {
     const raw = await readFile(configPath(env), 'utf8');
     const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object' ? (parsed as OrcaConfig) : {};
+    return parsed !== null && typeof parsed === 'object' ? (parsed as AgenticReplayConfig) : {};
   } catch {
     return {};
   }
 }
 
 export async function writeConfig(
-  config: OrcaConfig,
+  config: AgenticReplayConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const path = configPath(env);
@@ -116,7 +79,7 @@ export async function writeConfig(
   // `mode: 0o600` is discarded on Windows, so a file written straight to `path` carries whatever
   // the directory handed down until `restrictToOwner` has run on it — and if that call throws
   // (icacls unavailable, `SystemRoot` unset, an unwritable `%TEMP%` for its scratch file) the key
-  // is already on disk and readable, while `orca setup` reports an error that mentions none of
+  // is already on disk and readable, while `agenticreplay setup` reports an error that mentions none of
   // that. Measured: the key was there in plain text, under the inherited ACL.
   //
   // Neither truncating in place nor deleting on failure would do, because both throw away the
@@ -150,7 +113,7 @@ export async function writeConfig(
  * session, and the user never learns their key was not applied.
  */
 export function gatewayHeaders(
-  config: OrcaConfig,
+  config: AgenticReplayConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
   const gateway = config.gateway;
@@ -193,8 +156,9 @@ export async function resolveUpstream(
   const config = await readConfig(env);
   const gateway = config.gateway?.url;
   const out: Record<string, string> = {};
-  const anthropic = args.str('upstream-anthropic') ?? env.ORCA_UPSTREAM_ANTHROPIC ?? gateway;
-  const openai = args.str('upstream-openai') ?? env.ORCA_UPSTREAM_OPENAI ?? gateway;
+  const anthropic =
+    args.str('upstream-anthropic') ?? env.AGENTICREPLAY_UPSTREAM_ANTHROPIC ?? gateway;
+  const openai = args.str('upstream-openai') ?? env.AGENTICREPLAY_UPSTREAM_OPENAI ?? gateway;
   if (anthropic) out.anthropic = anthropic;
   if (openai) {
     out.openai = openai;
@@ -207,29 +171,12 @@ export async function resolveUpstream(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/**
- * The configured gateway, but ONLY when it is a destination the user named.
- *
- * The single funnel for "may a run go here by default". Sync reads this instead of
- * `config.gateway?.url`, so the README's promise ("push has no default host") is one function
- * rather than a rule each command has to remember.
- *
- * Three cases:
- *
- *   - `url_source: 'named'`   -> the user typed it, at `--gateway` or at setup's prompt. Yes.
- *   - `url_source: 'default'` -> setup filled it in. No.
- *   - absent (an older config) -> decided by the URL. Setup writes ORCAROUTER_URL and nothing
- *     else without being told, so any OTHER origin can only have been named; ORCAROUTER_URL
- *     itself is genuinely ambiguous and answers no. That refuses one case it need not — a user
- *     who deliberately typed OrcaRouter before this field existed — and the cost is one
- *     `--gateway` flag or one re-run of `orca setup --gateway`, against sending a recording of
- *     someone's source to a host they never named.
- */
-export function namedPushDestination(config: OrcaConfig): string | undefined {
+/** A destination explicitly configured in AgenticReplay's own configuration namespace. */
+export function namedPushDestination(config: AgenticReplayConfig): string | undefined {
   const url = config.gateway?.url;
   if (!url) return undefined;
   const source = config.gateway?.url_source;
   if (source === 'named') return url;
   if (source === 'default') return undefined;
-  return sameOrigin(url, ORCAROUTER_URL) ? undefined : url;
+  return url;
 }

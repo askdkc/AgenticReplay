@@ -4,7 +4,7 @@
  *
  * It makes no model call of its own. It spawns a child that does, and passes on nothing — the
  * child sees the environment only because a process inherits its parent's. That inheritance is the
- * whole mechanism behind recording a gateway, and it is a property of the OS rather than of orca,
+ * whole mechanism behind recording a gateway, and it is a property of the OS rather than of agenticreplay,
  * which is exactly why it is worth a test rather than a sentence in a README.
  */
 import { spawn } from 'node:child_process';

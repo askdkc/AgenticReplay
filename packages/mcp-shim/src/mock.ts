@@ -178,7 +178,7 @@ export async function runMock(options: MockOptions): Promise<number> {
         const answer: JsonRpcMessage = {
           jsonrpc: '2.0',
           id: message.id,
-          error: { code: -32601, message: `orca: no recorded response for ${method}` },
+          error: { code: -32601, message: `agenticreplay: no recorded response for ${method}` },
         };
         options.onFrame?.('out', answer);
         stdout.write(`${JSON.stringify(answer)}\n`);

@@ -1,9 +1,9 @@
 """A two-agent run with a handoff and an input guardrail, configuring nothing.
 
-The point of this check is what the file does *not* contain. orca attaches its tracing processor
-through a `sitecustomize` on PYTHONPATH, so an agent that has never heard of orca still reports the
+The point of this check is what the file does *not* contain. agenticreplay attaches its tracing processor
+through a `sitecustomize` on PYTHONPATH, so an agent that has never heard of agenticreplay still reports the
 three things a proxy cannot see: which agent a turn belonged to, that a handoff happened and from
-whom, and that a guardrail ran. If this file mentioned orca, it would be testing something else.
+whom, and that a guardrail ran. If this file mentioned agenticreplay, it would be testing something else.
 
 The stub answers the first turn with a `transfer_to_*` call, so the handoff is real rather than
 simulated.

@@ -22,7 +22,7 @@ import type {
   CanonicalTool,
   StopReason,
   Usage,
-} from '@orcareplay/plugin-api';
+} from '@agenticreplay/plugin-api';
 import { SseDecoder, encodeSseFrame, frameJson, toChunks } from './sse.js';
 import {
   asArray,

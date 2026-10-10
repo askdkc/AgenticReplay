@@ -1,15 +1,14 @@
 {
-  "name": "orcareplay",
+  "name": "agenticreplay",
   "version": "0.5.0",
-  "mcpName": "io.github.Continuum-AI-Corp/orcareplay",
+  "mcpName": "io.github.askdkc/agenticreplay",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Record, replay and fork debugger for AI agents",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "orca": "./dist/cli.js",
-    "orcareplay": "./dist/cli.js"
+    "agenticreplay": "./dist/cli.js"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -19,7 +18,7 @@
     "quickstart"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "keywords": [
     "ai",
@@ -34,19 +33,19 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay.git",
+    "url": "https://github.com/askdkc/AgenticReplay.git",
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@orcareplay/schema": "0.5.0",
-    "@orcareplay/plugin-api": "0.5.0",
-    "@orcareplay/core": "0.5.0",
-    "@orcareplay/proxy": "0.5.0",
-    "@orcareplay/providers": "0.5.0",
-    "@orcareplay/adapters": "0.5.0",
-    "@orcareplay/fs-capture": "0.5.0",
-    "@orcareplay/viewer": "0.5.0",
-    "@orcareplay/mcp-shim": "0.5.0",
-    "@orcareplay/shell-shim": "0.5.0"
+    "@agenticreplay/schema": "0.5.0",
+    "@agenticreplay/plugin-api": "0.5.0",
+    "@agenticreplay/core": "0.5.0",
+    "@agenticreplay/proxy": "0.5.0",
+    "@agenticreplay/providers": "0.5.0",
+    "@agenticreplay/adapters": "0.5.0",
+    "@agenticreplay/fs-capture": "0.5.0",
+    "@agenticreplay/viewer": "0.5.0",
+    "@agenticreplay/mcp-shim": "0.5.0",
+    "@agenticreplay/shell-shim": "0.5.0"
   }
 }

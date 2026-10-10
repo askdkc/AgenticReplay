@@ -4,13 +4,13 @@
 
 Every recording below is replayed with the network off and the numbers asserted. A turn the
 recording cannot serve — `unmatched` — has a budget of zero, because a replay that has to go
-and ask a model is not a replay. `exact` counts the turns matched byte for byte; a floor is
+and ask a model is not a replay. `canonical_exact` counts turns matched after canonical normalization; a floor is
 set per entry so fidelity carried by the match ladder rather than by the capture shows up as
 a regression rather than as a pass.
 
-| Harness | Exact | Unmatched | Divergences | Live calls | Budget |
+| Harness | Canonical exact | Unmatched | Divergences | Live calls | Budget |
 |---|---|---|---|---|---|
-| a Node agent over chat completions | 3 | 0 | 0 | 0 | exact ≥ 3, divergences ≤ 0 |
+| a Node agent over chat completions | 3 | 0 | 0 | 0 | canonical exact ≥ 3, divergences ≤ 0 |
 
-- **a Node agent over chat completions** — the run `orca quickstart` ships and replays on every invocation
+- **a Node agent over chat completions** — the run `agenticreplay quickstart` ships and replays on every invocation
 

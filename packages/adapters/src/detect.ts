@@ -29,7 +29,7 @@ export async function hasBinary(name: string): Promise<boolean> {
  * `claude`, `claude.cmd`, `claude.ps1` — and only the `.cmd` is something `CreateProcess` will
  * run. `spawn` does no PATHEXT resolution of its own, so a launcher handed the bare name finds
  * the extensionless shell script, cannot execute it, and reports ENOENT for an agent that
- * `orca doctor` had just called present. Resolving here, against the same PATHEXT walk detection
+ * `agenticreplay doctor` had just called present. Resolving here, against the same PATHEXT walk detection
  * uses, is what keeps the two answers the same.
  *
  * Not `shell: true`: that would hand the agent's own arguments to a command interpreter.

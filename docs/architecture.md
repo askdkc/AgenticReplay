@@ -7,7 +7,7 @@ previous turn's `tool_result` blocks. So a proxy in front of the model sees the 
 request, each streamed response, every tool call the model emitted, and every tool result the
 harness produced.
 
-**This is why OrcaReplay does not patch your agent.** One well-placed interception point yields a
+**This is why AgenticReplay does not patch your agent.** One well-placed interception point yields a
 near-complete execution graph for any agent that talks to a model over HTTP.
 
 Two honest limits come with it, and they shape everything else:
@@ -20,21 +20,21 @@ The three supplementary capture layers exist to close that gap where it matters.
 ## Capture layers
 
 ```
-agent process ──(base-URL env redirect)──▶ orca proxy ──(verbatim)──▶ provider API
-agent process ──(rewritten MCP config)───▶ orca mcp-shim ─(unmodified)▶ MCP servers
+agent process ──(base-URL env redirect)──▶ agenticreplay proxy ──(verbatim)──▶ provider API
+agent process ──(rewritten MCP config)───▶ agenticreplay mcp-shim ─(unmodified)▶ MCP servers
 workspace ─────(snapshot per turn)───────▶ shadow git index
                                               │
                                               ▼
-                            .orca/runs/<id>/{manifest,events.jsonl,blobs,fs}
+                            .agenticreplay/runs/<id>/{manifest,events.jsonl,blobs,fs}
 ```
 
 | Layer | Mechanism | Confidence | Fallback |
 |---|---|---|---|
 | Model calls | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` injected into the child; proxy speaks the native wire protocol and tees a canonical copy while streaming through | high | none — a harness that ignores those variables is not captured |
 | Tools & results | free — reconstructed from the protocol | high | — |
-| MCP | config rewritten to launch `orca mcp-shim -- <original>`, a transparent JSON-RPC tee | high | protocol layer, one turn late |
+| MCP | config rewritten to launch `agenticreplay mcp-shim -- <original>`, a transparent JSON-RPC tee | high | protocol layer, one turn late |
 | Shell | `PATH` shim in front of `sh`/`bash`, capturing argv, exit code, duration, stdout/stderr split | medium | protocol layer gives the command and merged output |
-| Filesystem | shadow git index (`--git-dir=.orca/runs/<id>/fs --work-tree=.`), one snapshot per turn | high | — |
+| Filesystem | shadow git index (`--git-dir=.agenticreplay/runs/<id>/fs --work-tree=.`), one snapshot per turn | high | — |
 | Network | not captured | — | — |
 
 Reusing git plumbing for the filesystem layer gives content-addressed storage, cheap diffs,

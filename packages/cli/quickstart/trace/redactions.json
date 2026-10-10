@@ -1,4 +1,23 @@
 {
-  "policy_version": 3,
-  "records": []
+  "policy_version": 5,
+  "records": [
+    {
+      "rule": "high_entropy",
+      "identifier": "env:PATH:913a3095",
+      "placeholder": "<secret:high_entropy:913a3095>",
+      "count": 1
+    },
+    {
+      "rule": "high_entropy",
+      "identifier": "env:HOME:913a3095",
+      "placeholder": "<secret:high_entropy:913a3095>",
+      "count": 1
+    },
+    {
+      "rule": "high_entropy",
+      "identifier": "event:0:913a3095",
+      "placeholder": "<secret:high_entropy:913a3095>",
+      "count": 1
+    }
+  ]
 }

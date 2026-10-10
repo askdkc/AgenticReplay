@@ -11,10 +11,11 @@
  * script never turns a string into markup, so the escape function is the entire XSS surface.
  */
 
-import type { BlobRef, Manifest, TraceEvent } from '@orcareplay/schema';
+import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
 import { CREDIT_LINE } from './credit.js';
 import { CLIENT_SOURCE } from './client/main.js';
 import { VIEWER_CSS } from './css.js';
+import { bodyText } from './trace-dir.js';
 import {
   buildTimeline,
   detectLoops,
@@ -38,6 +39,8 @@ export interface RenderOptions {
   script?: string;
   /** Per-payload character cap, so one huge blob cannot dominate the file. */
   maxInlineChars?: number;
+  /** Loopback blob endpoint used by the live viewer; exports leave this unset and embed bodies. */
+  blobDownloadBaseUrl?: string;
 }
 
 const DEFAULT_MAX_INLINE_CHARS = 200_000;
@@ -136,23 +139,45 @@ function attrsBlock(attrs: Record<string, unknown>, max: number): string {
   return `<h3>attrs</h3><dl class="kv">${rows.join('')}</dl>`;
 }
 
-function payloadBlock(payload: unknown, blobs: Record<string, string>, max: number): string {
+function downloadLink(
+  text: string,
+  mediaType: string | undefined,
+  name: string,
+  blobDownloadUrl?: string,
+): string {
+  const type = mediaType && /^[\w.+-]+\/[\w.+-]+$/.test(mediaType) ? mediaType : 'text/plain';
+  const href = blobDownloadUrl ?? `data:${type};charset=utf-8,${encodeURIComponent(text)}`;
+  return `<a class="download" href="${escapeHtml(href)}" download="${escapeHtml(name)}">download full redacted body</a>`;
+}
+
+function payloadBlock(
+  payload: unknown,
+  blobs: Record<string, string>,
+  max: number,
+  downloadName: string,
+  blobDownloadBaseUrl?: string,
+): string {
   const ref = asBlobRef(payload);
   if (ref) {
     const digest = ref.$blob;
-    const content = blobs[digest] ?? blobs[digest.replace(/^sha256:/, '')];
+    const stored = blobs[digest] ?? blobs[digest.replace(/^sha256:/, '')];
+    const content = stored === undefined ? undefined : bodyText(stored);
     const meta = `<dl class="kv">${kvRow('digest', escapeHtml(digest))}${kvRow(
       'size',
       escapeHtml(formatBytes(ref.bytes)),
     )}${ref.media_type ? kvRow('media type', escapeHtml(ref.media_type)) : ''}</dl>`;
+    const downloadUrl = blobDownloadBaseUrl
+      ? `${blobDownloadBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(digest.replace(/^sha256:/, ''))}`
+      : undefined;
     const body =
       content === undefined
-        ? `<p class="muted">payload omitted, ${escapeHtml(ref.bytes)} bytes</p>`
-        : codeBlock(content, max, ref.media_type);
+        ? `<p class="muted">${downloadUrl ? `preview omitted; ${escapeHtml(ref.bytes)} bytes available by download` : `payload omitted, ${escapeHtml(ref.bytes)} bytes`}</p>${downloadUrl ? downloadLink('', ref.media_type, downloadName, downloadUrl) : ''}`
+        : `${codeBlock(content, max, ref.media_type)}${downloadLink(content, ref.media_type, downloadName, downloadUrl)}`;
     return `<h3>payload</h3>${meta}${body}`;
   }
   const text = typeof payload === 'string' ? payload : json(payload);
-  return `<h3>payload</h3>${codeBlock(text, max, typeof payload === 'string' ? undefined : 'application/json')}`;
+  const mediaType = typeof payload === 'string' ? undefined : 'application/json';
+  return `<h3>payload</h3>${codeBlock(text, max, mediaType)}${downloadLink(text, mediaType, downloadName)}`;
 }
 
 function paneHtml(
@@ -161,6 +186,7 @@ function paneHtml(
   index: number,
   blobs: Record<string, string>,
   max: number,
+  blobDownloadBaseUrl?: string,
 ): string {
   const attrs =
     event.attrs && typeof event.attrs === 'object' && Object.keys(event.attrs).length > 0
@@ -179,14 +205,23 @@ function paneHtml(
   ].join('');
 
   return [
-    `<article class="pane" role="tabpanel" id="orca-pane-${index}"`,
-    ` aria-labelledby="orca-row-${index}" tabindex="0"${index === 0 ? '' : ' hidden'}>`,
+    `<article class="pane" role="tabpanel" id="agenticreplay-pane-${index}"`,
+    ` aria-labelledby="agenticreplay-row-${index}" tabindex="0"${index === 0 ? '' : ' hidden'}>`,
     `<h2 class="pane-title">${chip(row.kind, row.tone)}<span class="name">${escapeHtml(row.label)}</span></h2>`,
     `<dl class="kv">${facts}</dl>`,
     attrs ? attrsBlock(attrs, max) : '',
+    event.transformations?.length
+      ? `<h3>transformations</h3>${codeBlock(json(event.transformations), max, 'application/json')}`
+      : '',
     event.payload === undefined || event.payload === null
       ? ''
-      : payloadBlock(event.payload, blobs, max),
+      : payloadBlock(
+          event.payload,
+          blobs,
+          max,
+          `agenticreplay-event-${event.seq}.txt`,
+          blobDownloadBaseUrl,
+        ),
     '</article>',
   ].join('');
 }
@@ -196,8 +231,8 @@ function rowHtml(row: TimelineRow, index: number, previous: TimelineRow | undefi
   // without spending a colour or an extra element on it.
   const turnStart = previous !== undefined && previous.turn !== row.turn;
   return [
-    `<button class="row" type="button" role="tab" id="orca-row-${index}"`,
-    ` aria-controls="orca-pane-${index}" aria-selected="${index === 0}"`,
+    `<button class="row" type="button" role="tab" id="agenticreplay-row-${index}"`,
+    ` aria-controls="agenticreplay-pane-${index}" aria-selected="${index === 0}"`,
     ` tabindex="${index === 0 ? 0 : -1}" data-tone="${row.tone}"`,
     ` data-mono="${row.monoUs}"`,
     turnStart ? ' data-turn-start="true"' : '',
@@ -229,6 +264,11 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
   const loops = detectLoops(events);
 
   const stats = [
+    statHtml(
+      'capture',
+      manifest.capture?.status ?? 'unverified',
+      manifest.capture?.status !== 'complete',
+    ),
     statHtml('duration', formatDuration(summary.durationMs)),
     statHtml('events', formatTokens(summary.eventCount)),
     statHtml('turns', formatTokens(summary.turnCount)),
@@ -262,13 +302,17 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
     : '';
 
   const list = rows.length
-    ? `<div class="rows" role="tablist" aria-orientation="vertical" aria-label="Events"><span class="playhead" id="orca-playhead" aria-hidden="true"></span>${rows
+    ? `<div class="rows" role="tablist" aria-orientation="vertical" aria-label="Events"><span class="playhead" id="agenticreplay-playhead" aria-hidden="true"></span>${rows
         .map((row, index) => rowHtml(row, index, rows[index - 1]))
         .join('')}</div>`
     : '<div class="rows"><p class="empty">This trace has no events.</p></div>';
 
   const panes = rows.length
-    ? rows.map((row, index) => paneHtml(events[index]!, row, index, blobs, max)).join('')
+    ? rows
+        .map((row, index) =>
+          paneHtml(events[index]!, row, index, blobs, max, options.blobDownloadBaseUrl),
+        )
+        .join('')
     : '<p class="empty">Nothing to inspect.</p>';
 
   const countLabel = `${formatTokens(rows.length)} ${rows.length === 1 ? 'event' : 'events'}`;
@@ -279,7 +323,7 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>${escapeHtml(manifest.run_id)} · OrcaReplay</title>
+<title>${escapeHtml(manifest.run_id)} · AgenticReplay</title>
 <style>${VIEWER_CSS}</style>
 </head>
 <body>
@@ -287,18 +331,19 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
 <h1>${escapeHtml(manifest.run_id)}</h1>
 <span class="sub">${escapeHtml(summary.adapter)}</span>
 <dl class="stats">${stats}</dl>
-<button id="orca-theme" type="button" aria-label="Switch colour theme">auto</button>
+<button id="agenticreplay-theme" type="button" aria-label="Switch colour theme">auto</button>
 </header>
+${manifest.capture?.issues.length ? `<p class="sub">Capture issues: ${escapeHtml(manifest.capture.issues.join(', '))}</p>` : ''}
 ${findings}
 <main class="split">
 <section class="list" aria-label="Timeline">
 <div class="filterbar">
-<button id="orca-play" type="button" aria-label="Play the run back" aria-pressed="false"><span class="glyph" aria-hidden="true"></span></button>
-<button id="orca-speed" type="button" aria-label="Playback speed">1&times;</button>
-<input id="orca-filter" type="text" aria-label="Filter events" autocomplete="off" spellcheck="false" placeholder="filter · / to focus · space to play">
-<span id="orca-count" aria-live="polite">${escapeHtml(countLabel)}</span>
+<button id="agenticreplay-play" type="button" aria-label="Play the run back" aria-pressed="false"><span class="glyph" aria-hidden="true"></span></button>
+<button id="agenticreplay-speed" type="button" aria-label="Playback speed">1&times;</button>
+<input id="agenticreplay-filter" type="text" aria-label="Filter events" autocomplete="off" spellcheck="false" placeholder="filter · / to focus · space to play">
+<span id="agenticreplay-count" aria-live="polite">${escapeHtml(countLabel)}</span>
 </div>
-<div class="progress" aria-hidden="true"><span id="orca-progress"></span></div>
+<div class="progress" aria-hidden="true"><span id="agenticreplay-progress"></span></div>
 ${list}
 </section>
 <section class="pane-col" aria-label="Event detail">${panes}</section>

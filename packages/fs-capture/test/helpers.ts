@@ -5,7 +5,7 @@ import { join } from 'node:path';
 const created: string[] = [];
 
 /** realpath() matters on macOS, where os.tmpdir() is a symlink and git reports the real path. */
-export async function makeTempDir(prefix = 'orca-fs-'): Promise<string> {
+export async function makeTempDir(prefix = 'agenticreplay-fs-'): Promise<string> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   created.push(dir);
   return dir;

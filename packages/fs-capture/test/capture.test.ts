@@ -16,11 +16,11 @@ interface Fixture {
   capture: FsCapture;
 }
 
-/** The run dir lives under the workspace, exactly as `.orca/runs/<run_id>/` does in the spec. */
+/** The run dir lives under the workspace, exactly as `.agenticreplay/runs/<run_id>/` does in the spec. */
 async function fixture(): Promise<Fixture> {
   const root = await makeTempDir();
   const cwd = join(root, 'ws');
-  const runDir = join(cwd, '.orca', 'runs', 'run_abc123');
+  const runDir = join(cwd, '.agenticreplay', 'runs', 'run_abc123');
   await mkdir(cwd, { recursive: true });
   const capture = await FsCapture.start({ runDir, cwd });
   return { root, cwd, runDir, capture };
@@ -144,7 +144,7 @@ describe('gitInfo', () => {
     await expect(capture.gitInfo(join(root, 'nowhere'))).resolves.toEqual({});
   });
 
-  itGit("does not count orca's own runs as changes to the user's tree", async () => {
+  itGit("does not count agenticreplay's own runs as changes to the user's tree", async () => {
     // The exclusion only covered *this* run's directory, so the second run in a workspace reported
     // dirty: true because the first run's directory was sitting there untracked. That is exactly
     // the failure the exclusion exists to prevent, just one run later — and it makes the flag
@@ -158,8 +158,8 @@ describe('gitInfo', () => {
     });
     expect((await capture.gitInfo(cwd)).dirty).toBe(false);
 
-    // A previous run's directory, which orca wrote and the user did not.
-    await write(cwd, '.orca/runs/run_deadbeef0001/events.jsonl', '{}\n');
+    // A previous run's directory, which agenticreplay wrote and the user did not.
+    await write(cwd, '.agenticreplay/runs/run_deadbeef0001/events.jsonl', '{}\n');
     expect((await capture.gitInfo(cwd)).dirty).toBe(false);
 
     // Anything the user actually changed still counts.
@@ -200,7 +200,7 @@ describe('gitInfo', () => {
     expect(info.dirty).toBe(false);
   });
 
-  // The run dir normally lives inside the workspace, so orca's own files must not be what makes
+  // The run dir normally lives inside the workspace, so agenticreplay's own files must not be what makes
   // the user's repo look dirty in the manifest.
   itGit('ignores its own run dir when deciding whether the workspace is dirty', async () => {
     const { cwd, runDir, capture } = await fixture();

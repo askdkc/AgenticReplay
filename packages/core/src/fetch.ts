@@ -28,7 +28,7 @@
  * — the third request carrying the same header pair — was not. The second lived beside
  * gatewayHeaders in the CLI's config.ts, which fixed that and left the RECORDING PROXY out: it is
  * handed the very same credential as `upstreamHeaders` and attaches it to both of its live call
- * sites, on the path every `orca record` / `replay --loose` / `compare` / fork takes.
+ * sites, on the path every `agenticreplay record` / `replay --loose` / `compare` / fork takes.
  *
  * Both times the pin sat in the package that noticed the problem rather than in the one every
  * carrier of the credential depends on. core is that package, so this is the last place it can
@@ -39,9 +39,9 @@ export async function fetchPinned(target: string, init: RequestInit): Promise<Re
   if (res.status >= 300 && res.status < 400) {
     const to = res.headers.get('location') ?? '(no Location header)';
     throw new Error(
-      `${target} answered ${res.status} redirecting to ${to}. orca does not follow it: your key is ` +
+      `${target} answered ${res.status} redirecting to ${to}. agenticreplay does not follow it: your key is ` +
         `attached to the host you named, and following would hand it to whatever answers there. ` +
-        `Point --gateway (or ORCA_GATEWAY_URL) at the final address instead.`,
+        `Point --gateway (or AGENTICREPLAY_GATEWAY_URL) at the final address instead.`,
     );
   }
   return res;

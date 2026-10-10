@@ -12,15 +12,15 @@ afterEach(async () => {
  *
  * A trace recorded what was sent and what came back and never where it went. That is the first
  * question asked of a recording that looks wrong, and it was unanswerable from the trace: a
- * gateway left behind in `~/.orca/config.json` redirects every run on the machine, and nothing in
- * the run said so. `orca record` prints the proxy it listens on — which is orca's address, not the
+ * gateway left behind in `~/.agenticreplay/config.json` redirects every run on the machine, and nothing in
+ * the run said so. `agenticreplay record` prints the proxy it listens on — which is agenticreplay's address, not the
  * model's.
  *
  * It is recorded per exchange rather than once in the manifest because there is no single value to
  * put there. Four things decide the origin and three of them are per request:
  *
  *   - an explicit `--upstream-openai` / `--upstream-anthropic`
- *   - the gateway `orca setup` configured
+ *   - the gateway `agenticreplay setup` configured
  *   - a `/forward/` base the client announced, which outranks both on a live call
  *   - the dialect's vendor default
  *
@@ -67,7 +67,7 @@ describe('the origin that answered is recorded on the exchange', () => {
   });
 
   it("names the vendor's own API when nothing was configured", async () => {
-    // The case that matters most for reading a trace later: absence has to mean "an older orca did
+    // The case that matters most for reading a trace later: absence has to mean "an older agenticreplay did
     // not record this", never "it went to the vendor". So the default is written down like any
     // other answer.
     const up = stubUpstream();
@@ -125,8 +125,8 @@ describe('the origin that answered is recorded on the exchange', () => {
 /**
  * And it must not carry the gateway's credential into the trace along the way.
  *
- * `orca setup --gateway` accepts whatever URL it is handed, with no check that it is credential-
- * free, and stores it in `~/.orca/config.json`. A gateway that authenticates by URL rather than by
+ * `agenticreplay setup --gateway` accepts whatever URL it is handed, with no check that it is credential-
+ * free, and stores it in `~/.agenticreplay/config.json`. A gateway that authenticates by URL rather than by
  * header is configured as `https://user:pw@gw.example` or `https://gw.example?key=…` — and from
  * then on every recording on that machine goes through it. Recording the origin verbatim wrote the
  * key into all of them.
@@ -135,7 +135,7 @@ describe('the origin that answered is recorded on the exchange', () => {
  * where the gateway key is read (`config.ts`):
  *
  *   > the proxy adds it to the outbound request only, while what gets recorded is derived from the
- *   > *incoming* request with auth stripped, so a gateway key orca injects is invisible to the
+ *   > *incoming* request with auth stripped, so a gateway key agenticreplay injects is invisible to the
  *   > recording by construction rather than by a rule someone has to remember.
  *
  * The irony is that the configured gateway is exactly the case the `upstream` field was added for

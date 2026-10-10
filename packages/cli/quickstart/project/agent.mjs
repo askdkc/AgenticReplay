@@ -2,12 +2,12 @@
 /**
  * A very small coding agent, written so the quickstart needs nothing but Node.
  *
- * It reads `OPENAI_BASE_URL`, which is what `orca record` redirects, and drives an ordinary tool
+ * It reads `OPENAI_BASE_URL`, which is what `agenticreplay record` redirects, and drives an ordinary tool
  * loop over chat completions: read the failing test, edit the source, run the test again. That is
- * the whole shape orca depends on, so a trace recorded from it replays with nothing installed
- * beyond the runtime orca already needs.
+ * the whole shape agenticreplay depends on, so a trace recorded from it replays with nothing installed
+ * beyond the runtime agenticreplay already needs.
  *
- *   orca record node -- node agent.mjs
+ *   agenticreplay record node -- node agent.mjs
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 const base = process.env.OPENAI_BASE_URL;
 if (!base) {
-  console.error('agent: OPENAI_BASE_URL is not set — run this under `orca record`');
+  console.error('agent: OPENAI_BASE_URL is not set — run this under `agenticreplay record`');
   process.exit(2);
 }
 

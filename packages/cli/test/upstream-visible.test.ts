@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader } from '@orcareplay/core';
+import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { upstreamPlan } from '../src/upstream.js';
 import { writeConfig } from '../src/config.js';
@@ -21,14 +21,14 @@ const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
 /**
  * Where did the traffic go.
  *
- * The trace recorded what was sent and what came back, and never who answered — and `orca record`
- * printed `proxy=http://127.0.0.1:PORT`, which is orca's own address, not the model's. So the
+ * The trace recorded what was sent and what came back, and never who answered — and `agenticreplay record`
+ * printed `proxy=http://127.0.0.1:PORT`, which is agenticreplay's own address, not the model's. So the
  * question asked first of a recording that looks wrong could not be answered from the recording:
- * a gateway left behind in `~/.orca/config.json` redirects every run on the machine, and nothing
+ * a gateway left behind in `~/.agenticreplay/config.json` redirects every run on the machine, and nothing
  * anywhere said so.
  *
  * Three surfaces, because the answer is wanted at three moments: on the line printed as the run
- * starts, in the trace, and in `orca show` when someone comes back to it later.
+ * starts, in the trace, and in `agenticreplay show` when someone comes back to it later.
  */
 describe('a run says where its traffic went', () => {
   let workspace: string;
@@ -37,7 +37,7 @@ describe('a run says where its traffic went', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-upstream-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-upstream-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -91,7 +91,7 @@ describe('a run says where its traffic went', () => {
     }
   });
 
-  it('answers it in orca show, where someone comes back to the run later', async () => {
+  it('answers it in agenticreplay show, where someone comes back to the run later', async () => {
     const result = await record();
     lines.length = 0;
     await showCommand(parseArgs(['show', result.runId]), out, workspace);
@@ -151,8 +151,8 @@ describe('upstreamsIn', () => {
    * A trace is something you are given, so it is sanitised on the way out of the file too.
    *
    * The write path strips the credential now, but a trace recorded by a build from between the
-   * first commit of this branch and the one that added the stripping carries one — and `orca show`
-   * printed it back. Found by hand-editing an `upstream` attribute and running `orca show`, which
+   * first commit of this branch and the one that added the stripping carries one — and `agenticreplay show`
+   * printed it back. Found by hand-editing an `upstream` attribute and running `agenticreplay show`, which
    * is also what a trace someone hands you looks like.
    */
   it('strips a credential out of an upstream a trace already holds', () => {
@@ -186,8 +186,8 @@ describe('upstreamsIn', () => {
     if (secret !== undefined) expect(JSON.stringify(out)).not.toContain(secret);
   });
 
-  it('is empty for a trace recorded before orca wrote this down', () => {
-    // Which is why `orca show` prints no line at all rather than "upstream unknown": absence here
+  it('is empty for a trace recorded before agenticreplay wrote this down', () => {
+    // Which is why `agenticreplay show` prints no line at all rather than "upstream unknown": absence here
     // is an old trace, and a run that reached nothing has no model.response to read anyway.
     expect(upstreamsIn([{ type: 'model.response', attrs: { model: 'x' } }])).toEqual([]);
   });
@@ -247,7 +247,7 @@ describe('distinctOrigins keeps a credential off the line', () => {
 /**
  * An upstream that is not an origin, from each of the three places one can come from.
  *
- * `orca setup` refuses one on the way in, and that left three doors open: a config written before
+ * `agenticreplay setup` refuses one on the way in, and that left three doors open: a config written before
  * it did, an environment variable, and a flag. On the record path the value is not only sent but
  * *printed* — on the recording line, and inside undici's TypeError when `doFetch` cannot parse it,
  * which the proxy hands to the agent as a 500 body. Asserted on the message rather than on a field
@@ -258,7 +258,7 @@ describe('upstreamPlan refuses an upstream that is not an origin', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-upstream-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-upstream-'));
   });
   afterEach(async () => {
     await rm(home, { recursive: true, force: true });
@@ -275,24 +275,24 @@ describe('upstreamPlan refuses an upstream that is not an origin', () => {
   it.each(shapes)('from --upstream-openai: $what', async ({ url }) => {
     const call = () =>
       upstreamPlan(parseArgs(['record', '--upstream-openai', url]), { XDG_CONFIG_HOME: home });
-    await expect(call()).rejects.toThrow(/is not an origin orca can use/);
+    await expect(call()).rejects.toThrow(/is not an origin agenticreplay can use/);
     await expect(call()).rejects.not.toThrow(new RegExp(SECRET));
   });
 
-  it.each(shapes)('from ORCA_UPSTREAM_OPENAI: $what', async ({ url }) => {
-    const env = { XDG_CONFIG_HOME: home, ORCA_UPSTREAM_OPENAI: url };
+  it.each(shapes)('from AGENTICREPLAY_UPSTREAM_OPENAI: $what', async ({ url }) => {
+    const env = { XDG_CONFIG_HOME: home, AGENTICREPLAY_UPSTREAM_OPENAI: url };
     await expect(upstreamPlan(parseArgs(['record']), env)).rejects.toThrow(
-      /is not an origin orca can use/,
+      /is not an origin agenticreplay can use/,
     );
   });
 
   it.each(shapes)('from the gateway in a hand-edited config: $what', async ({ url }) => {
     // readConfig deliberately accepts a hand-edited file, and a config written by a pre-change
-    // `orca setup` holds whatever it was handed.
+    // `agenticreplay setup` holds whatever it was handed.
     const env = { XDG_CONFIG_HOME: home };
     await writeConfig({ gateway: { url, api_key_env: 'FAKE_KEY' } }, env);
     await expect(upstreamPlan(parseArgs(['record']), env)).rejects.toThrow(
-      /is not an origin orca can use/,
+      /is not an origin agenticreplay can use/,
     );
   });
 

@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@orcareplay/core';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@agenticreplay/core';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import {
@@ -58,7 +58,7 @@ describe('mcp capture', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-mcp-e2e-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-e2e-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -119,7 +119,7 @@ describe('mcp capture', () => {
   /**
    * `run.start` AT SEQ 0, EVEN WITH MCP INSTRUMENTED.
    *
-   * orca-trace v0 opens with `run.start`, and the gateway enforces it on arrival: a push whose
+   * agenticreplay-trace v0 opens with `run.start`, and the gateway enforces it on arrival: a push whose
    * first event is anything else is refused with `run.start at seq 1, must be seq 0`. Instrumenting
    * MCP has to happen before the agent launches, because it rewrites the config the agent is about
    * to read, and the `mcp_instrumented` note used to be appended right there — ahead of the start
@@ -155,7 +155,7 @@ describe('mcp capture', () => {
 
   describe('replay and fork', () => {
     // Replay and fork launch the same agent the recording did, so they share its blind spot: with
-    // no config the harness talks to servers orca cannot see, or — for one that requires the
+    // no config the harness talks to servers agenticreplay cannot see, or — for one that requires the
     // variable — does not start at all. Found by building a demo: replaying a working recording
     // exited 2 with `matched=0` for a reason that had nothing to do with the recording.
     it('re-instruments MCP from what the recording used, with no flag', async () => {
@@ -163,7 +163,7 @@ describe('mcp capture', () => {
       const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
 
       expect(result.exitCode, `the agent must still run:\n${lines.join('\n')}`).toBe(0);
-      expect(result.matchedExact).toBeGreaterThan(0);
+      expect(result.canonicalExact).toBeGreaterThan(0);
 
       const traceDir = (await resolveRunSelector(workspace, result.traceRunId!)).dir;
       const events = await (await TraceReader.open(traceDir)).events();
@@ -174,7 +174,7 @@ describe('mcp capture', () => {
     });
 
     it('records which config the recording used, since argv cannot carry it', async () => {
-      // `manifest.argv` holds the agent's own arguments and `--mcp-config` is orca's, so without
+      // `manifest.argv` holds the agent's own arguments and `--mcp-config` is agenticreplay's, so without
       // this note a replay has no way to find the source config at all.
       const recorded = await record();
       const events = await (await TraceReader.open(recorded.runDir)).events();
@@ -221,7 +221,7 @@ describe('mcp capture', () => {
       // tree over the working directory — deleting a file that was in the snapshot just brings it
       // back, which is the restore working correctly and would make this test pass for the wrong
       // reason.
-      const elsewhere = await mkdtemp(join(tmpdir(), 'orca-mcp-cfg-'));
+      const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-cfg-'));
       const configPath = join(elsewhere, 'mcp.json');
       await writeFile(configPath, await readFile(join(workspace, 'mcp.json'), 'utf8'));
       await record(configPath);
@@ -238,10 +238,10 @@ describe('mcp capture', () => {
     });
 
     it('still says so for a recording made before the copy was kept', async () => {
-      // The warning is not gone, and must not be: a trace recorded by an older orca has only the
+      // The warning is not gone, and must not be: a trace recorded by an older agenticreplay has only the
       // path, and a dropped capture layer must never read as a quiet success. Same run as above
       // with the kept copy removed, which is exactly what those traces look like.
-      const elsewhere = await mkdtemp(join(tmpdir(), 'orca-mcp-cfg-'));
+      const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-cfg-'));
       const configPath = join(elsewhere, 'mcp.json');
       await writeFile(configPath, await readFile(join(workspace, 'mcp.json'), 'utf8'));
       const { runDir } = await record(configPath);
@@ -316,7 +316,7 @@ describe('mcpSourceFrom', () => {
  *
  * Found by an integration check that failed about one run in seven. The path was read back out of
  * the `mcp_instrumented` note, and a path in the trace has to survive the redactor:
- * `orca-int-mcp-stdio-feH8gJ` is 25 characters of mixed-case base62, over `MIN_ENTROPY_LENGTH`, so
+ * `agenticreplay-int-mcp-stdio-feH8gJ` is 25 characters of mixed-case base62, over `MIN_ENTROPY_LENGTH`, so
  * often enough the entropy sweep replaced the directory with `<secret:high_entropy:…>`. `stat`
  * then failed, MCP was dropped for the replay, and the agent was launched with no
  * `MCP_CONFIG_PATH` — `KeyError` from a recording that was perfectly good.
@@ -337,7 +337,7 @@ describe('the config the recording kept', () => {
   let source: string;
 
   beforeEach(async () => {
-    runDir = await mkdtemp(join(tmpdir(), 'orca-mcp-src-'));
+    runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-src-'));
     source = join(runDir, 'given.json');
     await writeFile(source, CONFIG_TEXT);
   });
@@ -367,7 +367,7 @@ describe('the config the recording kept', () => {
     // path in the trace was redacted into something `stat` cannot find.
     await rm(source);
 
-    const replayDir = await mkdtemp(join(tmpdir(), 'orca-mcp-replay-'));
+    const replayDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-replay-'));
     try {
       const capture = await mcpForReplay(
         { str: () => undefined },
@@ -385,7 +385,7 @@ describe('the config the recording kept', () => {
   });
 
   it('still falls back to the note, for a run recorded before this', async () => {
-    const replayDir = await mkdtemp(join(tmpdir(), 'orca-mcp-replay-'));
+    const replayDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-replay-'));
     try {
       const capture = await mcpForReplay(
         { str: () => undefined },
@@ -425,7 +425,7 @@ describe('a capture line that parsed is not yet a frame', () => {
   };
 
   async function framesFrom(lines: string[]) {
-    const runDir = await mkdtemp(join(tmpdir(), 'orca-mcp-frames-'));
+    const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-frames-'));
     const config = join(runDir, 'mcp.json');
     await writeFile(config, JSON.stringify({ mcpServers: { srv: { command: 'node' } } }), 'utf8');
     const out = new Output({ write: () => undefined, isTTY: false });

@@ -19,7 +19,7 @@ export const GLOBAL = ['ci', 'json', 'verbose', 'color', 'help', 'version', 'h']
 const UPSTREAM = ['upstream-anthropic', 'upstream-openai'] as const;
 
 /** Read by `tls-capture.ts`, which record, replay and compare all set up. */
-const TLS = ['tls-intercept', 'tls-hosts'] as const;
+const TLS = ['tls-intercept', 'tls-hosts', 'max-body-bytes', 'max-buffered-bytes'] as const;
 
 /**
  * How much of a retrieval call's answer to keep. Only the commands that *make* one have it:
@@ -72,7 +72,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   ],
   // `fs` because compare forks through the same code replay does, and that path reads
   // `args.bool('fs', true)` twice: once for the checkpoint restore, once for the fork's own
-  // capture. Without the entry `orca compare --no-fs` was refused while `orca replay --no-fs`
+  // capture. Without the entry `agenticreplay compare --no-fs` was refused while `agenticreplay replay --no-fs`
   // worked, for two spellings of the same fork.
   compare: ['from', 'models', 'verify', 'share', 'loose', 'fs', ...TLS, ...UPSTREAM],
   show: [],
@@ -115,10 +115,10 @@ function nearest(name: string, known: readonly string[]): string | undefined {
 /**
  * Flags a command has only ALONGSIDE another.
  *
- * `orca list` lists this directory unless `--remote` asks the gateway, and `--gateway`, `--source`
+ * `agenticreplay list` lists this directory unless `--remote` asks the gateway, and `--gateway`, `--source`
  * and `--limit` mean something only to the gateway. Being on the list above let them past
  * `assertKnownFlags` unconditionally — and then the local listing ran and dropped every one of
- * them without a word. `orca list --gateway <url>` printed THIS directory's runs to someone who
+ * them without a word. `agenticreplay list --gateway <url>` printed THIS directory's runs to someone who
  * had just named a host, which reads as that host's answer: the silently-ignored instruction this
  * file exists to refuse, let back in by the entry that added the flags.
  */
@@ -127,7 +127,7 @@ const NEEDS: Record<string, { flags: readonly string[]; with: string; otherwise:
     flags: ['gateway', 'source', 'limit'],
     with: 'remote',
     otherwise:
-      'without it, orca list shows the runs in this directory and asks no gateway anything',
+      'without it, agenticreplay list shows the runs in this directory and asks no gateway anything',
   },
 };
 
@@ -167,7 +167,7 @@ export function assertKnownFlags(args: ParsedArgs): void {
   const [first] = unknown;
   const suggestion = nearest(first!, known);
   throw new Error(
-    `unknown flag ${dashed(first!)} for "orca ${args.command}"` +
+    `unknown flag ${dashed(first!)} for "agenticreplay ${args.command}"` +
       (suggestion === undefined ? '' : `\n  did you mean --${suggestion}?`) +
       `\n  flags for this command: ${allowed.length === 0 ? '(none)' : allowed.map((f) => `--${f}`).join(' ')}`,
   );
@@ -216,13 +216,13 @@ export const POSITIONAL_COUNTS: Readonly<Record<string, number>> = POSITIONALS;
  *
  * The parser collects every token that is not a flag, and each command reads at most the first.
  * Anything past that was dropped in silence — and for `record` that is the worst shape available:
- * the arguments meant for the agent never reach it, the harness starts with none, and orca reports
+ * the arguments meant for the agent never reach it, the harness starts with none, and agenticreplay reports
  * a successful recording of a run that was never asked to do anything.
  *
- *   orca record codex exec "fix auth.ts"    ->  manifest argv: ["codex"]
+ *   agenticreplay record codex exec "fix auth.ts"    ->  manifest argv: ["codex"]
  *
  * The agent's own arguments go after `--`, which is the one thing that message has to say. Counting
- * per command rather than allowing one everywhere matters for the seven that read none: `orca
+ * per command rather than allowing one everywhere matters for the seven that read none: `agenticreplay
  * attach claude` looks like it names the agent, and `--for` is what actually does.
  */
 export function assertNoStrayPositionals(args: ParsedArgs): void {
@@ -236,15 +236,15 @@ export function assertNoStrayPositionals(args: ParsedArgs): void {
   const listed = stray.map(quote).join(' ');
   const takesLine =
     takes === 0
-      ? `\n  "orca ${args.command}" takes no arguments; everything it needs is a flag`
-      : `\n  "orca ${args.command}" takes one: ${quote(args.positionals[0]!)}`;
+      ? `\n  "agenticreplay ${args.command}" takes no arguments; everything it needs is a flag`
+      : `\n  "agenticreplay ${args.command}" takes one: ${quote(args.positionals[0]!)}`;
   // Only `record` hands its tail to something else, so only `record` can say where the tail goes.
   const forAgent =
     args.command === 'record'
-      ? `\n  arguments for the agent go after --: orca record ${quote(args.positionals[0]!)} -- ${listed}`
+      ? `\n  arguments for the agent go after --: agenticreplay record ${quote(args.positionals[0]!)} -- ${listed}`
       : '';
   throw new Error(
-    `unexpected argument${stray.length > 1 ? 's' : ''} for "orca ${args.command}": ${listed}` +
+    `unexpected argument${stray.length > 1 ? 's' : ''} for "agenticreplay ${args.command}": ${listed}` +
       takesLine +
       forAgent,
   );
@@ -274,9 +274,9 @@ function dashed(name: string): string {
  *   of forking at a checkpoint. `--json=maybe` turned JSON output off while it was being asked for.
  *
  * Same reasoning as `assertNoStrayPositionals` beside it, third part of the command line: an
- * instruction orca cannot carry out must not be carried past in silence.
+ * instruction agenticreplay cannot carry out must not be carried past in silence.
  *
- * `orca gc --keep` checked its own by hand and was the only command that did. Doing it here is the
+ * `agenticreplay gc --keep` checked its own by hand and was the only command that did. Doing it here is the
  * same check for all of them, and one place to fix when it is wrong.
  */
 function assertUsableValues(args: ParsedArgs, allowed: readonly string[]): void {

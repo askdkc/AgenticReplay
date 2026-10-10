@@ -60,7 +60,7 @@ describe('a whole PNG is excluded from the entropy sweep', () => {
   function fixedNoise(n: number): Buffer {
     const parts: Buffer[] = [];
     for (let i = 0; i * 32 < n; i += 1) {
-      parts.push(createHash('sha256').update(`orca palette fixture ${i}`).digest());
+      parts.push(createHash('sha256').update(`agenticreplay palette fixture ${i}`).digest());
     }
     return Buffer.concat(parts).subarray(0, n);
   }

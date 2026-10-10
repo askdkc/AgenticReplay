@@ -7,7 +7,7 @@
  * errors that say what happened, what it means, and what to run next.
  */
 
-import { withoutInvisible } from '@orcareplay/core';
+import { withoutInvisible } from '@agenticreplay/core';
 
 const ESC = String.fromCharCode(27);
 const CSI = `${ESC}[`;
@@ -31,10 +31,10 @@ export function stripAnsi(s: string): string {
  * A table cell and a failure message are both printed verbatim, and both carry strings that came
  * from somewhere else: a run listing is the gateway's, an event detail is the trace's, a refusal
  * is whatever the host chose to say, and a trace can be one a colleague sent you. Measured against
- * `orca list --remote` answered by a hostile listing:
+ * `agenticreplay list --remote` answered by a hostile listing:
  *
  *   - a newline in a cell breaks one row into two, and the second is a FABRICATED RUN — in a
- *     listing whose entire purpose is to hand `orca pull` an id, an id the gateway never held;
+ *     listing whose entire purpose is to hand `agenticreplay pull` an id, an id the gateway never held;
  *   - a carriage return overwrites the row already on screen, so OUTCOME can read `exit 0` in the
  *     data and `exit 137` on the terminal;
  *   - `ESC [ 2 J` clears the screen, and `ESC ] 8` makes the text say one thing while the link
@@ -78,7 +78,7 @@ export function tame(text: string): string {
  * Several hints hand the reader a command with a path in it — `rm -rf <run>`, `cd <dir>` — and
  * interpolated it bare. A path with a space in it then pastes as two arguments. Driven against a
  * sandbox with the directory layout a Linux user named John Smith would have, the scrub hint
- * `rm -rf /home/…/John Smith/proj/.orca/runs/run_x` deleted `/home/…/John` — someone else's
+ * `rm -rf /home/…/John Smith/proj/.agenticreplay/runs/run_x` deleted `/home/…/John` — someone else's
  * directory — without a word, and left the run it was meant to delete exactly where it was.
  *
  * Left bare when nothing in it means anything to a shell, so an ordinary path prints as before.
@@ -152,7 +152,7 @@ export type Fields = Record<string, Scalar>;
  * One structured fact, before it is turned into a line of text.
  *
  * The same record that becomes `warn capture.empty exchanges=0 …` on a terminal. A caller that
- * embedded orca has no stdout to read, and an agent asking for `--json` should not be handed
+ * embedded agenticreplay has no stdout to read, and an agent asking for `--json` should not be handed
  * prose to parse — so every fact is available as data at the point it is emitted, and the line is
  * a rendering of it rather than the only form it ever takes.
  *

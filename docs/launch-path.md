@@ -2,7 +2,7 @@
 
 > **Status.** W3.1, W3.2, W3.3 and W3.4 are shipped, and so is a fifth block that was missing
 > from this plan entirely — the agent-native surface in section 5 — see the commits on this branch. The Responses
-> API is recorded, replayed offline and forkable; a call orca cannot read is forwarded rather
+> API is recorded, replayed offline and forkable; a call agenticreplay cannot read is forwarded rather
 > than refused; and a run that captured nothing says so. The table below is updated to match.
 > Everything else is still as written.
 
@@ -25,25 +25,25 @@ try it — because the first thing a viewer does after watching is point it at t
 
 ## What actually happens today, per framework
 
-| Target | Base-URL redirect | Wire format | Result under `orca record` |
+| Target | Base-URL redirect | Wire format | Result under `agenticreplay record` |
 |---|---|---|---|
 | Claude Code | `ANTHROPIC_BASE_URL` | `/v1/messages` | **Works.** Adapter shipped, validated against a real bug-fix run. |
 | OpenAI Agents SDK | `OPENAI_BASE_URL` ✓ | `/v1/responses` | **Works** *(was: broke on turn one)*. Recorded, replayed offline, forkable. |
 | Codex CLI | `OPENAI_BASE_URL` ✓ | `/v1/responses` | **Works** *(was: broke on turn one)*. On a ChatGPT subscription it still needs `--tls-intercept` first. |
-| LangGraph / LangChain | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | chat completions | **Works** *(was: never tested)*. A two-node graph, streaming and with a tool: records, replays at `exact=2` with the origin down, and forks live. Asserted in CI — W3.5. |
-| Vercel AI SDK | none — redirected at `globalThis.fetch` | chat completions / `/v1/responses` | **Works** *(was: silent)*. `orca record node -- node app.mjs` installs a fetch hook; recorded, replayed offline. |
+| LangGraph / LangChain | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | chat completions | **Works** *(was: never tested)*. A two-node graph, streaming and with a tool: records, replays at `canonical_exact=2` with the origin down, and forks live. Asserted in CI — W3.5. |
+| Vercel AI SDK | none — redirected at `globalThis.fetch` | chat completions / `/v1/responses` | **Works** *(was: silent)*. `agenticreplay record node -- node app.mjs` installs a fetch hook; recorded, replayed offline. |
 
 Two failure modes, and the quiet one is worse in the long run.
 
 `packages/proxy/src/server.ts` rejected any path no dialect claimed, and `dialects.ts` claimed
 exactly two shapes: `/v1/messages`, and anything ending `/chat/completions`. Nothing in the
 repository handled `/v1/responses` outside two prose comments. So a developer who read the README,
-installed, and typed `orca record codex` watched their agent die on the first turn.
+installed, and typed `agenticreplay record codex` watched their agent die on the first turn.
 
 Verified rather than reasoned about: an agent that speaks the Responses API, run against a build
 of commit `897657d` in a worktree, is handed `404 from …/v1/responses` and exits 3 with zero
 exchanges recorded. Against this branch the same agent records twelve events and replays offline
-at `reused=2/2 exact=2 divergences=0 unmatched=0`.
+at `reused=2/2 canonical_exact=2 divergences=0 unmatched=0`.
 
 The Vercel AI SDK failure is quieter: the agent runs, exits 0, and writes a trace with zero model
 exchanges. `packages/adapters/src/contract.ts` names this exact shape as the thing it exists to
@@ -53,19 +53,19 @@ traffic is captured too, through the runtime hook in W3.4.
 
 ## 1. One-command install
 
-The cheapest blocker on the list. **W1.1 is done**: `orcareplay` and the `@orcareplay` scope are
+The cheapest blocker on the list. **W1.1 is done**: `agenticreplay` and the `@agenticreplay` scope are
 claimed, `NPM_TOKEN` is in place, and 0.1.1 was published by the tagged workflow with a provenance
-attestation. `npm i -g orcareplay` is the install.
+attestation. `npm i -g agenticreplay` is the install.
 
 The README used to say "Not on npm yet" twice in the first screen, and the seven translations said
 it too. Those lines are gone. What is left of this section is W1.2 to W1.4.
 
 | | Work | Done when |
 |---|---|---|
-| **W1.1** | Publish v0.1.0 — claim `orcareplay` and the `@orcareplay` scope, add `NPM_TOKEN`, run the workflow's dry run, tag. | `npx orcareplay@latest doctor` runs on a clean machine. |
-| **W1.2** | Bundle the CLI into one tarball. It pins ten internal packages at exact versions, so `npx` resolves eleven tarballs before printing anything; `esbuild` is already a dev dependency. | Cold `npx orcareplay` starts in under five seconds. |
-| **W1.3** | `orca quickstart` — ships a sample project and a recorded failing trace, then runs the whole story against them offline: show, replay, fork, viewer. No key, no agent installed, no network. | A stranger with only Node 20 sees the fork produce a passing test. |
-| **W1.4** | Rewrite the install section. Three commands at the top become `npx orcareplay quickstart`; source install moves to Contributing. | The first code block a visitor sees is runnable. |
+| **W1.1** | Publish v0.1.0 — claim `agenticreplay` and the `@agenticreplay` scope, add `NPM_TOKEN`, run the workflow's dry run, tag. | `npx agenticreplay@latest doctor` runs on a clean machine. |
+| **W1.2** | Bundle the CLI into one tarball. It pins ten internal packages at exact versions, so `npx` resolves eleven tarballs before printing anything; `esbuild` is already a dev dependency. | Cold `npx agenticreplay` starts in under five seconds. |
+| **W1.3** | `agenticreplay quickstart` — ships a sample project and a recorded failing trace, then runs the whole story against them offline: show, replay, fork, viewer. No key, no agent installed, no network. | A stranger with only Node 24 sees the fork produce a passing test. |
+| **W1.4** | Rewrite the install section. Three commands at the top become `npx agenticreplay quickstart`; source install moves to Contributing. | The first code block a visitor sees is runnable. |
 
 W1.3 is what turns a video watcher into a user, and it is the call to action the video ends on.
 
@@ -84,7 +84,7 @@ becomes the production pipeline for its own marketing.
 | | Work | Done when |
 |---|---|---|
 | **W2.1** | The scenario repo: a bug a weak model reliably gets wrong and a strong one reliably gets right, graded by `npm test`, under ten turns. Candidates that behave this way: a DST boundary in date arithmetic, an off-by-one in pagination, a validator that passes only the happy path. | The fork verdict is fail → pass on the same checkpoint, ten times running. |
-| **W2.2** | Record it, scrub it, validate it in CI beside the existing conformance job. It is the demo asset, the quickstart fixture and a permanent replay regression test at once. | `orca replay` of it reports `unmatched=0` in CI. |
+| **W2.2** | Record it, scrub it, validate it in CI beside the existing conformance job. It is the demo asset, the quickstart fixture and a permanent replay regression test at once. | `agenticreplay replay` of it reports `unmatched=0` in CI. |
 | **W2.3** | Three cuts from one shoot: 15s silent captioned loop, 60s README and landing hero, 3min narrated walkthrough. Keep `docs/media/README.md`'s rule — every frame traceable to real captured output. | The 15s cut reads without audio and without pausing. |
 
 ### Beat sheet, 60-second cut
@@ -92,13 +92,13 @@ becomes the production pipeline for its own marketing.
 | Time | Beat |
 |---|---|
 | 0:00 | The claim, as a problem: "Your agent said it fixed the test. The test is still red." |
-| 0:06 | `orca record claude` — the agent works, announces the fix, exits 0. |
+| 0:06 | `agenticreplay record claude` — the agent works, announces the fix, exits 0. |
 | 0:14 | `npm test` — red. The beat the current GIF is missing entirely. |
-| 0:20 | `orca show last` — the timeline names the moment: a SHELL event at `exit 1` the agent ran and ignored. Hold on that row. |
-| 0:30 | `orca replay last`, network cut, on screen. Same failure byte for byte, zero tokens. |
-| 0:40 | `orca replay last --from 4 --model <stronger>`. Same files, same prefix, one variable. Green. |
-| 0:52 | `orca compare` — fail/pass with the cost column, one second of the share card. |
-| 0:57 | `npx orcareplay quickstart`, alone on screen. |
+| 0:20 | `agenticreplay show last` — the timeline names the moment: a SHELL event at `exit 1` the agent ran and ignored. Hold on that row. |
+| 0:30 | `agenticreplay replay last`, network cut, on screen. Same failure byte for byte, zero tokens. |
+| 0:40 | `agenticreplay replay last --from 4 --model <stronger>`. Same files, same prefix, one variable. Green. |
+| 0:52 | `agenticreplay compare` — fail/pass with the cost column, one second of the share card. |
+| 0:57 | `npx agenticreplay quickstart`, alone on screen. |
 
 ## 3. Integrations beyond raw CLI capture
 
@@ -108,17 +108,17 @@ land before the things that merely miss them.
 | | Work | Done when |
 |---|---|---|
 | **W3.1** ✅ | **Shipped.** Never `404` an unknown path — forward and record it opaquely instead. An unrecognised endpoint should degrade to "captured but not replayable", never to a dead agent. Makes every future integration fail softly. | An agent posting to an unknown path completes its run, and the trace says why that turn cannot be replayed. |
-| **W3.2** ✅ | **Shipped.** Warn at the end of `orca record` when zero model exchanges were captured, with the likely cause. The empty-trace failure must never be silent. | Recording an unconfigured Vercel AI SDK app produces a warning, not a clean exit. |
+| **W3.2** ✅ | **Shipped.** Warn at the end of `agenticreplay record` when zero model exchanges were captured, with the likely cause. The empty-trace failure must never be silent. | Recording an unconfigured Vercel AI SDK app produces a warning, not a clean exit. |
 | **W3.3** ✅ | **Shipped.** A Responses API dialect: matches `/v1/responses`, translators in `providers/src/translate/`, SSE delta parsing, `withModel` so forks work. Unblocks the OpenAI Agents SDK and Codex at once. The dialect interface is already built for exactly this — the proxy is handed a list and knows nothing about which exist. | A Codex run records, replays offline and forks. |
-| **W3.4** ✅ | **Shipped.** `@orcareplay/node-instrument`: a Node `--import` hook rewriting provider origins on `globalThis.fetch`, injected by `orca record` through `NODE_OPTIONS`. Environment variables cannot reach the Vercel AI SDK, so reach the runtime. Covers every JS agent that hardcodes a base URL — a class, not a vendor. | An unmodified `@ai-sdk/openai` app records and replays. |
-| **W3.5** ✅ | **Shipped** — an end-to-end check against a stub upstream and a how-to (`docs/integrations.md`), minus the adapter id. A `langgraph` adapter's `prepare` would be `generic-openai`'s verbatim, because orca launches the user's own script rather than a binary it knows, so the id would have bought a name and nothing else. Two findings worth keeping: the redaction worry did not materialise because an `InMemorySaver` thread id never reaches the wire at all, and removing `OPENAI_API_BASE` breaks none of the LangChain checks — they survive on the official client's `OPENAI_BASE_URL`. | A two-node graph records, replays and forks in CI. |
+| **W3.4** ✅ | **Shipped.** `@agenticreplay/node-instrument`: a Node `--import` hook rewriting provider origins on `globalThis.fetch`, injected by `agenticreplay record` through `NODE_OPTIONS`. Environment variables cannot reach the Vercel AI SDK, so reach the runtime. Covers every JS agent that hardcodes a base URL — a class, not a vendor. | An unmodified `@ai-sdk/openai` app records and replays. |
+| **W3.5** ✅ | **Shipped** — an end-to-end check against a stub upstream and a how-to (`docs/integrations.md`), minus the adapter id. A `langgraph` adapter's `prepare` would be `generic-openai`'s verbatim, because agenticreplay launches the user's own script rather than a binary it knows, so the id would have bought a name and nothing else. Two findings worth keeping: the redaction worry did not materialise because an `InMemorySaver` thread id never reaches the wire at all, and removing `OPENAI_API_BASE` breaks none of the LangChain checks — they survive on the official client's `OPENAI_BASE_URL`. | A two-node graph records, replays and forks in CI. |
 | **W3.6** | Run `checkAdapterContract` as a per-integration matrix job and generate the README support table from the result. | "We support X" is a check, not a sentence. |
 
 ## 4. Proof that replay is reliable and traces are safe
 
 The machinery is already unusually good: allowlist-only environment capture, one shared
 auth-header list, an entropy sweep with protocol-identifier exemptions, a policy version that
-bumps when rules change, `orca scrub`, an integrity digest — and a genuinely honest limitation,
+bumps when rules change, `agenticreplay scrub`, an integrity digest — and a genuinely honest limitation,
 where scrub *searches* the filesystem snapshots and reports what it could not clean rather than
 claiming a clean trace.
 
@@ -129,19 +129,19 @@ prose does not clear a security review.
 |---|---|---|
 | **W4.1** | Replay fidelity scoreboard: a corpus of real recordings, one per supported harness, replayed in CI with assertions on `unmatched=0` and a divergence budget. Generate `docs/fidelity.md` and a badge from the run. | "Replay is reliable" is a number that regresses visibly. |
 | **W4.2** | Redaction benchmark covering every rule plus the hard cases — keys split across SSE chunks, `.env` dumps in tool output, credentials inside git diffs, JWTs in shell stderr. Report recall per class and false-positive rate, and publish what still leaks. Publishing the misses is the credibility. | `docs/redaction-benchmark.md` ships with real numbers and a known-gaps list. |
-| **W4.3** | `orca verify` — scan a trace and report what a detector can still find. Gate `orca export` on a clean scan or an explicit `--force`. The README asks users to send traces; make that ask safe to accept. | Exporting a trace containing a planted key refuses without `--force`. |
+| **W4.3** | `agenticreplay verify` — scan a trace and report what a detector can still find. Gate `agenticreplay export` on a clean scan or an explicit `--force`. The README asks users to send traces; make that ask safe to accept. | Exporting a trace containing a planted key refuses without `--force`. |
 | **W4.4** | Assert the offline guarantee at the socket level in CI with DNS blackholed, and cite the test by name in the README. | The README's offline claim links to a test. |
 | **W4.5** | Extend `SECURITY.md` with a trace threat model: what a trace contains, what redaction catches and provably does not, the snapshot limitation, and a decision guide for "can I attach this to a public issue?" | A security reviewer can answer their questions without opening the source. |
 
 ## 5. Agent-native surface
 
-Not in the original four blockers, and it should have been. OrcaReplay was a human CLI with an
+Not in the original four blockers, and it should have been. AgenticReplay was a human CLI with an
 agent-readable file format: `TraceReader` and the Python reader make a trace easy to *read* from
-code, but nothing let anything drive orca. `orca show` computed a timeline and formatted it away,
-`orca list` returned `void`, and there was no `--json` anywhere — so a script, a CI job, or an
-agent debugging its own failure had to scrape `info replay.done reused=2/2 exact=2 divergences=0`
+code, but nothing let anything drive agenticreplay. `agenticreplay show` computed a timeline and formatted it away,
+`agenticreplay list` returned `void`, and there was no `--json` anywhere — so a script, a CI job, or an
+agent debugging its own failure had to scrape `info replay.done reused=2/2 canonical_exact=2 divergences=0`
 out of stdout. The MCP shim in this repo is a *tee* that records an agent's own MCP traffic; it
-never let an agent ask orca a question.
+never let an agent ask agenticreplay a question.
 
 That is backwards for this product in particular. "Replay my last run and tell me what diverged"
 is the most useful thing an agent could ask a replay debugger, and it is a question no
@@ -149,9 +149,9 @@ observability tool can answer — because a trace is a file, so an agent can for
 
 | | Work | Done when |
 |---|---|---|
-| **W5.1** ✅ | **Shipped.** An `Orca` class returning the work as data — list, show, events, checkpoints, record, replay, compare, export. The commands render what it returns, so the terminal is a view of one source of truth. Asserted: nothing writes to an embedding process's stdout, nothing calls `process.exit`. | `new Orca({cwd}).replay('last')` returns the numbers. |
-| **W5.2** ✅ | **Shipped.** `--json`: one document on stdout, diagnostics on stderr, failures as JSON too. | `orca show last --json \| jq .events` works with nothing in front of it. |
-| **W5.3** ✅ | **Shipped.** `orca mcp` — a stdio MCP server exposing `orca_list_runs`, `orca_show_run`, `orca_checkpoints`, `orca_replay`, `orca_compare`. Built on the framer the MCP shim already has, so no runtime dependency. `orca_compare` says in its own description that it spends real tokens. | An agent's MCP config can point at `{"command": "orca", "args": ["mcp"]}`. |
+| **W5.1** ✅ | **Shipped.** An `AgenticReplay` class returning the work as data — list, show, events, checkpoints, record, replay, compare, export. The commands render what it returns, so the terminal is a view of one source of truth. Asserted: nothing writes to an embedding process's stdout, nothing calls `process.exit`. | `new AgenticReplay({cwd}).replay('last')` returns the numbers. |
+| **W5.2** ✅ | **Shipped.** `--json`: one document on stdout, diagnostics on stderr, failures as JSON too. | `agenticreplay show last --json \| jq .events` works with nothing in front of it. |
+| **W5.3** ✅ | **Shipped.** `agenticreplay mcp` — a stdio MCP server exposing `agenticreplay_list_runs`, `agenticreplay_show_run`, `agenticreplay_checkpoints`, `agenticreplay_replay`, `agenticreplay_compare`. Built on the framer the MCP shim already has, so no runtime dependency. `agenticreplay_compare` says in its own description that it spends real tokens. | An agent's MCP config can point at `{"command": "agenticreplay", "args": ["mcp"]}`. |
 
 Two bugs the tests found here, both of which would have reached users:
 
@@ -161,7 +161,7 @@ Two bugs the tests found here, both of which would have reached users:
   the run.
 - **Under `--json`, the recorded agent's own stdout landed in the middle of the document.**
   `stdio: 'inherit'` means the file descriptor, not the `process.stdout.write` an in-process test
-  can replace, so seven assertions passed while `orca record --json | jq` would have choked. Both
+  can replace, so seven assertions passed while `agenticreplay record --json | jq` would have choked. Both
   `record` and `replay` now route the agent's stdout to stderr under `--json`, keeping stdin and
   stderr inherited so a harness that prompts still can.
 
@@ -181,7 +181,7 @@ does is point it at their own stack.
 | 9–14 | **Publish the evidence.** W4.1 through W4.5. |
 | 15 | **Launch gate.** |
 
-Ship only if all four hold: `npx orcareplay quickstart` works cold; the video shows a real
+Ship only if all four hold: `npx agenticreplay quickstart` works cold; the video shows a real
 fail-to-pass fork; no named integration `404`s; fidelity and redaction numbers are published.
 
 ## What not to build before launch

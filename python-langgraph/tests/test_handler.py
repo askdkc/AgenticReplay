@@ -1,6 +1,6 @@
 """The handler's three obligations: report only nodes, be inert when it should be, never raise.
 
-All three are load-bearing rather than defensive. `orca record` installs this into *every* Python
+All three are load-bearing rather than defensive. `agenticreplay record` installs this into *every* Python
 process a recording starts, so "does nothing" is the common case and has to be the reliable one;
 and a callback that raises takes the user's graph down with it, which is the one thing a debugging
 aid must never do.
@@ -18,13 +18,13 @@ import uuid
 
 import pytest
 
-from orcareplay_langgraph import PACKAGE, SPAN_END, SPAN_START, SPANS_ENV, OrcaCallbackHandler
-from orcareplay_langgraph.handler import MAX_OPEN, TRANSPORT, report_losses
+from agenticreplay_langgraph import PACKAGE, SPAN_END, SPAN_START, SPANS_ENV, AgenticReplayCallbackHandler
+from agenticreplay_langgraph.handler import MAX_OPEN, TRANSPORT, report_losses
 
 
 @pytest.fixture
 def spans(tmp_path, monkeypatch):
-    """A transport orca would have handed us, reset around every test."""
+    """A transport agenticreplay would have handed us, reset around every test."""
     path = tmp_path / "agent-spans.jsonl"
     monkeypatch.setenv(SPANS_ENV, str(path))
     TRANSPORT.reset()
@@ -67,7 +67,7 @@ def start(handler, node, *, name=SAME, step=1, run_id=None, parent=None, extra=N
 
 # -- the discriminator ---------------------------------------------------------------------------
 def test_reports_a_node(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "validate_only", step=2)
 
     (record,) = records(spans)
@@ -90,7 +90,7 @@ def test_reports_a_node(spans):
     ],
 )
 def test_reports_nothing_else(spans, node, name, why):
-    start(OrcaCallbackHandler(), node, name=name)
+    start(AgenticReplayCallbackHandler(), node, name=name)
     assert records(spans) == [], why
 
 
@@ -101,7 +101,7 @@ def test_a_run_name_cannot_reach_the_transport(spans):
     compared against the author-written node name, so an interpolated secret is a mismatch and a
     mismatch is a drop.
     """
-    start(OrcaCallbackHandler(), "lookup", name="lookup for ada@example.com (sk-live-abcd1234)")
+    start(AgenticReplayCallbackHandler(), "lookup", name="lookup for ada@example.com (sk-live-abcd1234)")
     assert records(spans) == []
 
 
@@ -110,14 +110,14 @@ def test_step_must_be_an_int(spans):
 
     `isinstance(True, int)` is true, so a bool would otherwise arrive as 1 and read as superstep 1.
     """
-    start(OrcaCallbackHandler(), "n", step="2")
-    start(OrcaCallbackHandler(), "n", step=True)
-    start(OrcaCallbackHandler(), "n", step=0)
+    start(AgenticReplayCallbackHandler(), "n", step="2")
+    start(AgenticReplayCallbackHandler(), "n", step=True)
+    start(AgenticReplayCallbackHandler(), "n", step=0)
     assert [r["data"]["step"] for r in records(spans)] == [None, None, 0]
 
 
 def test_metadata_that_is_not_a_dict(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     handler.on_chain_start({}, {}, run_id=uuid.uuid4(), metadata="not a dict", name="first")
     handler.on_chain_start({}, {}, run_id=uuid.uuid4(), metadata=None, name="first")
     assert records(spans) == []
@@ -126,7 +126,7 @@ def test_metadata_that_is_not_a_dict(spans):
 # -- pairing a start with an end -----------------------------------------------------------------
 def test_end_carries_the_node_it_was_told_about(spans):
     """`on_chain_end` gets no metadata, so the node name can only come from the remembered start."""
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "second", step=3)
     handler.on_chain_end({"state": "out"}, run_id=run_id)
 
@@ -144,12 +144,12 @@ def test_end_for_something_never_reported_writes_nothing(spans):
     Every inner runnable and conditional edge also ends, and each one arrives here indistinguishable
     from a node's end except that its start was never remembered.
     """
-    OrcaCallbackHandler().on_chain_end({}, run_id=uuid.uuid4())
+    AgenticReplayCallbackHandler().on_chain_end({}, run_id=uuid.uuid4())
     assert records(spans) == []
 
 
 def test_an_end_is_written_once(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     handler.on_chain_end({}, run_id=run_id)
@@ -157,7 +157,7 @@ def test_an_end_is_written_once(spans):
 
 
 def test_error_records_the_class_and_not_the_message(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "lookup")
     handler.on_chain_error(ValueError("no row for ada@example.com, token sk-live-abcd1234"), run_id=run_id)
 
@@ -173,8 +173,8 @@ def test_instances_share_state(spans):
     Measured: one `invoke()` constructs the handler class twice. If the open map were per instance,
     the end would arrive at a handler that had never seen the start and be dropped.
     """
-    run_id = start(OrcaCallbackHandler(), "first")
-    OrcaCallbackHandler().on_chain_end({}, run_id=run_id)
+    run_id = start(AgenticReplayCallbackHandler(), "first")
+    AgenticReplayCallbackHandler().on_chain_end({}, run_id=run_id)
     assert [r["type"] for r in records(spans)] == [SPAN_START, SPAN_END]
 
 
@@ -185,7 +185,7 @@ def test_parallel_nodes_are_distinguishable(spans):
     two turns on the wire.
     """
     parent = uuid.uuid4()
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     a = start(handler, "worker", step=1, parent=parent)
     b = start(handler, "worker", step=1, parent=parent)
 
@@ -197,7 +197,7 @@ def test_parallel_nodes_are_distinguishable(spans):
 
 
 def test_parent_is_null_when_there_is_none(spans):
-    start(OrcaCallbackHandler(), "first", parent=None)
+    start(AgenticReplayCallbackHandler(), "first", parent=None)
     assert records(spans)[0]["parent_id"] is None
 
 
@@ -205,7 +205,7 @@ def test_parent_is_null_when_there_is_none(spans):
 def test_writes_nothing_without_the_variable(tmp_path, monkeypatch):
     monkeypatch.delenv(SPANS_ENV, raising=False)
     TRANSPORT.reset()
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     assert list(tmp_path.iterdir()) == []
@@ -216,12 +216,12 @@ def test_an_empty_variable_is_the_same_as_none(tmp_path, monkeypatch):
 
     Without the `or None`, an empty value is a path, `open("")` raises, and the failure is counted
     as a dropped record. The run would then report that capture lost something when there was
-    nothing to capture and orca was not recording at all — the sort of false alarm that teaches
+    nothing to capture and agenticreplay was not recording at all — the sort of false alarm that teaches
     people to ignore the real ones.
     """
     monkeypatch.setenv(SPANS_ENV, "")
     TRANSPORT.reset()
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     assert list(tmp_path.iterdir()) == []
@@ -232,9 +232,9 @@ def test_the_variable_is_read_per_write(spans, tmp_path, monkeypatch):
     """Not cached at import: this module is imported during interpreter startup.
 
     A path captured then would be whatever the parent happened to have exported, which for a nested
-    `orca record` is the outer run's transport.
+    `agenticreplay record` is the outer run's transport.
     """
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     start(handler, "first")
     moved = tmp_path / "moved.jsonl"
     monkeypatch.setenv(SPANS_ENV, str(moved))
@@ -252,12 +252,12 @@ def test_constructing_the_handler_touches_nothing(tmp_path, monkeypatch):
     """
     monkeypatch.setenv(SPANS_ENV, str(tmp_path / "nested" / "does-not-exist.jsonl"))
     for _ in range(100):
-        OrcaCallbackHandler()
+        AgenticReplayCallbackHandler()
     assert list(tmp_path.iterdir()) == []
 
 
 def test_the_handler_declines_the_callbacks_it_does_not_implement():
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     assert handler.run_inline is True
     assert handler.raise_error is False
     assert handler.ignore_chain is False, "chain callbacks are the only ones this wants"
@@ -276,7 +276,7 @@ def test_the_handler_declines_the_callbacks_it_does_not_implement():
 def test_an_unwritable_path_is_counted_not_raised(tmp_path, monkeypatch):
     monkeypatch.setenv(SPANS_ENV, str(tmp_path / "no" / "such" / "dir" / "spans.jsonl"))
     TRANSPORT.reset()
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     assert TRANSPORT.dropped == 2
@@ -293,7 +293,7 @@ def test_a_node_name_that_will_not_serialise_is_counted_not_raised(spans):
 
         __hash__ = None
 
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     handler.on_chain_start(
         {}, {}, run_id=uuid.uuid4(), metadata={"langgraph_node": Unserialisable()}, name="x"
     )
@@ -302,7 +302,7 @@ def test_a_node_name_that_will_not_serialise_is_counted_not_raised(spans):
 
 
 def test_the_open_map_has_a_ceiling(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     kept = [start(handler, "n", run_id=uuid.uuid4()) for _ in range(MAX_OPEN)]
     assert TRANSPORT.reported == MAX_OPEN
 
@@ -319,7 +319,7 @@ def test_the_open_map_has_a_ceiling(spans):
 
 # -- what was lost -------------------------------------------------------------------------------
 def test_losses_says_nothing_when_nothing_was_lost(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     report_losses()
@@ -327,7 +327,7 @@ def test_losses_says_nothing_when_nothing_was_lost(spans):
 
 
 def test_losses_counts_a_node_that_never_closed(spans):
-    start(OrcaCallbackHandler(), "first")
+    start(AgenticReplayCallbackHandler(), "first")
     report_losses()
     loss = records(spans)[-1]
     assert loss == {"kind": "dropped", "count": 1, "package": PACKAGE}
@@ -335,9 +335,9 @@ def test_losses_counts_a_node_that_never_closed(spans):
 
 def test_losses_names_this_package(spans):
     """Two adapters share one transport file, so a count that does not say whose is unactionable."""
-    start(OrcaCallbackHandler(), "first")
+    start(AgenticReplayCallbackHandler(), "first")
     report_losses()
-    assert records(spans)[-1]["package"] == "orcareplay-langgraph"
+    assert records(spans)[-1]["package"] == "agenticreplay-langgraph"
 
 
 # -- the shape the reader depends on ---------------------------------------------------------------
@@ -348,7 +348,7 @@ def test_kind_is_the_first_key(spans):
     the next process's bytes on the end of it. That recovery only works while `kind` is written
     first, which is a property of this file rather than of JSON.
     """
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     run_id = start(handler, "first")
     handler.on_chain_end({}, run_id=run_id)
     report_losses()
@@ -361,7 +361,7 @@ def test_kind_is_the_first_key(spans):
 
 
 def test_every_line_is_one_json_object(spans):
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     for i in range(20):
         run_id = start(handler, f"n{i}")
         handler.on_chain_end({}, run_id=run_id)

@@ -3,7 +3,7 @@ import { readFile, readdir, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { listRuns, runsDir } from '@orcareplay/core';
+import { listRuns, runsDir } from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 
@@ -51,14 +51,14 @@ interface RunFacts {
   parentRun?: string;
   bytes: number;
   orphans: OrphanBlob[];
-  /** Scratch worktree this run executed in, when it is one orca created for a fork. */
+  /** Scratch worktree this run executed in, when it is one agenticreplay created for a fork. */
   worktree?: string;
   /** Why blobs were left alone, when they were. */
   skippedReason?: string;
 }
 
 /**
- * `orca gc` — reclaim the space a trace store grows into.
+ * `agenticreplay gc` — reclaim the space a trace store grows into.
  *
  * A run is append-only and content-addressed, so nothing inside one grows unboundedly. What grows
  * is the number of runs, and the blobs left behind when a run died between writing a payload and
@@ -142,7 +142,7 @@ export async function gcCommand(
     // The fork's scratch worktree goes with its run. It is deliberately *not* removed when the
     // fork finishes — it holds what the model actually did, so deleting it then would destroy the
     // thing you forked in order to look at — but nothing reclaimed it either, so a single
-    // `orca compare --models a,b,c,d` left four full copies of the workspace behind forever.
+    // `agenticreplay compare --models a,b,c,d` left four full copies of the workspace behind forever.
     if (run.worktree !== undefined) {
       worktreesRemoved += 1;
       bytesReclaimed += await runDirBytes(run.worktree);
@@ -176,8 +176,8 @@ export async function gcCommand(
   if (olderThanMs === undefined && keep === undefined) {
     out.plain('');
     out.plain('  no run was removed — say which ones you mean:');
-    out.plain('    orca gc --older-than 7d      # by age');
-    out.plain('    orca gc --keep 10            # by count');
+    out.plain('    agenticreplay gc --older-than 7d      # by age');
+    out.plain('    agenticreplay gc --keep 10            # by count');
     out.plain('    add --dry-run to see the plan first');
   }
 
@@ -193,21 +193,21 @@ export async function gcCommand(
 }
 
 /**
- * Does this path look like a directory orca made for a fork to run in?
+ * Does this path look like a directory agenticreplay made for a fork to run in?
  *
  * Deliberately narrow, and deliberately only half the test — the caller also requires the run to
  * carry a `fork_point`. Directly inside the OS temp directory, with the prefix `replayFork` uses.
  * Anything else is left alone, including a fork whose worktree someone moved somewhere they care
  * about: an unreclaimed directory costs disk, and the alternative costs somebody's work.
  *
- * So `orca replay --worktree` is out of reach here, because an exact replay's trace has no fork
- * point. That is the right way round: you asked for a scratch copy to look at, orca printed where
+ * So `agenticreplay replay --worktree` is out of reach here, because an exact replay's trace has no fork
+ * point. That is the right way round: you asked for a scratch copy to look at, agenticreplay printed where
  * it put it, and a garbage collector that deletes the thing you asked to keep is worse than one
  * that leaves a directory behind. The pre-replay safety snapshot is not gc's problem either —
  * replay owns that one and removes it once your files are back.
  */
 function isScratchWorktree(dir: string): boolean {
-  return resolve(dirname(dir)) === resolve(tmpdir()) && basename(dir).startsWith('orca-');
+  return resolve(dirname(dir)) === resolve(tmpdir()) && basename(dir).startsWith('agenticreplay-');
 }
 
 function readOlderThan(args: ParsedArgs): number | undefined {
@@ -217,7 +217,7 @@ function readOlderThan(args: ParsedArgs): number | undefined {
   if (ms === null) {
     throw new Error(
       `--older-than needs a duration like 7d, 24h or 30m${raw === undefined ? '' : ` — got ${JSON.stringify(raw)}`}\n` +
-        'units are s, m, h, d, w; for example: orca gc --older-than 7d --dry-run',
+        'units are s, m, h, d, w; for example: agenticreplay gc --older-than 7d --dry-run',
     );
   }
   return ms;
@@ -262,7 +262,7 @@ async function inspectRun(runId: string, dir: string, createdAt: string): Promis
     // The fork check is `fork_point`, not `parent_run`. It used to be the latter, back when the
     // only run with a parent was a fork; an exact replay now writes a trace of its own findings
     // that also names a parent, and it ran in the user's *own* directory. A project that happens
-    // to live at $TMPDIR/orca-something would have satisfied the belt on its own, and the run
+    // to live at $TMPDIR/agenticreplay-something would have satisfied the belt on its own, and the run
     // holding the evidence of what happened there is the one gc would have used to delete it.
     if (
       typeof manifest.fork_point === 'number' &&
@@ -344,7 +344,7 @@ async function orphanBlobs(blobsRoot: string, referenced: Set<string>): Promise<
   return orphans;
 }
 
-/** Every byte of file content under a run directory. Shared with `orca doctor`. */
+/** Every byte of file content under a run directory. Shared with `agenticreplay doctor`. */
 export async function runDirBytes(dir: string): Promise<number> {
   let total = 0;
   for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {

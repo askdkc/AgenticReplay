@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
+import { TraceReader } from '@agenticreplay/core';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 
 const run = promisify(execFile);
@@ -19,20 +20,20 @@ const EMBEDDING_AGENT = join(here, 'fixtures', 'embedding-agent.mjs');
 /**
  * A recording that captured nothing must say so.
  *
- * This is the quietest way orca can fail and the most damaging. The agent runs, exits 0, and the
+ * This is the quietest way agenticreplay can fail and the most damaging. The agent runs, exits 0, and the
  * trace holds no model exchange — so every signal the operator has says the run worked, and they
- * find out otherwise minutes later when `orca replay` has nothing to replay. `contract.ts` already
+ * find out otherwise minutes later when `agenticreplay replay` has nothing to replay. `contract.ts` already
  * names this shape as the thing the adapter checks exist to prevent; nothing was watching for it
  * at the end of a real run.
  */
-describe('orca record — a run that captured no model traffic', () => {
+describe('agenticreplay record — a run that captured no model traffic', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startFakeModel>>;
   let out: Output;
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-capture-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-capture-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -62,11 +63,15 @@ describe('orca record — a run that captured no model traffic', () => {
     return recordCommand(args, out, workspace);
   }
 
-  it('warns rather than exiting clean', async () => {
+  it('fails capture independently of a successful child when interception is bypassed', async () => {
     const result = await record(DEAF_AGENT);
 
     // The agent itself succeeded, which is exactly what makes this dangerous.
-    expect(result.exitCode).toBe(0);
+    expect(result.childExitCode).toBe(0);
+    expect(result.exitCode).toBe(2);
+    const trace = await TraceReader.open(result.runDir);
+    expect(trace.manifest().exit_code).toBe(0);
+    expect(trace.manifest().capture?.status).toBe('incomplete');
     const warning = lines.find((l) => l.includes('capture.empty'));
     expect(warning).toBeDefined();
     expect(warning).toContain('warn');
@@ -76,7 +81,7 @@ describe('orca record — a run that captured no model traffic', () => {
     await record(DEAF_AGENT);
     const warning = lines.find((l) => l.includes('capture.empty')) ?? '';
     // "0 exchanges" alone sends someone hunting through their agent. The cause is nearly always
-    // the same one, and orca knows which variables it set.
+    // the same one, and agenticreplay knows which variables it set.
     expect(warning).toMatch(/base.?url/i);
   });
 
@@ -96,10 +101,10 @@ describe('orca record — a run that captured no model traffic', () => {
     expect(warning).toMatch(/transport/i);
   });
 
-  it('points at orca doctor, which is where the answer is', async () => {
+  it('points at agenticreplay doctor, which is where the answer is', async () => {
     await record(DEAF_AGENT);
     const warning = lines.find((l) => l.includes('capture.empty')) ?? '';
-    expect(warning).toContain('orca doctor');
+    expect(warning).toContain('agenticreplay doctor');
   });
 
   it('says nothing when the run did capture model traffic', async () => {
@@ -147,14 +152,14 @@ describe('orca record — a run that captured no model traffic', () => {
  * model output in it. Found against a real gateway whose upstream auth had lapsed: eight recorded
  * exchanges, all 503, and `recorded events=27 exit=0` printed without a word about it.
  */
-describe('orca record — a run whose every model call failed', () => {
+describe('agenticreplay record — a run whose every model call failed', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startFakeModel>>;
   let out: Output;
   let lines: string[];
 
   async function setup(failWith?: number) {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-errors-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-errors-'));
     model = await startFakeModel(failWith === undefined ? {} : { failWith });
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });

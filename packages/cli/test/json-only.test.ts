@@ -25,15 +25,15 @@ function commandsIn(source: string): Set<string> {
  * Seven of those are commands. `events` is not, and typing it said so in the flattest terms
  * available:
  *
- *     $ orca events
+ *     $ agenticreplay events
  *     error unknown_command
  *       there is no "events" command
  *
  * from a tool whose own `--help` had just named it — which reads as the CLI contradicting itself
  * rather than as one view being data-only.
  *
- * Adding `orca events` as a terminal command was the other option and is the wrong one:
- * `buildTimeline` is `events.map(...)`, so `orca show` already renders every event in the trace.
+ * Adding `agenticreplay events` as a terminal command was the other option and is the wrong one:
+ * `buildTimeline` is `events.map(...)`, so `agenticreplay show` already renders every event in the trace.
  * A second table of the same rows would be a worse `show`. What was missing was the sentence
  * saying so.
  */
@@ -72,7 +72,7 @@ describe('commands that only --json answers', () => {
     );
     // Naming the route is the fix. A message that only says "not here" leaves the reader where
     // they started.
-    expect(said).toContain('orca events --json');
+    expect(said).toContain('agenticreplay events --json');
   });
 
   it('leaves a genuine typo answering as a typo', async () => {

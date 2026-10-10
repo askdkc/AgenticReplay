@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { RUN_ID_PATTERN } from '@orcareplay/schema';
+import { RUN_ID_PATTERN } from '@agenticreplay/schema';
 import {
   assertPrivatePathIdentity,
   privatePathIdentity,
@@ -17,16 +17,16 @@ export interface RunRef {
   forkPoint?: number;
 }
 
-export function orcaDir(cwd: string): string {
-  return join(cwd, '.orca');
+export function agenticreplayDir(cwd: string): string {
+  return join(cwd, '.agenticreplay');
 }
 
 export function runsDir(cwd: string): string {
-  return join(orcaDir(cwd), 'runs');
+  return join(agenticreplayDir(cwd), 'runs');
 }
 
 /**
- * Create `.orca/runs`, and make the store ignore itself.
+ * Create `.agenticreplay/runs`, and make the store ignore itself.
  *
  * A recording is the conversation the model saw — which is your source — plus shell output, a
  * snapshot of the whole workspace, and an environment allowlist. SECURITY.md says to treat one as
@@ -34,27 +34,27 @@ export function runsDir(cwd: string): string {
  * an untracked directory, one `git add -A` away from being committed and pushed, in the working
  * tree of the project it just recorded.
  *
- * `.orca/.gitignore` containing `*` is git's own idiom for a directory that excludes itself: no
- * edit to the user's `.gitignore`, nothing to remember, and it works in a repo orca has never seen
+ * `.agenticreplay/.gitignore` containing `*` is git's own idiom for a directory that excludes itself: no
+ * edit to the user's `.gitignore`, nothing to remember, and it works in a repo agenticreplay has never seen
  * before. Written once at creation and never rewritten, so anyone who deliberately wants their
- * traces tracked can delete it and orca will not put it back.
+ * traces tracked can delete it and agenticreplay will not put it back.
  */
 export async function ensureRunsDir(cwd: string): Promise<string> {
   const dir = runsDir(cwd);
-  const orca = orcaDir(cwd);
+  const agenticreplay = agenticreplayDir(cwd);
 
   if (process.platform === 'win32') {
     // Secure the container before creating the store inside it. Ownership is checked as well:
     // removing a foreign owner's ACE alone would leave it able to restore its own access.
-    await mkdir(orca, { recursive: true, mode: 0o700 });
-    const orcaWas = await privatePathIdentity(orca);
-    await restrictToOwner(orca, 0o700);
-    await assertPrivatePathIdentity(orca, orcaWas);
+    await mkdir(agenticreplay, { recursive: true, mode: 0o700 });
+    const agenticreplayWas = await privatePathIdentity(agenticreplay);
+    await restrictToOwner(agenticreplay, 0o700);
+    await assertPrivatePathIdentity(agenticreplay, agenticreplayWas);
 
     await mkdir(dir, { recursive: true, mode: 0o700 });
     // Check again after making the container non-empty. These checks detect replacement during
     // setup; they do not lock ancestors against an account that can keep replacing them later.
-    await assertPrivatePathIdentity(orca, orcaWas);
+    await assertPrivatePathIdentity(agenticreplay, agenticreplayWas);
     const dirWas = await privatePathIdentity(dir);
     await restrictToOwner(dir, 0o700);
     await assertPrivatePathIdentity(dir, dirWas);
@@ -76,7 +76,7 @@ export async function ensureRunsDir(cwd: string): Promise<string> {
     if (created) await restrictToOwner(dir, 0o700).catch(() => undefined);
   }
 
-  const ignore = join(orca, '.gitignore');
+  const ignore = join(agenticreplay, '.gitignore');
   if (!(await stat(ignore).catch(() => null))) {
     await writeFile(
       ignore,
@@ -154,7 +154,7 @@ function isReplayTrace(run: RunRef): boolean {
  * `last` skips replay traces. Since exact replay started writing one, the newest run in a
  * directory is usually a report about the run before it, and every command defaults to `last` — so
  * that quietly redirected all of them. The sharpest case is the line in the README:
- * `orca scrub last --match my-hostname` scrubbed the empty trace, found nothing, and said "nothing
+ * `agenticreplay scrub last --match my-hostname` scrubbed the empty trace, found nothing, and said "nothing
  * matched — the trace is unchanged", while the secret sat in the recording beside it. A security
  * tool reporting clean because it searched the wrong thing is worse than one that fails.
  *
@@ -167,13 +167,14 @@ export async function resolveRunSelector(cwd: string, selector: string): Promise
     const newest = runs.find((r) => !isReplayTrace(r)) ?? runs[0];
     if (!newest) {
       throw new Error(
-        `no runs recorded in ${runsDir(cwd)} — record one first: orca record -- <your agent>`,
+        `no runs recorded in ${runsDir(cwd)} — record one first: agenticreplay record -- <your agent>`,
       );
     }
     return newest;
   }
   const dir = runDirFor(cwd, selector);
   const found = (await listRuns(cwd)).find((r) => r.dir === dir);
-  if (!found) throw new Error(`no run ${selector} in ${runsDir(cwd)} — list runs with: orca list`);
+  if (!found)
+    throw new Error(`no run ${selector} in ${runsDir(cwd)} — list runs with: agenticreplay list`);
   return found;
 }

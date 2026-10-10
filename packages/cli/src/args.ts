@@ -3,7 +3,7 @@
  *
  * Hand-rolled on purpose: a debugger you install to diagnose a broken environment should not drag
  * in a dependency tree of its own. The one rule worth stating is that everything after a bare
- * `--` belongs to the child agent, never to us — `orca record claude -- -p "fix the test"` has to
+ * `--` belongs to the child agent, never to us — `agenticreplay record claude -- -p "fix the test"` has to
  * forward those bytes untouched.
  */
 
@@ -36,13 +36,13 @@ export interface ParsedArgs {
  * Flags that never take a value.
  *
  * Without this list any flag followed by a non-flag token swallowed it, so the flag read as false
- * *and* the positional vanished. `orca replay --worktree last` then restored the recorded tree over
+ * *and* the positional vanished. `agenticreplay replay --worktree last` then restored the recorded tree over
  * the working directory — the exact opposite of what `--worktree` promises — and
- * `orca record --tls-intercept codex` turned interception off while losing the agent name, so
+ * `agenticreplay record --tls-intercept codex` turned interception off while losing the agent name, so
  * record auto-detected and could capture a different harness. Neither said anything.
  *
  * A list rather than a heuristic, because the alternative is guessing from the shape of the next
- * token, and `orca compare --models last` would guess wrong. `--flag=value` and `--no-flag` still
+ * token, and `agenticreplay compare --models last` would guess wrong. `--flag=value` and `--no-flag` still
  * work for these; they are handled before this point.
  */
 export const VALUELESS = new Set([
@@ -64,7 +64,7 @@ export const VALUELESS = new Set([
   'tls-intercept',
   'version',
   'help',
-  // Added with the flags themselves and, the first time, not: `orca replay --quiet run_a1b2c3`
+  // Added with the flags themselves and, the first time, not: `agenticreplay replay --quiet run_a1b2c3`
   // parsed as `quiet="run_a1b2c3"` with no positional left, so replay fell back to `last` and
   // reproduced a different run than the one asked for, in silence. `flags.test.ts` now reads the
   // source and holds this list to every flag the code treats as a boolean, so the next one added
@@ -77,7 +77,7 @@ export const VALUELESS = new Set([
   // point of deriving it — the hand-written list had missed this one too.
   'h',
   // push / pull: "store this even though the scan found something", and "replace the local copy".
-  // Missing here it was VALUE-TAKING, so `orca push --force run_abc` ate the selector and pushed
+  // Missing here it was VALUE-TAKING, so `agenticreplay push --force run_abc` ate the selector and pushed
   // the workspace's NEWEST run to the gateway instead, without ?force=1, reporting success under
   // the other run's name. See the invariant test below for why the list is now derived rather
   // than trusted.
@@ -91,9 +91,17 @@ export const VALUELESS = new Set([
  * anything it cannot parse, so `--from four` replayed the whole run instead of forking at a
  * checkpoint, and `--port eighty` bound a random port and printed it as though that were the
  * request. Knowing which flags are numeric is what lets a value be checked once, up front, rather
- * than nine times by hand — which is what `orca gc --keep` had been doing alone.
+ * than nine times by hand — which is what `agenticreplay gc --keep` had been doing alone.
  */
-export const NUMERIC = new Set(['from', 'to', 'port', 'keep', 'limit']);
+export const NUMERIC = new Set([
+  'from',
+  'to',
+  'port',
+  'keep',
+  'limit',
+  'max-body-bytes',
+  'max-buffered-bytes',
+]);
 
 function coerce(raw: string): FlagValue {
   if (raw === 'true') return true;

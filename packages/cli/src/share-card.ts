@@ -1,11 +1,11 @@
-import type { GraphNode, RunGraph } from '@orcareplay/core';
-import { CREDIT_MADE_BY, CREDIT_REPO } from '@orcareplay/viewer';
+import type { GraphNode, RunGraph } from '@agenticreplay/core';
+import { CREDIT_MADE_BY, CREDIT_REPO } from '@agenticreplay/viewer';
 import type { CompareRow } from './commands/compare.js';
 
 /**
  * A comparison table as one self-contained SVG.
  *
- * The compare table is the most shareable thing OrcaReplay produces — a model-versus-model result
+ * The compare table is the most shareable thing AgenticReplay produces — a model-versus-model result
  * grounded in a real task rather than a synthetic benchmark. It is only worth sharing if it says
  * what it measured, so the card carries the fork point and the verify command alongside the
  * verdicts. A cost column with no stated verdict command is a number people will quote out of
@@ -66,7 +66,7 @@ export function renderCompareCard(rows: CompareRow[], meta: CardMeta): string {
   const empty =
     rows.length === 0 ? text(28, HEADER, 'no models compared', { size: 13, fill: '#6B7578' }) : '';
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${height}" width="${WIDTH}" height="${height}" role="img" aria-label="OrcaReplay model comparison">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${height}" width="${WIDTH}" height="${height}" role="img" aria-label="AgenticReplay model comparison">
 <rect width="${WIDTH}" height="${height}" fill="#08090A"/>
 ${text(28, 40, 'Same task, same state, different model', { size: 17, weight: 600 })}
 ${text(28, 62, `${meta.runId} · forked at checkpoint ${meta.forkPoint}`, { size: 11, mono: true, fill: '#9AA4A7' })}
@@ -122,7 +122,7 @@ export function renderChainCard(graph: RunGraph, meta: ChainCardMeta): string {
   const height = CHAIN_HEAD + Math.max(1, nodes.length) * CHAIN_ROW + CHAIN_FOOT;
 
   if (nodes.length === 0) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} 120" width="${WIDTH}" height="120" role="img" aria-label="OrcaReplay causal chain">
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} 120" width="${WIDTH}" height="120" role="img" aria-label="AgenticReplay causal chain">
 <rect width="${WIDTH}" height="120" fill="#0E1214"/>
 ${text(28, 56, 'Nothing to show — this chain has no events', { size: 15, weight: 600 })}
 ${text(28, 92, CREDIT_MADE_BY, { size: 10, mono: true, fill: '#6B7578' })}
@@ -167,14 +167,14 @@ ${text(28, 92, CREDIT_MADE_BY, { size: 10, mono: true, fill: '#6B7578' })}
     .join('');
 
   const footTop = height - CHAIN_FOOT + 30;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${height}" width="${WIDTH}" height="${height}" role="img" aria-label="OrcaReplay causal chain">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${height}" width="${WIDTH}" height="${height}" role="img" aria-label="AgenticReplay causal chain">
 <rect width="${WIDTH}" height="${height}" fill="#0E1214"/>
 ${text(28, 38, headline(last), { size: 16, weight: 600 })}
 ${text(28, 60, `${meta.runId} · causal chain, ${nodes.length} event${nodes.length === 1 ? '' : 's'}`, { size: 11, mono: true, fill: '#9AA4A7' })}
 <line x1="28" y1="76" x2="${WIDTH - 28}" y2="76" stroke="#374043"/>
 ${rail}${rows}
 <line x1="28" y1="${footTop - 18}" x2="${WIDTH - 28}" y2="${footTop - 18}" stroke="#374043"/>
-${text(28, footTop, `orca graph ${meta.runId} --to ${last?.seq ?? 0}`, { size: 10, mono: true, fill: '#6E7B7F' })}
+${text(28, footTop, `agenticreplay graph ${meta.runId} --to ${last?.seq ?? 0}`, { size: 10, mono: true, fill: '#6E7B7F' })}
 ${
   inferred > 0
     ? text(WIDTH - 28, footTop, 'dashed = inferred, not recorded', {
@@ -378,7 +378,7 @@ export function renderGraphCard(graph: RunGraph | ScopedGraph, meta: GraphCardMe
   const nodes = [...scoped.nodes].sort((a, b) => a.turn - b.turn || a.seq - b.seq);
 
   if (nodes.length === 0) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} 120" width="${WIDTH}" height="120" role="img" aria-label="OrcaReplay causal graph">
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} 120" width="${WIDTH}" height="120" role="img" aria-label="AgenticReplay causal graph">
 <rect width="${WIDTH}" height="120" fill="#0E1214"/>
 ${text(28, 56, 'Nothing to show — this run has no model loop', { size: 15, weight: 600 })}
 ${text(28, 92, CREDIT_MADE_BY, { size: 10, mono: true, fill: '#6B7578' })}
@@ -463,7 +463,7 @@ ${text(28, 92, CREDIT_MADE_BY, { size: 10, mono: true, fill: '#6B7578' })}
 
   const inferred = scoped.edges.filter((e) => e.kind === 'inferred').length;
   const foot = GRAPH_HEIGHT - 34;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${GRAPH_HEIGHT}" width="${width}" height="${GRAPH_HEIGHT}" role="img" aria-label="OrcaReplay causal graph">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${GRAPH_HEIGHT}" width="${width}" height="${GRAPH_HEIGHT}" role="img" aria-label="AgenticReplay causal graph">
 <rect width="${width}" height="${GRAPH_HEIGHT}" fill="#0E1214"/>
 ${text(28, 38, 'What caused what', { size: 16, weight: 600 })}
 ${text(28, 60, subtitle, { size: 11, mono: true, fill: '#9AA4A7' })}

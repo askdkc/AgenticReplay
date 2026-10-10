@@ -8,7 +8,7 @@ import { main, MCP_RECORD_START, objectsOnLine, parseArgs } from '../src/index.j
 let scratch: string;
 
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'orca-shim-cli-'));
+  scratch = mkdtempSync(join(tmpdir(), 'agenticreplay-shim-cli-'));
 });
 
 afterEach(() => {

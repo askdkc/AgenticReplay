@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader } from '@orcareplay/core';
+import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { attachCommand } from '../src/commands/attach.js';
@@ -14,24 +14,24 @@ import { startFakeModel } from './fixtures/fake-model.mjs';
 const run = promisify(execFile);
 
 /**
- * `orca attach` — a recording session for an agent orca did not start.
+ * `agenticreplay attach` — a recording session for an agent agenticreplay did not start.
  *
  * The command holds a proxy open, prints what to export, and records whatever arrives until it is
  * told to stop. That makes it the answer for an agent in a sandbox, on a VPS, or in someone's CI:
- * places where there is no process for orca to spawn and therefore no environment for it to build.
+ * places where there is no process for agenticreplay to spawn and therefore no environment for it to build.
  *
  * These tests stand in for the sandbox with an ordinary `fetch` from this process. The distance
  * does not change anything that could break — what matters is that the run is driven entirely from
  * the outside, and that the trace it leaves behind replays like any other.
  */
-describe('orca attach', () => {
+describe('agenticreplay attach', () => {
   let workspace: string;
   let out: Output;
   let lines: string[];
   let model: Awaited<ReturnType<typeof startFakeModel>>;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-attach-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-attach-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -85,13 +85,13 @@ describe('orca attach', () => {
     await expect(session(['--bind', '0.0.0.0', '--port', '18771'], async () => {})).rejects.toThrow(
       /--advertise/,
     );
-    const runs = await readdir(join(workspace, '.orca', 'runs')).catch(() => []);
+    const runs = await readdir(join(workspace, '.agenticreplay', 'runs')).catch(() => []);
     expect(runs).toEqual([]);
   });
 
   /**
    * A session nobody can connect to is the failure this command exists to prevent, and the empty
-   * block is the one form of it orca can see coming: `exec` sets no variables, so with no
+   * block is the one form of it agenticreplay can see coming: `exec` sets no variables, so with no
    * interception either there is literally nothing for the operator to paste.
    */
   it('says so when there is nothing to paste, instead of printing an empty block', async () => {
@@ -135,7 +135,7 @@ describe('orca attach', () => {
 
   /**
    * `--replay` takes a run, and the parser turns a valueless flag into `true` — so a bare
-   * `orca attach --replay`, or `--replay --tls-intercept`, silently became a fresh *recording*
+   * `agenticreplay attach --replay`, or `--replay --tls-intercept`, silently became a fresh *recording*
    * session pointed at the live provider. Exactly the wrong direction to fail in.
    */
   it('refuses --replay with no run rather than recording instead', async () => {
@@ -146,7 +146,7 @@ describe('orca attach', () => {
     await expect(
       session(['--tls-intercept', '--tls-hosts', 'api.openai.com,+grok.example'], async () => {}),
     ).rejects.toThrow(/\+/);
-    const runs = await readdir(join(workspace, '.orca', 'runs')).catch(() => []);
+    const runs = await readdir(join(workspace, '.agenticreplay', 'runs')).catch(() => []);
     expect(runs).toEqual([]);
   });
 
@@ -185,7 +185,7 @@ describe('orca attach', () => {
   /**
    * Replaying a run whose agent is somewhere else.
    *
-   * `orca replay` launches the agent, which is the right thing for a run orca recorded by
+   * `agenticreplay replay` launches the agent, which is the right thing for a run agenticreplay recorded by
    * launching it — and impossible for one that came from a sandbox, where the agent may not exist
    * on this machine at all. So replay attaches too: the proxy serves the recording, the operator
    * points the same remote agent at it, and no model is called.
@@ -231,7 +231,7 @@ describe('orca attach', () => {
 
   /**
    * A replay session has to hand the operator something to paste, and `exec` — the honest default
-   * when orca does not know what will connect — sets nothing at all. For a replay it does know:
+   * when agenticreplay does not know what will connect — sets nothing at all. For a replay it does know:
    * the trace records which adapter made the recording, so the variables that agent reads are the
    * variables it will read again.
    */
@@ -327,9 +327,9 @@ describe('orca attach', () => {
     expect(replayed.exitCode).toBe(0);
   });
 
-  it('exits zero for a recording session, which cannot fail by being stopped', async () => {
+  it('reports incomplete coverage when a recording session observed no requests', async () => {
     const result = await session(['--for', 'claude'], async () => {});
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   it('says the recording is being served, not recorded, so nothing looks like a fresh run', async () => {

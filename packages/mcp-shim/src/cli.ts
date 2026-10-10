@@ -23,7 +23,7 @@ export interface ShimCliIo {
 }
 
 export const USAGE =
-  'usage: orca-mcp-shim --name <server-name> [--out <file.jsonl>] -- <command> [args...]';
+  'usage: agenticreplay-mcp-shim --name <server-name> [--out <file.jsonl>] -- <command> [args...]';
 
 function fail(problem: string): never {
   throw new Error(`${problem}\n${USAGE}`);
@@ -294,7 +294,7 @@ export async function main(argv: string[], io: ShimCliIo = {}): Promise<number> 
     // explanation is its own debugging problem, so say it once on stderr.
     sink.once('error', (err: Error) => {
       (io.stderr ?? process.stderr).write(
-        `orca-mcp-shim: capture to ${parsed.out} disabled: ${err.message}\n`,
+        `agenticreplay-mcp-shim: capture to ${parsed.out} disabled: ${err.message}\n`,
       );
     });
     sink.on('error', () => {});
@@ -303,7 +303,7 @@ export async function main(argv: string[], io: ShimCliIo = {}): Promise<number> 
   try {
     // Replay: answer from the recording and never start the server. The command is still parsed,
     // because the config the agent reads is the same file either way — what changes is whether
-    // orca runs what it names. Frames are still written, so the replay is a readable run of its
+    // agenticreplay runs what it names. Frames are still written, so the replay is a readable run of its
     // own rather than one whose MCP layer left no trace at all.
     if (parsed.replay !== undefined) {
       const frames = await readFrames(parsed.replay, parsed.name);
@@ -312,7 +312,7 @@ export async function main(argv: string[], io: ShimCliIo = {}): Promise<number> 
         frames,
         onMiss: (method: string) =>
           (io.stderr ?? process.stderr).write(
-            `orca-mcp-shim: no recorded response for ${method} on ${parsed.name}
+            `agenticreplay-mcp-shim: no recorded response for ${method} on ${parsed.name}
 `,
           ),
         ...(sink
@@ -364,7 +364,7 @@ if (isMain()) {
       process.stdin.pause();
     },
     (err: Error) => {
-      process.stderr.write(`orca-mcp-shim: ${err.message}\n`);
+      process.stderr.write(`agenticreplay-mcp-shim: ${err.message}\n`);
       process.exitCode = 1;
       process.stdin.pause();
     },

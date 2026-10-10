@@ -1,7 +1,7 @@
 import { MODEL_BASE_URL_VARS } from './contract.js';
 
 /**
- * Adapters are the growth loop: they are how OrcaReplay reaches harnesses its maintainers have
+ * Adapters are the growth loop: they are how AgenticReplay reaches harnesses its maintainers have
  * never run. This returns file *contents* rather than writing them — the CLI owns the filesystem,
  * and data comes back testable, so the generated code is held to the same contract as the shipped
  * adapters instead of being hoped about.
@@ -71,7 +71,7 @@ interface Names {
 }
 
 function adapterSource(n: Names): string {
-  return `import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+  return `import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { hasBinary } from './detect.js';
 import { passKey, proxyBase } from './env.js';
 
@@ -98,7 +98,7 @@ export const ${n.constName}: Adapter = {
 }
 
 function testSource(n: Names): string {
-  return `import type { RecordContext } from '@orcareplay/plugin-api';
+  return `import type { RecordContext } from '@agenticreplay/plugin-api';
 import { describe, expect, it } from 'vitest';
 import { checkAdapterContract } from '../src/contract.js';
 import { ${n.constName} } from '../src/${n.id}.js';
@@ -115,7 +115,7 @@ function ctx(over: Partial<RecordContext> = {}): RecordContext {
     runId: 'run_scaffold',
     cwd: '/work',
     proxyUrl: 'http://127.0.0.1:51733',
-    runDir: '/work/.orca/runs/run_scaffold',
+    runDir: '/work/.agenticreplay/runs/run_scaffold',
     userArgs: [],
     env: {},
     ...over,
@@ -138,7 +138,7 @@ describe('${n.constName}', () => {
     const real = await ${n.constName}.prepare(ctx({ env: { ${n.apiKeyVar}: 'sk-real' } }));
     expect(real.env.${n.apiKeyVar}).toBe('sk-real');
     const none = await ${n.constName}.prepare(ctx());
-    expect(none.env.${n.apiKeyVar}).toBe('orca-recorded');
+    expect(none.env.${n.apiKeyVar}).toBe('agenticreplay-recorded');
   });
 
   it('resolves detect() rather than throwing, even for a path that does not exist', async () => {

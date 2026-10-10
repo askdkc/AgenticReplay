@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
 
 /**
@@ -17,7 +17,7 @@ import { detectAgent } from './detect.js';
  * and is what the fixture below was verified against.
  *
  * Kilo also posts to `us.i.posthog.com`. That is not a model API and is not in the allowlist, so
- * it stays tunnelled: orca records that the connection happened and reads none of it.
+ * it stays tunnelled: agenticreplay records that the connection happened and reads none of it.
  */
 export const kiloAdapter: Adapter = {
   id: 'kilo',

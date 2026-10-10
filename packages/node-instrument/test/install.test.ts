@@ -18,14 +18,14 @@ const run = promisify(execFile);
 /**
  * Delivering the hook into an agent that is not ours.
  *
- * The hook cannot `require` anything of orca's: it runs inside the agent's process, which has its
+ * The hook cannot `require` anything of agenticreplay's: it runs inside the agent's process, which has its
  * own `node_modules` and no reason to contain ours. So it is written out as one self-contained
  * file, the way the shell shim and the MCP config rewrite already work.
  */
 describe('writeFetchHook', () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-hook-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-hook-'));
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -38,11 +38,11 @@ describe('writeFetchHook', () => {
   });
 
   it('is self-contained — it reaches into no package', async () => {
-    // The check that matters. A `require('@orcareplay/...')` here resolves against the *agent's*
+    // The check that matters. A `require('@agenticreplay/...')` here resolves against the *agent's*
     // dependency tree and throws before its first line runs, taking the whole run with it.
     const source = await readFile(await writeFetchHook(dir), 'utf8');
     expect(source).not.toMatch(/require\(\s*['"][@.]/);
-    expect(source).not.toContain('@orcareplay');
+    expect(source).not.toContain('@agenticreplay');
   });
 
   it('writes the same bytes every time, so replay prepares an identical launch', async () => {
@@ -75,7 +75,7 @@ describe('bunOptionsWithHook', () => {
   it('preloads the hook, because Bun ignores --require in NODE_OPTIONS', () => {
     // Verified, not assumed: with NODE_OPTIONS=--require the hook never runs under Bun and the
     // request goes to the real provider. Bun's own --preload does run it, and BUN_OPTIONS is how
-    // that reaches a command orca did not write. grok-cli is the agent this matters for today.
+    // that reaches a command agenticreplay did not write. grok-cli is the agent this matters for today.
     const composed = bunOptionsWithHook('/run/hook.cjs', undefined);
     expect(composed).toContain('--preload');
     expect(composed).toContain('/run/hook.cjs');
@@ -108,7 +108,7 @@ describe('nodeOptionsWithHook', () => {
   /**
    * The quoting is where the parser starts reading a backslash as an escape. Unquoted,
    * `C:\\run\\hook.cjs` reaches the loader intact; quoted, the same path reaches it as
-   * `C:runhook.cjs` and the preload is silently not found — so orca worked until the project sat in
+   * `C:runhook.cjs` and the preload is silently not found — so agenticreplay worked until the project sat in
    * a directory with a space in its name, and then every run went uninstrumented.
    *
    * Checked against node 22: doubling the backslashes loads the hook, leaving them does not.
@@ -166,7 +166,7 @@ describe('the hook, in a real child process', () => {
   let url: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-hook-e2e-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-hook-e2e-'));
     seen = [];
     server = createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -192,7 +192,7 @@ describe('the hook, in a real child process', () => {
     const agent = join(dir, 'agent.mjs');
     await writeFile(agent, source);
     return run(process.execPath, ['--require', hook, agent], {
-      env: { ...process.env, ORCA_PROXY_URL: url, ...env },
+      env: { ...process.env, AGENTICREPLAY_PROXY_URL: url, ...env },
     });
   }
 
@@ -243,17 +243,19 @@ describe('the hook, in a real child process', () => {
     // Silently answering someone else's telemetry call with the proxy's reply would be a worse
     // bug than not capturing anything.
     await runAgent(`
-      try { await fetch('https://registry.npmjs.org/react'); } catch { console.log('unreached'); }
+      // Port 1 is deliberately unreachable in the test process. It keeps this
+      // assertion independent of DNS, internet availability, and registry uptime.
+      try { await fetch('http://127.0.0.1:1/unrelated', { signal: AbortSignal.timeout(100) }); } catch { console.log('unreached'); }
     `);
     expect(seen).toHaveLength(0);
   });
 
-  it('does nothing when ORCA_PROXY_URL is absent, so the file is inert outside a recording', async () => {
+  it('does nothing when AGENTICREPLAY_PROXY_URL is absent, so the file is inert outside a recording', async () => {
     const hook = await writeFetchHook(dir);
     const agent = join(dir, 'inert.mjs');
     await writeFile(agent, `console.log(typeof fetch);`);
     const { stdout } = await run(process.execPath, ['--require', hook, agent], {
-      env: { ...process.env, ORCA_PROXY_URL: '' },
+      env: { ...process.env, AGENTICREPLAY_PROXY_URL: '' },
     });
     expect(stdout.trim()).toBe('function');
     expect(seen).toHaveLength(0);
@@ -283,7 +285,7 @@ describe('the body of a rewritten Request', () => {
   let url: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-hook-body-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-hook-body-'));
     seen = [];
     server = createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -312,7 +314,7 @@ describe('the body of a rewritten Request', () => {
     const agent = join(dir, 'agent.mjs');
     await writeFile(agent, source);
     return run(process.execPath, ['--require', hook, agent], {
-      env: { ...process.env, ORCA_PROXY_URL: url },
+      env: { ...process.env, AGENTICREPLAY_PROXY_URL: url },
     });
   }
 
@@ -378,7 +380,7 @@ describe.skipIf(!hasBun)('the hook under Bun', () => {
   let url: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-hook-bun-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-hook-bun-'));
     seen = [];
     server = createServer((req, res) => {
       seen.push(req.url ?? '');
@@ -408,7 +410,7 @@ describe.skipIf(!hasBun)('the hook under Bun', () => {
     await run('bun', [agent], {
       env: {
         ...process.env,
-        ORCA_PROXY_URL: url,
+        AGENTICREPLAY_PROXY_URL: url,
         BUN_OPTIONS: bunOptionsWithHook(hook, undefined),
       },
     });
@@ -416,7 +418,7 @@ describe.skipIf(!hasBun)('the hook under Bun', () => {
     expect(seen).toEqual(['/v1/responses']);
   });
 
-  it('is what the node adapter sets, so `orca record node` covers a Bun agent', async () => {
+  it('is what the node adapter sets, so `agenticreplay record node` covers a Bun agent', async () => {
     // NODE_OPTIONS alone is not enough here, which is the whole reason BUN_OPTIONS is set too.
     const hook = await writeFetchHook(dir);
     expect(nodeOptionsWithHook(hook, undefined)).toContain('--require');

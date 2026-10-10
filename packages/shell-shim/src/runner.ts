@@ -44,7 +44,7 @@ export async function runShim(options: RunShimOptions): Promise<number> {
 
   if (real === undefined) {
     process.stderr.write(
-      `orca shell-shim: cannot find the real "${options.name}" on PATH.\n` +
+      `agenticreplay shell-shim: cannot find the real "${options.name}" on PATH.\n` +
         `  the shim directory is ${options.shimDir}\n` +
         `  re-run without recording, or report this with your PATH\n`,
     );
@@ -55,7 +55,7 @@ export async function runShim(options: RunShimOptions): Promise<number> {
   const startedNs = process.hrtime.bigint();
 
   // Counting bytes requires piping, which removes the TTY. Only do it when there is no TTY to
-  // remove — under `orca record` the agent has already given us pipes, which is the case we care
+  // remove — under `agenticreplay record` the agent has already given us pipes, which is the case we care
   // about, and an interactive terminal keeps its exact behaviour.
   const canCount = !process.stdout.isTTY && !process.stderr.isTTY;
 
@@ -85,7 +85,7 @@ export async function runShim(options: RunShimOptions): Promise<number> {
 
   const { code, signal } = await new Promise<{ code: number; signal: string | null }>((resolve) => {
     child.on('error', (err) => {
-      process.stderr.write(`orca shell-shim: could not run ${real}: ${String(err)}\n`);
+      process.stderr.write(`agenticreplay shell-shim: could not run ${real}: ${String(err)}\n`);
       resolve({ code: 127, signal: null });
     });
     child.on('close', (c, s) => resolve({ code: c ?? 0, signal: s }));
@@ -135,7 +135,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (!name || !shimDir || !framesPath) {
     process.stderr.write(
-      'orca shell-shim: invoked without its shim parameters; not launched by orca record\n',
+      'agenticreplay shell-shim: invoked without its shim parameters; not launched by agenticreplay record\n',
     );
     return 127;
   }

@@ -9,8 +9,8 @@ Forking answers it properly: **same task, same files, same conversation prefix, 
 ## Fork one model
 
 ```console
-orca checkpoints last
-orca replay last --from 17 --model glm-5.3-flash
+agenticreplay checkpoints last
+agenticreplay replay last --from 17 --model glm-5.3-flash
 ```
 
 Everything before checkpoint 17 is served from the recording, so it is identical by construction.
@@ -19,7 +19,7 @@ From 17 onward the agent runs live on the new model, in a scratch worktree.
 ## Compare several at once
 
 ```console
-orca compare last --from 17 \
+agenticreplay compare last --from 17 \
   --models claude-opus-5,gpt-5.2,glm-5.3-flash,qwen3-coder \
   --verify 'npm test'
 ```
@@ -39,13 +39,13 @@ chose, run inside that fork's worktree.
 Each row is a real child run with its own trace. To see what a model actually did:
 
 ```console
-orca replay run_a71e08 --ui
+agenticreplay replay run_a71e08 --ui
 ```
 
 ## Share the result
 
 ```console
-orca compare last --from 17 --models ... --verify 'npm test' --share result.svg
+agenticreplay compare last --from 17 --models ... --verify 'npm test' --share result.svg
 ```
 
 One self-contained SVG, no external references, that renders anywhere. It carries the fork point

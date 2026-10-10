@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { InterceptFailure } from '@orcareplay/proxy';
+import type { InterceptFailure } from '@agenticreplay/proxy';
 import { Output, type LogEntry } from '../src/out.js';
 import { reportInterceptFailure } from '../src/tls-capture.js';
 
@@ -8,10 +8,10 @@ import { reportInterceptFailure } from '../src/tls-capture.js';
  *
  * Interception reported everything it could go wrong with as `tls.handshake_failed`: a body that
  * would not decompress, a WebSocket upgrade declined, an h2 stream faulting mid-session, and — the
- * one an operator most needs to recognise — a client refusing the certificate orca presented.
+ * one an operator most needs to recognise — a client refusing the certificate agenticreplay presented.
  *
  * That last case is the reason the name mattered. It happens on the *client* side of the proxy, but
- * "handshake failed" with an `h2 session:` prefix reads as a problem between orca and the origin, so
+ * "handshake failed" with an `h2 session:` prefix reads as a problem between agenticreplay and the origin, so
  * the operator goes looking at the network and the upstream. The fix is on the other side of the
  * connection: the run CA is not in the agent's trust store. Meanwhile nothing from that host is
  * recorded, and the trace looks quiet rather than broken.

@@ -1,5 +1,5 @@
 import type { ParsedArgs } from './args.js';
-import { unusableOrigin } from '@orcareplay/proxy';
+import { unusableOrigin } from '@agenticreplay/proxy';
 import { gatewayHeaders, readConfig, resolveUpstream, sameOrigin } from './config.js';
 
 /**
@@ -8,11 +8,11 @@ import { gatewayHeaders, readConfig, resolveUpstream, sameOrigin } from './confi
  * Needed by record *and* by replay: `--loose` and any fork continue live, and a fork that ignored
  * the override would quietly talk to the real provider instead of the gateway the user pointed it
  * at. Same precedence whichever command is running — flag, then environment, then the gateway from
- * `orca setup`.
+ * `agenticreplay setup`.
  *
- * The headers are the half that makes `orca setup` worth having: a gateway needs a key, and this
+ * The headers are the half that makes `agenticreplay setup` worth having: a gateway needs a key, and this
  * is the only place one is attached. It goes on the *outbound* request only. What gets recorded is
- * built from the incoming request with auth stripped, so a key orca injects cannot reach a trace
+ * built from the incoming request with auth stripped, so a key agenticreplay injects cannot reach a trace
  * by construction rather than by a rule someone has to remember.
  */
 export interface UpstreamPlan {
@@ -37,7 +37,7 @@ export async function upstreamPlan(
   const upstream = await resolveUpstream(args, env);
 
   // Refused here, because here is where all three sources meet: `--upstream-*`,
-  // `ORCA_UPSTREAM_*`, and the gateway from the config file. `orca setup` refuses one on the way
+  // `AGENTICREPLAY_UPSTREAM_*`, and the gateway from the config file. `agenticreplay setup` refuses one on the way
   // in, but a config written before it did, a hand-edited one, an environment variable and a flag
   // all still arrive unchecked — and on the record path an origin is not only sent, it is
   // *printed*: `distinctOrigins` renders it on the recording line, and an origin `doFetch` cannot
@@ -48,9 +48,9 @@ export async function upstreamPlan(
     const problem = unusableOrigin(origin);
     if (problem === undefined) continue;
     throw new Error(
-      `the upstream for ${dialect} is not an origin orca can use: ${problem}` +
+      `the upstream for ${dialect} is not an origin agenticreplay can use: ${problem}` +
         '\n  give it as scheme, host and path: --upstream-openai https://gateway.example/v1' +
-        '\n  read in order: --upstream-*, then ORCA_UPSTREAM_*, then the gateway from orca setup',
+        '\n  read in order: --upstream-*, then AGENTICREPLAY_UPSTREAM_*, then the gateway from agenticreplay setup',
     );
   }
   const headers = gatewayHeaders(config, env);

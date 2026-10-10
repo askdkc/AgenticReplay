@@ -3,8 +3,8 @@ import {
   bunOptionsWithHook,
   nodeOptionsWithHook,
   writeFetchHook,
-} from '@orcareplay/node-instrument';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+} from '@agenticreplay/node-instrument';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { applyNamedBaseUrls, passThrough, proxyBase, readEnv } from './env.js';
 import { detectAgent } from './detect.js';
 
@@ -39,13 +39,13 @@ export const grokAdapter: Adapter = {
 
   async prepare(ctx: RecordContext): Promise<Launch> {
     const hookPath = await writeFetchHook(ctx.runDir);
-    const hosts = readEnv(ctx.env, 'ORCA_INSTRUMENT_HOSTS');
+    const hosts = readEnv(ctx.env, 'AGENTICREPLAY_INSTRUMENT_HOSTS');
     const env: Record<string, string> = {
       GROK_BASE_URL: proxyBase(ctx.proxyUrl, 'v1'),
-      ORCA_PROXY_URL: ctx.proxyUrl,
+      AGENTICREPLAY_PROXY_URL: ctx.proxyUrl,
       // Added to whatever the operator asked for rather than replacing it: naming one host should
       // not silently drop xAI, which is the only host this adapter exists to catch.
-      ORCA_INSTRUMENT_HOSTS: hosts === undefined ? XAI_HOST : `${hosts},${XAI_HOST}`,
+      AGENTICREPLAY_INSTRUMENT_HOSTS: hosts === undefined ? XAI_HOST : `${hosts},${XAI_HOST}`,
       NODE_OPTIONS: nodeOptionsWithHook(hookPath, readEnv(ctx.env, 'NODE_OPTIONS')),
       BUN_OPTIONS: bunOptionsWithHook(hookPath, readEnv(ctx.env, 'BUN_OPTIONS')),
     };

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Orca } from '../src/api.js';
+import { AgenticReplay } from '../src/api.js';
 import { MCP_TOOLS, handleMcpMessage, serveMcp } from '../src/mcp-server.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
@@ -15,10 +15,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const AGENT = join(here, 'fixtures', 'responses-agent.mjs');
 
 /**
- * Orca as tools an agent can call.
+ * AgenticReplay as tools an agent can call.
  *
  * The MCP shim in this repo records an agent's *own* MCP traffic. It is a tee, not a server, so
- * nothing has ever let an agent ask orca a question — and "replay my last run and tell me what
+ * nothing has ever let an agent ask agenticreplay a question — and "replay my last run and tell me what
  * diverged" is the single most useful thing an agent could ask a replay debugger.
  *
  * Built on the framer the shim already has, so no runtime dependency is added for a protocol that
@@ -27,16 +27,16 @@ const AGENT = join(here, 'fixtures', 'responses-agent.mjs');
 describe('the MCP server', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startResponsesModel>>;
-  let orca: Orca;
+  let agenticreplay: AgenticReplay;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-mcp-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-'));
     model = await startResponsesModel();
     await run('git', ['init', '-q'], { cwd: workspace });
     await run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
     await run('git', ['config', 'user.name', 'Test'], { cwd: workspace });
     await writeFile(join(workspace, 'auth.ts'), 'export const fixed = false;\n');
-    orca = new Orca({ cwd: workspace });
+    agenticreplay = new AgenticReplay({ cwd: workspace });
   });
 
   afterEach(async () => {
@@ -45,14 +45,14 @@ describe('the MCP server', () => {
   });
 
   const seed = () =>
-    orca.record({
+    agenticreplay.record({
       adapter: 'generic-openai',
       command: [process.execPath, AGENT],
       upstream: { openai: model.url },
     });
 
   const call = (method: string, params?: unknown, id: number | string = 1) =>
-    handleMcpMessage(orca, { jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
+    handleMcpMessage(agenticreplay, { jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
 
   const tool = async (name: string, args: Record<string, unknown> = {}) => {
     const res = (await call('tools/call', { name, arguments: args })) as {
@@ -75,7 +75,7 @@ describe('the MCP server', () => {
     });
 
     it('says nothing back to a notification, which has no id to answer', async () => {
-      const res = await handleMcpMessage(orca, {
+      const res = await handleMcpMessage(agenticreplay, {
         jsonrpc: '2.0',
         method: 'notifications/initialized',
       });
@@ -94,11 +94,11 @@ describe('the MCP server', () => {
       const names = res.result?.tools.map((t) => t.name) ?? [];
       expect(names).toEqual(
         expect.arrayContaining([
-          'orca_list_runs',
-          'orca_show_run',
-          'orca_checkpoints',
-          'orca_replay',
-          'orca_compare',
+          'agenticreplay_list_runs',
+          'agenticreplay_show_run',
+          'agenticreplay_checkpoints',
+          'agenticreplay_replay',
+          'agenticreplay_compare',
         ]),
       );
     });
@@ -116,14 +116,14 @@ describe('the MCP server', () => {
   describe('tools/call', () => {
     it('lists runs', async () => {
       const recorded = await seed();
-      const res = await tool('orca_list_runs');
+      const res = await tool('agenticreplay_list_runs');
       expect(res.isError).toBe(false);
       expect(res.json().map((r: { runId: string }) => r.runId)).toContain(recorded.runId);
     });
 
     it('returns a timeline an agent can reason over', async () => {
       const recorded = await seed();
-      const res = await tool('orca_show_run', { run: recorded.runId });
+      const res = await tool('agenticreplay_show_run', { run: recorded.runId });
       const doc = res.json();
       expect(doc.runId).toBe(recorded.runId);
       expect(doc.events.some((e: { kind: string }) => e.kind === 'TOOL')).toBe(true);
@@ -131,43 +131,43 @@ describe('the MCP server', () => {
 
     it('defaults to the newest run, the way `last` does on the command line', async () => {
       const recorded = await seed();
-      expect((await tool('orca_show_run')).json().runId).toBe(recorded.runId);
+      expect((await tool('agenticreplay_show_run')).json().runId).toBe(recorded.runId);
     });
 
     it('replays and reports what diverged', async () => {
       const recorded = await seed();
       const before = model.calls.length;
 
-      const res = await tool('orca_replay', { run: recorded.runId });
+      const res = await tool('agenticreplay_replay', { run: recorded.runId });
 
       expect(res.isError).toBe(false);
-      expect(res.json()).toMatchObject({ matchedExact: 2, divergences: 0, unmatched: 0 });
+      expect(res.json()).toMatchObject({ canonicalExact: 2, divergences: 0, unmatched: 0 });
       // Still offline. An agent calling this must not spend tokens without saying so.
       expect(model.calls.length).toBe(before);
     });
 
     it('returns the checkpoints a fork could start from', async () => {
       await seed();
-      const res = await tool('orca_checkpoints');
+      const res = await tool('agenticreplay_checkpoints');
       expect(res.json().length).toBeGreaterThan(0);
     });
 
     it('reports a failed call as an error result, not a transport error', async () => {
       // MCP says a tool that fails answers with isError, so the model can read the reason and
       // try something else. Throwing across the transport instead kills the session.
-      const res = await tool('orca_show_run', { run: 'run_doesnotexist' });
+      const res = await tool('agenticreplay_show_run', { run: 'run_doesnotexist' });
       expect(res.isError).toBe(true);
       expect(res.text).toContain('run_doesnotexist');
     });
 
     it('rejects an unknown tool by name', async () => {
-      const res = await tool('orca_delete_everything');
+      const res = await tool('agenticreplay_delete_everything');
       expect(res.isError).toBe(true);
-      expect(res.text).toContain('orca_delete_everything');
+      expect(res.text).toContain('agenticreplay_delete_everything');
     });
 
     it('rejects arguments of the wrong shape rather than coercing them', async () => {
-      const res = await tool('orca_replay', { run: 'last', from: 'not-a-number' });
+      const res = await tool('agenticreplay_replay', { run: 'last', from: 'not-a-number' });
       expect(res.isError).toBe(true);
     });
   });
@@ -180,7 +180,7 @@ describe('the MCP server', () => {
       const lines: string[] = [];
       output.on('data', (c: Buffer) => lines.push(c.toString('utf8')));
 
-      const done = serveMcp({ orca, input, output });
+      const done = serveMcp({ agenticreplay, input, output });
       input.write(
         `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`,
       );
@@ -190,7 +190,7 @@ describe('the MCP server', () => {
           jsonrpc: '2.0',
           id: 2,
           method: 'tools/call',
-          params: { name: 'orca_list_runs', arguments: {} },
+          params: { name: 'agenticreplay_list_runs', arguments: {} },
         })}\n`,
       );
       input.end();
@@ -212,7 +212,7 @@ describe('the MCP server', () => {
       const lines: string[] = [];
       output.on('data', (c: Buffer) => lines.push(c.toString('utf8')));
 
-      const done = serveMcp({ orca, input, output });
+      const done = serveMcp({ agenticreplay, input, output });
       input.write('this is not json\n');
       input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' })}\n`);
       input.end();
@@ -233,19 +233,19 @@ describe('the MCP server', () => {
  *
  * A server nobody can start is a library, not an integration — the config line is the product.
  */
-describe('orca mcp', () => {
+describe('agenticreplay mcp', () => {
   let workspace: string;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-mcp-cli-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-cli-'));
   });
   afterEach(async () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
   it('keeps stdout pure JSON-RPC while a tool runs a live agent', async () => {
-    // The failure this guards: `orca_replay` spawns the recorded agent, and the agent was given
-    // orca's own stdout — which here *is* the transport. One line of its output and the client
+    // The failure this guards: `agenticreplay_replay` spawns the recorded agent, and the agent was given
+    // agenticreplay's own stdout — which here *is* the transport. One line of its output and the client
     // drops the session. Only a real subprocess can see it: `stdio: 'inherit'` passes the file
     // descriptor, not anything an in-process test can substitute.
     const model = await startResponsesModel();
@@ -254,7 +254,7 @@ describe('orca mcp', () => {
       await run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
       await run('git', ['config', 'user.name', 'Test'], { cwd: workspace });
       await writeFile(join(workspace, 'auth.ts'), 'export const fixed = false;\n');
-      await new Orca({ cwd: workspace }).record({
+      await new AgenticReplay({ cwd: workspace }).record({
         adapter: 'generic-openai',
         command: [process.execPath, AGENT],
         upstream: { openai: model.url },
@@ -269,7 +269,7 @@ describe('orca mcp', () => {
           jsonrpc: '2.0',
           id: 1,
           method: 'tools/call',
-          params: { name: 'orca_replay', arguments: { run: 'last' } },
+          params: { name: 'agenticreplay_replay', arguments: { run: 'last' } },
         })}\n`,
       );
       child.stdin?.end();
@@ -310,6 +310,6 @@ describe('orca mcp', () => {
       .filter((l) => l.trim() !== '')
       .map((l) => JSON.parse(l) as { id: number; result?: { tools?: { name: string }[] } });
     expect(messages.map((m) => m.id)).toEqual([1, 2]);
-    expect(messages[1]!.result?.tools?.map((t) => t.name)).toContain('orca_show_run');
+    expect(messages[1]!.result?.tools?.map((t) => t.name)).toContain('agenticreplay_show_run');
   });
 });

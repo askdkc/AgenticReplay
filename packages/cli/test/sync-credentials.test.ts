@@ -11,7 +11,7 @@ import { main } from '../src/main.js';
 /**
  * A gateway credential never reaches the terminal, from push or pull either.
  *
- * `config.ts` states the promise: "nothing ever prints it back". `orca setup` keeps it by hand —
+ * `config.ts` states the promise: "nothing ever prints it back". `agenticreplay setup` keeps it by hand —
  * it prints the gateway as `recordableOrigin(url) ?? '(unprintable)'` and wraps its own two fetch
  * failures in `withoutCredentials`. push/pull were NEW SINKS for the same value and simply did not
  * (orcacode-review), so the promise held for one command and not for the two added beside it.
@@ -19,12 +19,12 @@ import { main } from '../src/main.js';
  * Both shapes here are ordinary, storable configurations rather than exotica: `unusableOrigin`'s
  * doc calls `https://user:pw@gw` sanitisable and deliberately admits it, and
  * `upstream-visible.test.ts` calls `https://gw.example/v1?key=…` "a query-authenticated gateway".
- * `orca setup` stores either.
+ * `agenticreplay setup` stores either.
  *
  * THE KEY MATTERS TO THE TEST, not just to the command. The first version of this file passed
  * `--gateway` with no credential configured, so push refused at "no API key for this gateway"
  * before it ever built a request — and every assertion below held against the UNFIXED code. A
- * homed key (env key's home is ORCA_GATEWAY_URL, see resolveGateway) is what carries execution as
+ * homed key (env key's home is AGENTICREPLAY_GATEWAY_URL, see resolveGateway) is what carries execution as
  * far as undici, which is what puts the URL into an exception: "Request cannot be constructed from
  * a URL that includes credentials: …".
  *
@@ -50,8 +50,8 @@ describe('push and pull never print the gateway credential', () => {
 
   const envFor = (url: string): NodeJS.ProcessEnv => ({
     XDG_CONFIG_HOME: home,
-    ORCA_GATEWAY_URL: url,
-    ORCA_GATEWAY_KEY: 'sk-test-key',
+    AGENTICREPLAY_GATEWAY_URL: url,
+    AGENTICREPLAY_GATEWAY_KEY: 'sk-test-key',
   });
 
   /** Every byte this command could put in front of a human or into a CI log. */
@@ -59,8 +59,8 @@ describe('push and pull never print the gateway credential', () => {
     [...written, ...logs.map((e) => JSON.stringify(e))].join('\n');
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-cred-'));
-    home = await mkdtemp(join(tmpdir(), 'orca-cred-home-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-cred-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-cred-home-'));
     logs = [];
     written = [];
     out = new Output({
@@ -68,17 +68,17 @@ describe('push and pull never print the gateway credential', () => {
       sink: (e) => void logs.push(e),
       isTTY: false,
     });
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await mkdir(join(dir, 'blobs', 'ab'), { recursive: true });
     await writeFile(
       join(dir, 'manifest.json'),
-      `${JSON.stringify({ run_id: runId, schema_version: '0.1.0' }, null, 2)}\n`,
+      `${JSON.stringify({ run_id: runId, schema_version: '0.4.0' }, null, 2)}\n`,
     );
     await writeFile(join(dir, 'events.jsonl'), '{"seq":1,"type":"run.start"}\n');
     await writeFile(join(dir, 'blobs', 'ab', 'abcdef'), Buffer.from([1, 2, 3]));
 
     // A gateway that ANSWERS, so push reaches its success line. The leak on that line is the one
-    // that fires on every green run of the README's own `orca push last` recipe, and no amount of
+    // that fires on every green run of the README's own `agenticreplay push last` recipe, and no amount of
     // testing the failure path reaches it.
     server = createServer((req, res) => {
       req.resume();
@@ -166,8 +166,8 @@ describe('push and pull never print the gateway credential', () => {
     const url = `${localUrl}/v1?key=${SECRET}`;
     await pushCommand(parseArgs(['push', runId]), out, workspace, {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_URL: url,
-      ORCA_GATEWAY_KEY: 'sk-test-key',
+      AGENTICREPLAY_GATEWAY_URL: url,
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-test-key',
     });
     const done = logs.find((e) => e.event === 'push.done');
     expect(done, 'the push did not reach its success line, so this asserts nothing').toBeDefined();

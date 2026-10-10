@@ -4,7 +4,7 @@ Most agent frameworks need no adapter. They read a base-URL variable, and `gener
 every one in common use at once:
 
 ```console
-orca record generic-openai -- python your_agent.py
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
 Each section below is one command, one measured result, and the one thing about that framework
@@ -16,12 +16,12 @@ runs in CI — so a claim on this page fails a build rather than ageing quietly.
 ## LangGraph and LangChain
 
 ```console
-orca record generic-openai -- python your_graph.py
-orca replay last
+agenticreplay record generic-openai -- python your_graph.py
+agenticreplay replay last
 ```
 
 **Measured:** a two-node graph, streaming and with a bound tool. Recorded 2 exchanges, replayed
-with the origin down at `exact=2 divergences=0 unmatched=0`, and forked live from checkpoint 1 onto
+with the origin down at `canonical_exact=2 divergences=0 unmatched=0`, and forked live from checkpoint 1 onto
 a different model.
 
 ### What replay proves here, and what it does not
@@ -33,14 +33,14 @@ LangGraph has its own time travel, and the two answer different questions. From 
 
 That makes the *workflow* deterministic. The model stays probabilistic.
 
-`orca replay` serves the recorded responses back with the network off, so the conversation is
+`agenticreplay replay` serves the recorded responses back with the network off, so the conversation is
 byte-identical:
 
 | | asks the model again? | answers |
 |---|---|---|
 | LangGraph time travel | yes | "if I re-run from step 4, what happens?" |
-| `orca replay` | **no** | "does the recorded run still reproduce today?" |
-| `orca replay --from 4 --model X` | yes | "same prefix, different model — who is right?" |
+| `agenticreplay replay` | **no** | "does the recorded run still reproduce today?" |
+| `agenticreplay replay --from 4 --model X` | yes | "same prefix, different model — who is right?" |
 
 The third row is the one that corresponds to time travel, and it is the one that costs tokens.
 
@@ -53,7 +53,7 @@ several ports read only that one.
 
 **Setting a base URL changes a LangChain default.** It leaves `stream_usage` off, because many
 non-OpenAI endpoints do not report streaming token counts. That is LangChain's behaviour, not
-orca's, but a recorded run will differ from an unrecorded one in exactly that field.
+agenticreplay's, but a recorded run will differ from an unrecorded one in exactly that field.
 
 **Checkpointer state is not in the trace.** An `InMemorySaver` thread id never reaches the wire, so
 a replay rebuilds it by re-running the graph. A database-backed checkpointer is a different matter
@@ -65,10 +65,10 @@ Everything above is about the traffic. The *graph* — which node ran, in which 
 ended — is not on the wire at all, and one package puts it in the trace:
 
 ```console
-pip install orcareplay-langgraph
+pip install agenticreplay-langgraph
 ```
 
-No code change: `orca record` attaches it to a graph you have not edited, the same way it attaches
+No code change: `agenticreplay record` attaches it to a graph you have not edited, the same way it attaches
 the fetch hook and the shell shim. Measured on `plan → validate → answer` against a stub origin:
 
 ```
@@ -91,9 +91,9 @@ Two records per node and nothing else: `node`, `step`, the run ids that pair the
 and `error`. No state, no inputs, no outputs, and no exception message. The model exchanges stay
 with the proxy, which already has them byte for byte.
 
-**One caveat, and it is orca's rather than the package's.** A node record carries the instant the
+**One caveat, and it is agenticreplay's rather than the package's.** A node record carries the instant the
 callback fired, measured exact against the agent's own clock. A `model.request` is stamped when
-orca persists it — after the response and after a workspace snapshot, measured 95 ms late on one
+agenticreplay persists it — after the response and after a workspace snapshot, measured 95 ms late on one
 call and 31 ms on the next. So the node boundaries are trustworthy, and a model call within about a
 tenth of a second of one can sit on the wrong side of it.
 
@@ -106,10 +106,10 @@ runnable, a conditional edge and the graph itself — which is the whole design,
 ## CrewAI
 
 ```console
-orca record generic-openai -- python your_crew.py
+agenticreplay record generic-openai -- python your_crew.py
 ```
 
-**Measured:** a real `Agent`, `Task` and `Crew` recorded and replayed at `exact=1 divergences=0`,
+**Measured:** a real `Agent`, `Task` and `Crew` recorded and replayed at `canonical_exact=1 divergences=0`,
 against CrewAI 1.15.20.
 
 CrewAI was listed with Aider and OpenHands here, on the grounds that all three route through
@@ -138,7 +138,7 @@ LiteLLM by default (`crewai[litellm]` adds it). So the same line resolves on one
 `ImportError: ... and the LiteLLM fallback package is not installed` on another. **Use the bare form
 for a gateway's own model names** and the question does not arise.
 
-When it does raise, it raises while the `LLM` is being built — before any request — so orca records
+When it does raise, it raises while the `LLM` is being built — before any request — so agenticreplay records
 three events and reports `capture.empty`, which is accurate and easy to misread as a capture problem.
 
 > This paragraph has been wrong twice. First it said a prefixed name never resolves on 1.x, from a
@@ -151,7 +151,7 @@ three events and reports `capture.empty`, which is accurate and easy to misread 
 **`LLM(base_url=…)` is now honoured.** It used not to be: passing the origin in code did nothing,
 because it never reached LiteLLM's `api_base`. Measured again on 1.15.20 against a listener with the
 environment cleared — the listener was hit. Going through the environment is still the better route,
-because it is the one `orca record` sets up and it needs no edit to your code, but the old warning
+because it is the one `agenticreplay record` sets up and it needs no edit to your code, but the old warning
 no longer applies.
 
 ---
@@ -159,7 +159,7 @@ no longer applies.
 ## LlamaIndex
 
 ```console
-orca record generic-openai -- python your_agent.py
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
 The one framework here that does **not** read `OPENAI_BASE_URL`. Measured, both ways:
@@ -170,16 +170,16 @@ The one framework here that does **not** read `OPENAI_BASE_URL`. Measured, both 
 | `OPENAI_API_BASE` | the value you set — honoured |
 
 `generic-openai` sets both, which is why this works without you doing anything. It is worth knowing
-because it is also why `orca record exec` does not: that adapter redirects nothing on purpose.
+because it is also why `agenticreplay record exec` does not: that adapter redirects nothing on purpose.
 
-**Measured:** recorded and replayed at `exact=1 divergences=0`.
+**Measured:** recorded and replayed at `canonical_exact=1 divergences=0`.
 
 ### The model name has to be one LlamaIndex knows
 
 `OpenAI(model=…)` is validated against a list compiled into `llama_index.llms.openai.utils`, and
 anything outside it raises `ValueError: Unknown model '…'`. There is no `context_window` argument to
 supply instead. So the usual gateway case — a model name the vendor never published, a local model,
-an internal router — does not work, and no orca setting changes that, because nothing has reached
+an internal router — does not work, and no agenticreplay setting changes that, because nothing has reached
 the wire when it fails.
 
 Where it raises is worth knowing too: **not** in the constructor. `OpenAI(model='my-gateway-model')`
@@ -195,12 +195,12 @@ wrong until it is rewritten.
 ## Haystack
 
 ```console
-orca record generic-openai -- python your_pipeline.py
-orca replay last
+agenticreplay record generic-openai -- python your_pipeline.py
+agenticreplay replay last
 ```
 
 **Measured:** a `Pipeline` with `ChatPromptBuilder` and `OpenAIChatGenerator` on haystack-ai
-**3.1.1**. Recorded 1 exchange, replayed with the origin down at `exact=1 divergences=0
+**3.1.1**. Recorded 1 exchange, replayed with the origin down at `canonical_exact=1 divergences=0
 unmatched=0`.
 
 **Embeddings replay too, and that is the answer to the obvious next question.** A second check runs
@@ -208,7 +208,7 @@ the ordinary RAG shape — `OpenAIDocumentEmbedder` to build the store, `OpenAIT
 query, `InMemoryEmbeddingRetriever`, then the generator. Both embedder components reach the proxy
 the same way the generator does, and both are recorded as *retrieval* calls, whose answers are a
 function of their requests and so are replayed by key rather than by the matching ladder. Measured:
-`exact=1 divergences=0 unmatched=0 retrieval=2/2` with the origin down. A Haystack pipeline that
+`canonical_exact=1 divergences=0 unmatched=0 retrieval=2/2` with the origin down. A Haystack pipeline that
 embeds at query time replays completely offline.
 
 **Nothing is passed to the generator, and that is the case that matters.** `OpenAIChatGenerator`
@@ -219,7 +219,7 @@ client as `base_url`, so `None` means the OpenAI SDK falls back to `OPENAI_BASE_
 `generic-openai` sets.
 
 A pipeline whose generator *is* given an explicit `api_base_url` is the compiled-in-origin case,
-and the answer there is the same as for Mastra and the Vercel AI SDK: orca cannot redirect what the
+and the answer there is the same as for Mastra and the Vercel AI SDK: agenticreplay cannot redirect what the
 code hardcodes. Leave it unset, or point it at the proxy yourself.
 
 **The API moved in 3.x.** `OpenAIGenerator` is gone from `haystack.components.generators`; the chat
@@ -232,34 +232,34 @@ about capture.
 ## Aider
 
 ```console
-orca record generic-openai -- python your_agent.py
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
 Routes through **LiteLLM**, which reads `OPENAI_API_BASE`. That is the layer the check exercises,
 and anything else built on LiteLLM comes with it.
 
-**Measured:** `litellm.completion()` recorded and replayed at `exact=1 divergences=0`.
+**Measured:** `litellm.completion()` recorded and replayed at `canonical_exact=1 divergences=0`.
 
 ---
 
 ## OpenHands
 
 ```console
-orca record generic-openai -- python your_agent.py
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
 The OpenHands SDK wraps LiteLLM in its own `LLM` model — retries, usage tracking, a telemetry
 layer — and reads the origin from `OPENAI_API_BASE` like everything else on that transport.
 
-**Measured:** the SDK's `llm.completion()` recorded and replayed at `exact=1 divergences=0`,
+**Measured:** the SDK's `llm.completion()` recorded and replayed at `canonical_exact=1 divergences=0`,
 against OpenHands 1.11.0.
 
 The check calls `completion()` once and builds no `Conversation` and no workspace. That is
-deliberate: a task loop would be testing OpenHands rather than testing whether orca can see it,
+deliberate: a task loop would be testing OpenHands rather than testing whether agenticreplay can see it,
 and it would need a container runtime the check deliberately does not depend on.
 
 Pass the origin through the environment rather than `LLM(base_url=…)` in code. Both work here, but
-the environment is the route `orca record` sets up and it needs no edit to your own code.
+the environment is the route `agenticreplay record` sets up and it needs no edit to your own code.
 
 ### A whole session, not in CI
 
@@ -275,28 +275,28 @@ An `Agent` with `get_default_tools()` and a `LocalWorkspace`, told to fix a fail
 
 Two things that session showed which the single-call check cannot:
 
-- **Shell exit codes are not captured.** OpenHands resolves its shell without going through orca's
+- **Shell exit codes are not captured.** OpenHands resolves its shell without going through agenticreplay's
   PATH shim, so `terminal` calls carry their output but not the real exit code, duration or
   stdout/stderr split. The run says so (`warn shell.ineffective`). Same as goose.
 - **Replay is `minor`-divergent rather than exact**, by 36–44 characters per request. OpenHands
   puts absolute paths and a session id in the prompt, and both move between runs. It still matched
-  every exchange; it is not `exact=` the way a single call is, and claiming otherwise would be
+  every exchange; it is not `canonical_exact=` the way a single call is, and claiming otherwise would be
   wrong.
 
 **Not verified:** OpenHands run as the packaged product, in its container runtime. Recording works
 by wrapping a process on the host, and that does not cross a container boundary — the same limit
-the [Dockerfile](../Dockerfile) documents for orca's own image.
+the [Dockerfile](../Dockerfile) documents for agenticreplay's own image.
 
 ---
 
 ## OpenAI Agents SDK
 
 ```console
-pip install orcareplay-openai-agents
-orca record generic-openai -- python your_agent.py
+pip install agenticreplay-openai-agents
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
-**The integration is a `TracingProcessor`.** `orcareplay-openai-agents` implements the SDK's own
+**The integration is a `TracingProcessor`.** `agenticreplay-openai-agents` implements the SDK's own
 [tracing processor interface](https://openai.github.io/openai-agents-python/ref/tracing/processor_interface/)
 — `on_trace_start`, `on_trace_end`, `on_span_start`, `on_span_end`, `shutdown`, `force_flush` — and
 registers through `set_trace_processors()`, or `add_trace_processor()` when you ask to keep the
@@ -308,9 +308,9 @@ It exports **bounded, metadata-only** spans: `name`/`handoffs`/`tools`/`output_t
 prompts, model output, tool arguments, tool results and span errors are excluded by an allow-list,
 so a field a future SDK version adds stays out without a code change.
 
-Nothing to add to your agent: `orca record` writes a `sitecustomize.py` into the run directory and
+Nothing to add to your agent: `agenticreplay record` writes a `sitecustomize.py` into the run directory and
 puts it on `PYTHONPATH`, the same trick as the Node adapter's `NODE_OPTIONS` preload, and the
-package is inert unless orca is recording. `--no-agent-spans` turns it off. See
+package is inert unless agenticreplay is recording. `--no-agent-spans` turns it off. See
 [`python-openai-agents`](../python-openai-agents/README.md).
 
 The model traffic is recorded separately and needs none of the above — the default provider reads
@@ -318,7 +318,7 @@ The model traffic is recorded separately and needs none of the above — the def
 alone.
 
 **Measured:** the SDK itself — an `Agent` run through `Runner` — recorded and replayed at
-`exact=1 divergences=0`. Against openai-agents 0.20.0 in CI, and verified on 0.22.2 from a clean
+`canonical_exact=1 divergences=0`. Against openai-agents 0.20.0 in CI, and verified on 0.22.2 from a clean
 `pip install` of the published package.
 
 The check runs the SDK on the **Responses API**, which is what it reaches for unless told otherwise:
@@ -328,12 +328,12 @@ on a wire format the SDK does not use by default. Both are covered now; only one
 path an Agents SDK user takes.
 
 **Tracing is a second egress.** The SDK ships its own traces to OpenAI. They are not model traffic
-and orca does not capture them; `set_tracing_disabled(True)` turns them off if you would rather the
+and agenticreplay does not capture them; `set_tracing_disabled(True)` turns them off if you would rather the
 run talked to nothing but the proxy.
 
 ### Agents, handoffs and guardrails
 
-`orca record` sees `POST /v1/responses` and cannot tell which agent sent it. Measured on a two-agent
+`agenticreplay record` sees `POST /v1/responses` and cannot tell which agent sent it. Measured on a two-agent
 run with a handoff and a guardrail, recorded twice:
 
 | the trace can answer | without | with |
@@ -348,7 +348,7 @@ from the name, but a user tool may be called that too, and the agent it came **f
 the wire. A passing guardrail is plainer still: it need make no request at all.
 
 ```console
-$ orca events --json last \
+$ agenticreplay events --json last \
     | jq -r '.[] | select(.type|startswith("agent.")) | "\(.type) \(.attrs|del(.started_at))"'
 agent.guardrail {"name":"not_empty","triggered":false}
 agent.handoff {"from":"Triage","to":"Billing Specialist"}
@@ -364,7 +364,7 @@ Without the package the run still records, and records less: the same agent, the
 15 events with it and 11 without.
 
 **The websocket transport is not captured.** With the Responses websocket transport enabled the SDK
-reads `OPENAI_WEBSOCKET_BASE_URL`, and orca's proxy speaks HTTP. Under `--tls-intercept` an upgrade
+reads `OPENAI_WEBSOCKET_BASE_URL`, and agenticreplay's proxy speaks HTTP. Under `--tls-intercept` an upgrade
 inside an intercepted connection is refused with `501` rather than half-relayed, so it fails loudly;
 outside it, the connection is tunnelled and works but is not recorded.
 
@@ -373,13 +373,13 @@ outside it, the connection is tunnelled and works but is not recorded.
 ## browser-use
 
 ```console
-orca record generic-openai -- python your_task.py
+agenticreplay record generic-openai -- python your_task.py
 ```
 
 `ChatOpenAI` declares `base_url: str | httpx.URL | None = None` and passes it through, so an unset
 value falls to the SDK's own `OPENAI_BASE_URL`.
 
-**Measured:** recorded and replayed at `exact=1 divergences=0`, LLM layer only — the checks do not
+**Measured:** recorded and replayed at `canonical_exact=1 divergences=0`, LLM layer only — the checks do not
 drive a browser.
 
 `ChatBrowserUse` is a different matter: it is browser-use's own hosted model, and its origin is not
@@ -390,23 +390,23 @@ an environment variable. That route needs `--tls-intercept` and the host named e
 ## Vercel AI SDK, and anything with its origin compiled in
 
 ```console
-orca record generic-openai -- node your_app.mjs
+agenticreplay record generic-openai -- node your_app.mjs
 ```
 
 Since `@ai-sdk/openai` 2.0.41, `createOpenAI({ apiKey })` and the bare
 `openai` provider honour `OPENAI_BASE_URL`; an explicit `baseURL` argument still wins. Prefer
-`orca record generic-openai --` for that case.
+`agenticreplay record generic-openai --` for that case.
 
 When the origin is compiled into source (or the client truly ignores the environment), the
 `node` adapter installs a preload through `NODE_OPTIONS` that redirects at `globalThis.fetch` —
 the one place every JS client agrees on:
 
 ```console
-orca record node -- node your_app.mjs
+agenticreplay record node -- node your_app.mjs
 ```
 
 **Measured:** `createOpenAI({ apiKey })` under `generic-openai` (no preload) records and
-replays at `exact=1 divergences=0`. An agent posting to a hardcoded
+replays at `canonical_exact=1 divergences=0`. An agent posting to a hardcoded
 `https://api.openai.com/v1/chat/completions` does the same via the node preload.
 
 ---
@@ -414,20 +414,20 @@ replays at `exact=1 divergences=0`. An agent posting to a hardcoded
 ## Mastra
 
 ```console
-orca record generic-openai -- node your_agent.mjs
+agenticreplay record generic-openai -- node your_agent.mjs
 ```
 
 Mastra takes its model from `@ai-sdk/openai`, so it inherits that provider's behaviour: with no
 explicit `baseURL`, it reads `OPENAI_BASE_URL` (since `@ai-sdk/openai` 2.0.41). Prefer
-`orca record generic-openai --` for that route.
+`agenticreplay record generic-openai --` for that route.
 
 If the origin is compiled in, use the `node` adapter's fetch preload instead:
 
 ```console
-orca record node -- node your_agent.mjs
+agenticreplay record node -- node your_agent.mjs
 ```
 
-**Measured:** an `Agent` calling `generate()`, recorded and replayed at `exact=1 divergences=0` with
+**Measured:** an `Agent` calling `generate()`, recorded and replayed at `canonical_exact=1 divergences=0` with
 the origin stopped.
 
 Worth having as its own check rather than leaning on the Vercel AI SDK one above: a preload that
@@ -439,13 +439,13 @@ that is not something to find out from a user.
 ## Anthropic-backed agents
 
 ```console
-orca record generic-openai -- python your_agent.py
+agenticreplay record generic-openai -- python your_agent.py
 ```
 
 `ANTHROPIC_BASE_URL` is set alongside the OpenAI pair, so an agent using the Anthropic SDK directly
-needs nothing extra. Claude Code has its own adapter — `orca record claude`.
+needs nothing extra. Claude Code has its own adapter — `agenticreplay record claude`.
 
-**Measured:** the Anthropic SDK reaching `/v1/messages`, recorded and replayed at `exact=1
+**Measured:** the Anthropic SDK reaching `/v1/messages`, recorded and replayed at `canonical_exact=1
 divergences=0`.
 
 ---
@@ -462,7 +462,7 @@ project, and a second RAG adapter should be able to declare two things and stop.
 | **L0 — matching** | under concurrency, does each request get *its own* answer back? | `packages/proxy/src/matching.ts` |
 | **L1 — the adapter** | start the pipeline, take over **two** model origins | `packages/adapters/src/indexrag.ts` |
 | **L2 — retrieval** | replay embeddings and rerank, which no dialect claims | `packages/proxy/src/retrieval.ts` |
-| **L3 — state** | capture the index, and reset to the recording's starting point | `fs-capture`, `orca replay` |
+| **L3 — state** | capture the index, and reset to the recording's starting point | `fs-capture`, `agenticreplay replay` |
 
 ### L0 — the answer has to be the right one
 
@@ -481,20 +481,20 @@ Two changes fix it, and both are about *ordering* rather than about adding a gua
 
 A consequence worth knowing: requests answered from a position other than the cursor are reported
 as `reordered=N`, not as divergences. A worker pool reorders; that is not an approximation, and
-calling it one made `exact=N/N` unreachable for any concurrent run.
+calling it one made `canonical_exact=N/N` unreachable for any concurrent run.
 
 ### L1 — two model origins in one run
 
-Chat goes to a gateway; embeddings go to a dedicated provider or a local Ollama. Orca's upstream
+Chat goes to a gateway; embeddings go to a dedicated provider or a local Ollama. AgenticReplay's upstream
 map is keyed by *wire dialect*, so `--upstream-openai` cannot express "the same dialect at two
 origins". The second origin is redirected through `/forward/<encoded base>` instead, so the
 request carries its own destination and nothing has to be guessed:
 
 ```console
-ORCA_BASE_URL_VARS=MY_EMBEDDING_BASE_URL orca record generic-openai -- python build_index.py
+AGENTICREPLAY_BASE_URL_VARS=MY_EMBEDDING_BASE_URL agenticreplay record generic-openai -- python build_index.py
 ```
 
-`orca record indexrag` does this for you, reading `INDEXRAG_EMBEDDING_BASE_URL` from the
+`agenticreplay record indexrag` does this for you, reading `INDEXRAG_EMBEDDING_BASE_URL` from the
 environment or from the project's own `.env` — which is where IndexRAG documents it, and which an
 adapter that only read the environment would have missed, silently recording none of that half.
 
@@ -513,13 +513,13 @@ conversation they are not part of.
 
 They are never forkable, and the type says so rather than a comment: changing the embedding model
 changes the vector space the index was built in. That is a rebuild, not a fork — and it is exactly
-why keeping retrieval on the recording is what makes `orca replay <run> --from N --model <other>`
+why keeping retrieval on the recording is what makes `agenticreplay replay <run> --from N --model <other>`
 useful. The chat model changes; the index does not.
 
 Two numbers, deliberately on separate axes:
 
 ```
-info replay.done reused=11/11 exact=11 divergences=0 unmatched=0 reordered=6 retrieval=3/3 exit=0
+info replay.done reused=11/11 canonical_exact=11 divergences=0 unmatched=0 reordered=6 retrieval=3/3 exit=0
 ```
 
 `exact` is about a matching ladder these calls never climb. Folding them in would make a recording
@@ -533,13 +533,13 @@ recorded answer for each text is handed back against that text's new position. T
 approximation; anything short of an exact permutation halts instead.
 
 **Size.** Six paragraphs at 768 dimensions is 98 KB of JSON floats, and an index build makes
-thousands of those calls. `orca record --retrieval-store=digest` keeps a sha256 of each response
+thousands of those calls. `agenticreplay record --retrieval-store=digest` keeps a sha256 of each response
 instead of the response: enough to prove a later run agreed, not enough to replay it.
 
 **What is not here.** `top-k` and retrieval **scores** are not on the wire. A prompt carries the
 passages that survived truncation, in the order they were pasted, with no numbers attached — so
-orca does not report a count as though it were `top-k`, which would be a measurement nobody made.
-Getting those needs an instrument inside the Python process; orca has a JS one
+agenticreplay does not report a count as though it were `top-k`, which would be a measurement nobody made.
+Getting those needs an instrument inside the Python process; agenticreplay has a JS one
 (`packages/node-instrument`) and no Python equivalent. That is separate work.
 
 What *is* derivable is the evidence itself. A `Context: … Question: …` prompt yields a
@@ -556,7 +556,7 @@ Two failures, both silent:
 - **A replay reproduces nothing.** Run the pipeline again over a finished cache and it skips every
   item and asks nothing: `reused=0/6`, `exit=0`, over a recording that was perfectly good.
 
-An adapter declares both, and orca does the rest:
+An adapter declares both, and agenticreplay does the rest:
 
 ```ts
 artifacts: {
@@ -570,10 +570,10 @@ artifacts: {
 sensitive pathspecs are applied to it too, so an adapter declaring `.` still captures no `.env`.
 `resetBeforeReplay` deletes whole paths rather than "the invalid parts" — IndexRAG's resume skips
 by `chunk_id` including entries it recorded as *failures*, so keeping what looks valid promotes
-the last run's failures to completed work. Orca deletes only where it restores afterwards; with
+the last run's failures to completed work. AgenticReplay deletes only where it restores afterwards; with
 `--in-place` it says so and leaves them alone.
 
-`concurrencyFlag` is declared and never applied on its own. `orca replay <run> --serialize` is
+`concurrencyFlag` is declared and never applied on its own. `agenticreplay replay <run> --serialize` is
 what reaches for it, because clamping concurrency changes the run being replayed — useful for
 answering "is this a concurrency problem?", wrong as a default.
 
@@ -600,23 +600,23 @@ for FAISS — and a remote service is not a file. Point the pipeline at a local 
 
 ## When none of this works
 
-**The trace comes back empty.** `orca record` says so rather than exiting quietly:
+**The trace comes back empty.** `agenticreplay record` says so rather than exiting quietly:
 
 ```
 warn capture.empty exchanges=0 cause="the agent never called the proxy — it may not read a
-  base-URL variable" set=ANTHROPIC_BASE_URL,OPENAI_API_BASE,OPENAI_BASE_URL next="orca doctor"
+  base-URL variable" set=ANTHROPIC_BASE_URL,OPENAI_API_BASE,OPENAI_BASE_URL next="agenticreplay doctor"
 ```
 
 Three things it usually means, in order of likelihood:
 
-1. **The framework reads a variable orca does not set.** Name it:
-   `ORCA_BASE_URL_VARS=MY_LLM_ENDPOINT orca record generic-openai -- …`
+1. **The framework reads a variable agenticreplay does not set.** Name it:
+   `AGENTICREPLAY_BASE_URL_VARS=MY_LLM_ENDPOINT agenticreplay record generic-openai -- …`
 2. **The origin is in a config file, not the environment.** OpenCode and its forks are like this.
-   Interception is the route: `orca record exec --tls-intercept -- your-agent`.
-3. **The origin is compiled in.** For a JS agent, `orca record node -- node app.mjs`. For anything
+   Interception is the route: `agenticreplay record exec --tls-intercept -- your-agent`.
+3. **The origin is compiled in.** For a JS agent, `agenticreplay record node -- node app.mjs`. For anything
    else, `--tls-intercept` with the host named.
 
-**A gateway on plain HTTP is captured by neither route.** orca sets `HTTPS_PROXY` and not
+**A gateway on plain HTTP is captured by neither route.** agenticreplay sets `HTTPS_PROXY` and not
 `HTTP_PROXY`, so plaintext upstream traffic is neither redirected nor decrypted.
 
 ---

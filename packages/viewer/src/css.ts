@@ -118,7 +118,7 @@ input, button, .pane-title, .sub, footer, .finding {
 }
 .stat dd { margin: 0; font-size: .75rem; color: var(--band-fg); font-variant-numeric: tabular-nums; }
 .stat dd.flag { font-weight: 700; }
-#orca-theme {
+#agenticreplay-theme {
   background: transparent;
   border: 1px solid var(--band-rule);
   border-radius: 2px;
@@ -129,7 +129,7 @@ input, button, .pane-title, .sub, footer, .finding {
   padding: .15rem .4rem;
   cursor: pointer;
 }
-#orca-theme:hover { color: var(--band-fg); border-color: var(--band-dim); }
+#agenticreplay-theme:hover { color: var(--band-fg); border-color: var(--band-dim); }
 
 /* ---- findings strip ---- */
 .findings { flex: none; border-bottom: 1px solid var(--rule); background: var(--sunk); }
@@ -174,7 +174,7 @@ input, button, .pane-title, .sub, footer, .finding {
   padding: .45rem .75rem;
   border-bottom: 1px solid var(--rule);
 }
-#orca-filter {
+#agenticreplay-filter {
   flex: 1;
   min-width: 0;
   background: var(--sunk);
@@ -184,8 +184,8 @@ input, button, .pane-title, .sub, footer, .finding {
   font-size: .75rem;
   padding: .25rem .4rem;
 }
-#orca-filter::placeholder { color: var(--ink-3); }
-#orca-count { font-size: .625rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+#agenticreplay-filter::placeholder { color: var(--ink-3); }
+#agenticreplay-count { font-size: .625rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 
 .rows { flex: 1; min-height: 0; overflow: auto; }
 .row {
@@ -249,6 +249,7 @@ input, button, .pane-title, .sub, footer, .finding {
 .kv dt { margin: 0; font-size: .625rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .kv dd { margin: 0; font-size: .75rem; overflow-wrap: anywhere; }
 .muted { color: var(--ink-3); font-size: .75rem; }
+.download { display: inline-block; margin-top: .45rem; color: var(--band-fg); font-size: .75rem; }
 .scroll { overflow-x: auto; margin: 0; }
 pre {
   margin: 0;
@@ -318,7 +319,7 @@ footer {
   transition: transform 160ms linear;
 }
 
-#orca-play .glyph {
+#agenticreplay-play .glyph {
   display: block;
   width: 0;
   height: 0;
@@ -328,7 +329,7 @@ footer {
   border-color: transparent transparent transparent currentColor;
   transition: border-width 120ms ease, border-color 120ms ease;
 }
-#orca-play[aria-pressed='true'] .glyph {
+#agenticreplay-play[aria-pressed='true'] .glyph {
   border-width: 5px 0 5px 8px;
   border-color: transparent transparent transparent currentColor;
   border-left-style: double;
@@ -337,16 +338,16 @@ footer {
 
 /* Direction of travel: forward enters from below, backward from above. Tells you which way you
    moved without a label, which matters when playback is stepping for you. */
-@keyframes orca-enter-down {
+@keyframes agenticreplay-enter-down {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes orca-enter-up {
+@keyframes agenticreplay-enter-up {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.pane[data-dir='down'] { animation: orca-enter-down 130ms cubic-bezier(0.2, 0, 0, 1); }
-.pane[data-dir='up'] { animation: orca-enter-up 130ms cubic-bezier(0.2, 0, 0, 1); }
+.pane[data-dir='down'] { animation: agenticreplay-enter-down 130ms cubic-bezier(0.2, 0, 0, 1); }
+.pane[data-dir='up'] { animation: agenticreplay-enter-up 130ms cubic-bezier(0.2, 0, 0, 1); }
 
 /* A row that needs attention is a band: the ground and the ink trade places. Keyed on data-tone,
    which is what the row *is*, rather than on data-pulse, which only says playback happened to land
@@ -392,10 +393,10 @@ footer {
   background: var(--ink);
   opacity: 0;
   pointer-events: none;
-  animation: orca-attention 420ms ease-out;
+  animation: agenticreplay-attention 420ms ease-out;
 }
 .row[data-tone='attention'][data-pulse='true']::after { background: var(--ground); }
-@keyframes orca-attention {
+@keyframes agenticreplay-attention {
   from { opacity: 0.14; }
   to { opacity: 0; }
 }

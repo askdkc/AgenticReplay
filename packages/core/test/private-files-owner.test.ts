@@ -46,7 +46,7 @@ describe.runIf(process.platform === 'win32')('private file ownership', () => {
   it.each(['S-1-5-21-111-222-333-444', '', 'not a SID'])(
     'refuses owner %j before changing permissions',
     async (owner) => {
-      dir = await mkdtemp(join(tmpdir(), 'orca-owner-test-'));
+      dir = await mkdtemp(join(tmpdir(), 'agenticreplay-owner-test-'));
       const file = join(dir, 'secret');
       await writeFile(file, 'previous contents');
       probe.owner = owner;
@@ -67,7 +67,7 @@ describe.runIf(process.platform === 'win32')('private file ownership', () => {
     );
     probe.sid = /S-1-[\d-]+/.exec(stdout)![0];
     probe.owner = `${probe.sid}\nD:(A;;FA;;;LA)`;
-    dir = await mkdtemp(join(tmpdir(), 'orca-owner-alias-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-owner-alias-'));
     const file = join(dir, 'secret');
     await writeFile(file, 'previous contents');
     await expect(restrictToOwner(file, 0o600)).resolves.toBeUndefined();

@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { applyNamedBaseUrls, passKey, passThrough, proxyBase } from './env.js';
 
 /**
@@ -17,7 +17,7 @@ export const genericOpenAiAdapter: Adapter = {
     const [command, ...args] = ctx.userArgs;
     if (command === undefined || command === '') {
       throw new Error(
-        'generic-openai needs the command to run: orca record generic-openai -- <command> [args...]',
+        'generic-openai needs the command to run: agenticreplay record generic-openai -- <command> [args...]',
       );
     }
     const env: Record<string, string> = {

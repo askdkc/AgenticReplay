@@ -12,7 +12,7 @@ Real-shaped traces, checked into the repo on purpose. They do four jobs at once:
 
 **These are hand-written**, and that is the point of job 1 and job 3 — a fixture our own writer
 produced could not demonstrate that someone else's implementation is possible. Treat them as what
-the format allows, not as a transcript of what `orca record` produces today.
+the format allows, not as a transcript of what `agenticreplay record` produces today.
 
 That licence has one limit, and this fixture used to break it: it carried a recorded `checkpoint`
 event. Spec §3 says a checkpoint is *derived* at read time and never recorded, so shipping one
@@ -30,7 +30,7 @@ turns without changing the tree, which the `note` event at seq 24 flags as a loo
 
 The interesting part is seq 13: the `fs.snapshot` after that first edit. Everything up to it is
 identical no matter which model you hand the rest of the run to, which is what makes
-`orca replay --from 13 --model <other>` a controlled experiment rather than an anecdote — and a
+`agenticreplay replay --from 13 --model <other>` a controlled experiment rather than an anecdote — and a
 checkpoint is exactly that snapshot plus a complete conversation prefix, worked out by the reader
 rather than written down by the recorder.
 
@@ -47,4 +47,4 @@ jq 'select(.type == "error")' events.jsonl
 jq -s 'map(.attrs.input_tokens // 0) | add' events.jsonl
 ```
 
-That those questions are answerable without any OrcaReplay code is the point of the format.
+That those questions are answerable without any AgenticReplay code is the point of the format.

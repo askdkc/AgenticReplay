@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@orcareplay/core';
-import { validateManifest } from '@orcareplay/schema';
+import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@agenticreplay/core';
+import { validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -17,7 +17,7 @@ const FAKE_AGENT = join(import.meta.dirname, 'fixtures', 'fake-agent.mjs');
 
 /**
  * The spec gives the manifest `parent_run`, `fork_point` and `fork_model`, and they were dead:
- * fork provenance existed only as an event attribute. Anything reading a fork's manifest — `orca
+ * fork provenance existed only as an event attribute. Anything reading a fork's manifest — `agenticreplay
  * gc` deciding what it may delete, a third-party tool, the Python SDK — saw an orphan.
  */
 describe('fork provenance in the manifest', () => {
@@ -26,7 +26,7 @@ describe('fork provenance in the manifest', () => {
   let out: Output;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-prov-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-prov-'));
     model = await startFakeModel();
     out = new Output({ write: () => {}, isTTY: false });
     await run('git', ['init', '-q'], { cwd: workspace });
@@ -146,7 +146,7 @@ describe('a fork carries the same causal edges a recording does', () => {
   let out: Output;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-fork-edges-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-fork-edges-'));
     model = await startFakeModel();
     out = new Output({ write: () => {}, isTTY: false });
     await run('git', ['init', '-q'], { cwd: workspace });

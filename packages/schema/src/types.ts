@@ -13,6 +13,24 @@ export interface BlobRef {
 
 export type Payload = BlobRef | Record<string, unknown> | unknown[] | string | number | boolean;
 
+/** An intentional change between observed transport content and persisted evidence. */
+export interface CaptureTransformation {
+  kind:
+    'redaction' | 'header_excluded' | 'url_scrubbed' | 'decompression' | 'encoding' | 'omission';
+  location: string;
+  rule: string;
+  count: number;
+  reason: string;
+}
+
+export interface CaptureSummary {
+  status: 'complete' | 'incomplete' | 'unverified';
+  issues: string[];
+  body_limit_bytes?: number;
+  requests?: number;
+  responses?: number;
+}
+
 /** One line of events.jsonl. Spec §2.1. */
 export interface TraceEvent {
   seq: number;
@@ -25,6 +43,7 @@ export interface TraceEvent {
   attrs?: Record<string, unknown>;
   payload?: Payload;
   redacted?: string[];
+  transformations?: CaptureTransformation[];
 }
 
 export interface AdapterInfo {
@@ -44,7 +63,7 @@ export interface Manifest {
   run_id: string;
   created_at: string;
   ended_at?: string;
-  orca_version: string;
+  agenticreplay_version: string;
   adapter: AdapterInfo;
   argv: string[];
   cwd: string;
@@ -58,6 +77,7 @@ export interface Manifest {
   fork_point?: number;
   fork_model?: string;
   exit_code?: number;
+  capture?: CaptureSummary;
   integrity?: { events_sha256: string; blob_count: number };
 }
 

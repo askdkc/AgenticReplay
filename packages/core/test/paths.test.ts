@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ensureRunsDir,
   listRuns,
-  orcaDir,
+  agenticreplayDir,
   resolveRunSelector,
   runDirFor,
   runsDir,
@@ -17,7 +17,7 @@ import { TraceWriter } from '../src/writer.js';
 let cwd: string;
 
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), 'orca-paths-'));
+  cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-paths-'));
 });
 
 afterEach(async () => {
@@ -42,7 +42,7 @@ describe('"last" after a replay', () => {
    * trace — which holds divergences and nothing else: no exchanges, no blobs, no filesystem store.
    * Every command defaults to `last`, so that quietly redirected all of them.
    *
-   * The sharpest case is `orca scrub last --match my-hostname`, which is the line in the README:
+   * The sharpest case is `agenticreplay scrub last --match my-hostname`, which is the line in the README:
    * it scrubbed the empty trace, found nothing, and printed "nothing matched — the trace is
    * unchanged". A security tool telling you a trace is clean while the secret sits in the
    * recording next to it.
@@ -51,11 +51,11 @@ describe('"last" after a replay', () => {
    * trace is a report about another run, so `last` skips it.
    */
   async function writeRun(dir: string, opts: { parentRun?: string; forkPoint?: number } = {}) {
-    const writer = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
       ...(opts.parentRun === undefined ? {} : { parentRun: opts.parentRun }),
       ...(opts.forkPoint === undefined ? {} : { forkPoint: opts.forkPoint }),
     });
@@ -66,7 +66,7 @@ describe('"last" after a replay', () => {
   }
 
   it('skips a replay trace and resolves the recording it describes', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-last-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-last-'));
     try {
       const recording = await writeRun(dir);
       const replay = await writeRun(dir, { parentRun: recording });
@@ -81,7 +81,7 @@ describe('"last" after a replay', () => {
   });
 
   it('still resolves a fork, which is a run you act on', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-last-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-last-'));
     try {
       const recording = await writeRun(dir);
       const fork = await writeRun(dir, { parentRun: recording, forkPoint: 4 });
@@ -92,7 +92,7 @@ describe('"last" after a replay', () => {
   });
 
   it('falls back to a replay trace rather than failing when it is all there is', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-last-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-last-'));
     try {
       const only = await writeRun(dir, { parentRun: 'run_000000000000' });
       expect((await resolveRunSelector(dir, 'last')).runId).toBe(only);
@@ -104,9 +104,9 @@ describe('"last" after a replay', () => {
 
 describe('ensureRunsDir on a store that already exists', () => {
   /**
-   * The Windows ACL was applied only when this call created `.orca/runs`, and `mkdir` returns
+   * The Windows ACL was applied only when this call created `.agenticreplay/runs`, and `mkdir` returns
    * undefined for a directory that already exists — so a store skipped once was skipped forever.
-   * That is every install predating the fix, and every store `orca quickstart` laid down.
+   * That is every install predating the fix, and every store `agenticreplay quickstart` laid down.
    *
    * POSIX keeps create-only semantics: there the mode is not load-bearing (every file beneath gets
    * its own 0600 from the writer) and a directory the user opened up deliberately is theirs.
@@ -114,7 +114,7 @@ describe('ensureRunsDir on a store that already exists', () => {
   it.runIf(process.platform === 'win32')(
     'restricts a directory it did not create, because an inherited ACL is nobody’s choice',
     async () => {
-      const dir = join(cwd, '.orca', 'runs');
+      const dir = join(cwd, '.agenticreplay', 'runs');
       await mkdir(dir, { recursive: true });
       const icacls = join(process.env['SystemRoot']!, 'System32', 'icacls.exe');
       const read = async (): Promise<string> => (await promisify(execFile)(icacls, [dir])).stdout;
@@ -130,7 +130,7 @@ describe('ensureRunsDir on a store that already exists', () => {
 
 describe('ensureRunsDir and the directory the store stands in', () => {
   /**
-   * The store's container, not only the store. Modify on `.orca` is enough to delete `runs` — a
+   * The store's container, not only the store. Modify on `.agenticreplay` is enough to delete `runs` — a
    * child's own DACL does not decide whether its parent may remove it — and leave a junction in
    * its place, which needs no privilege on Windows. `mkdir(…, { recursive: true })` then accepts
    * the junction as an existing directory, and `icacls` does not follow a reparse point: the
@@ -140,16 +140,16 @@ describe('ensureRunsDir and the directory the store stands in', () => {
   it.runIf(process.platform === 'win32')(
     'narrows the directory the store stands in, not only the store',
     async () => {
-      await mkdir(join(cwd, '.orca', 'runs'), { recursive: true });
+      await mkdir(join(cwd, '.agenticreplay', 'runs'), { recursive: true });
       const icacls = join(process.env['SystemRoot']!, 'System32', 'icacls.exe');
       const read = async (path: string): Promise<string> =>
         (await promisify(execFile)(icacls, [path])).stdout;
 
-      expect(await read(join(cwd, '.orca')), 'precondition').toContain('(I)');
+      expect(await read(join(cwd, '.agenticreplay')), 'precondition').toContain('(I)');
 
       await ensureRunsDir(cwd);
 
-      for (const path of [join(cwd, '.orca'), join(cwd, '.orca', 'runs')]) {
+      for (const path of [join(cwd, '.agenticreplay'), join(cwd, '.agenticreplay', 'runs')]) {
         expect(await read(path), path).not.toContain('(I)');
       }
     },
@@ -163,14 +163,14 @@ describe('ensureRunsDir and the directory the store stands in', () => {
   it.runIf(process.platform === 'win32')('refuses a store that is a link', async () => {
     const elsewhere = join(cwd, 'elsewhere');
     await mkdir(elsewhere);
-    await mkdir(join(cwd, '.orca'));
+    await mkdir(join(cwd, '.agenticreplay'));
     await promisify(execFile)('cmd.exe', [
       '/d',
       '/s',
       '/c',
       'mklink',
       '/J',
-      join(cwd, '.orca', 'runs'),
+      join(cwd, '.agenticreplay', 'runs'),
       elsewhere,
     ]);
 
@@ -197,7 +197,7 @@ describe('ensureRunsDir and the directory the store stands in', () => {
         '/c',
         'mklink',
         '/J',
-        join(cwd, '.orca'),
+        join(cwd, '.agenticreplay'),
         elsewhere,
       ]);
 
@@ -209,10 +209,10 @@ describe('ensureRunsDir and the directory the store stands in', () => {
 });
 
 describe('path helpers', () => {
-  it('puts everything under .orca', () => {
-    expect(orcaDir('/w')).toBe(join('/w', '.orca'));
-    expect(runsDir('/w')).toBe(join('/w', '.orca', 'runs'));
-    expect(runDirFor('/w', 'run_9f2c14')).toBe(join('/w', '.orca', 'runs', 'run_9f2c14'));
+  it('puts everything under .agenticreplay', () => {
+    expect(agenticreplayDir('/w')).toBe(join('/w', '.agenticreplay'));
+    expect(runsDir('/w')).toBe(join('/w', '.agenticreplay', 'runs'));
+    expect(runDirFor('/w', 'run_9f2c14')).toBe(join('/w', '.agenticreplay', 'runs', 'run_9f2c14'));
   });
 
   it('refuses a run id that does not match the spec pattern', () => {
@@ -280,13 +280,13 @@ describe('resolveRunSelector', () => {
   });
 
   it('names the command to run when the workspace has no runs', async () => {
-    await expect(resolveRunSelector(cwd, 'last')).rejects.toThrow(/orca record/);
+    await expect(resolveRunSelector(cwd, 'last')).rejects.toThrow(/agenticreplay record/);
   });
 
   it('names the missing run and how to list runs', async () => {
     await seedRun('run_aaaaaa', '2026-08-01T00:00:00.000Z');
     await expect(resolveRunSelector(cwd, 'run_beef99')).rejects.toThrow(/run_beef99/);
-    await expect(resolveRunSelector(cwd, 'run_beef99')).rejects.toThrow(/orca list/);
+    await expect(resolveRunSelector(cwd, 'run_beef99')).rejects.toThrow(/agenticreplay list/);
   });
 
   it('rejects a selector that is not a run id at all', async () => {
@@ -300,13 +300,13 @@ describe('ensureRunsDir', () => {
     // A trace is the conversation the model saw — your source — plus shell output, a snapshot of
     // the whole workspace and an environment allowlist. It was landing in `git status` as an
     // untracked directory, one `git add -A` away from being pushed, in the repo it just recorded.
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-ignore-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-ignore-'));
     try {
       const dir = await ensureRunsDir(cwd);
-      expect(dir).toBe(join(cwd, '.orca', 'runs'));
-      const ignore = await readFile(join(cwd, '.orca', '.gitignore'), 'utf8');
+      expect(dir).toBe(join(cwd, '.agenticreplay', 'runs'));
+      const ignore = await readFile(join(cwd, '.agenticreplay', '.gitignore'), 'utf8');
       // `*` is git's own idiom for a directory that excludes itself: no edit to the user's
-      // .gitignore, and it works in a repo orca has never seen before.
+      // .gitignore, and it works in a repo agenticreplay has never seen before.
       expect(ignore.split('\n')).toContain('*');
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -314,21 +314,21 @@ describe('ensureRunsDir', () => {
   });
 
   it('never rewrites one the user changed, so opting back in sticks', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-ignore-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-ignore-'));
     try {
       await ensureRunsDir(cwd);
-      // Someone who deliberately wants their traces tracked empties this. Orca must not undo that
+      // Someone who deliberately wants their traces tracked empties this. AgenticReplay must not undo that
       // on the next recording.
-      await writeFile(join(cwd, '.orca', '.gitignore'), '', { mode: 0o600 });
+      await writeFile(join(cwd, '.agenticreplay', '.gitignore'), '', { mode: 0o600 });
       await ensureRunsDir(cwd);
-      expect(await readFile(join(cwd, '.orca', '.gitignore'), 'utf8')).toBe('');
+      expect(await readFile(join(cwd, '.agenticreplay', '.gitignore'), 'utf8')).toBe('');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
   it('is safe to call repeatedly', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-ignore-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-ignore-'));
     try {
       await expect(ensureRunsDir(cwd)).resolves.toBeDefined();
       await expect(ensureRunsDir(cwd)).resolves.toBeDefined();

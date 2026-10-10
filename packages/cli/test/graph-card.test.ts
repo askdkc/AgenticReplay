@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runGraph, chainTo, type RunGraph } from '@orcareplay/core';
-import type { EventType, TraceEvent } from '@orcareplay/schema';
-import { CREDIT_MADE_BY } from '@orcareplay/viewer';
+import { runGraph, chainTo, type RunGraph } from '@agenticreplay/core';
+import type { EventType, TraceEvent } from '@agenticreplay/schema';
+import { CREDIT_MADE_BY } from '@agenticreplay/viewer';
 import { renderGraphCard, scopeForCard } from '../src/share-card.js';
 
 function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): TraceEvent {
@@ -11,7 +11,7 @@ function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): Trace
     mono_us: seq,
     turn: 1,
     type,
-    actor: 'orca',
+    actor: 'agenticreplay',
     ...over,
   };
 }
@@ -85,7 +85,7 @@ describe('renderGraphCard', () => {
     expect(card()).toMatch(/2 (events )?not shown|2 omitted/i);
   });
 
-  it('signs itself like every other artefact orca hands out', () => {
+  it('signs itself like every other artefact agenticreplay hands out', () => {
     expect(card()).toContain(CREDIT_MADE_BY);
   });
 

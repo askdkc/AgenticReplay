@@ -1,26 +1,24 @@
 import { createInterface } from 'node:readline/promises';
-import { unusableOrigin, recordableOrigin, withoutCredentials } from '@orcareplay/proxy';
-import { modelInfoFor } from '@orcareplay/providers';
+import { unusableOrigin, recordableOrigin, withoutCredentials } from '@agenticreplay/proxy';
+import { modelInfoFor } from '@agenticreplay/providers';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 import {
   configPath,
   fetchPinned,
   gatewayHeaders,
-  ORCAROUTER_CONSOLE,
-  ORCAROUTER_URL,
   readConfig,
   writeConfig,
-  type OrcaConfig,
+  type AgenticReplayConfig,
 } from '../config.js';
 
 /**
- * `orca setup` and `orca models` — the shortest path from "I want to compare four models" to a
- * working `orca compare`.
+ * `agenticreplay setup` and `agenticreplay models` — the shortest path from "I want to compare four models" to a
+ * working `agenticreplay compare`.
  *
  * Comparing models across providers used to mean knowing that `--upstream-anthropic` and
  * `--upstream-openai` exist, that a gateway serves both, and that the key goes in an environment
- * variable orca reads. All of that is real and none of it is discoverable. This asks two questions
+ * variable agenticreplay reads. All of that is real and none of it is discoverable. This asks two questions
  * instead, and — the part that matters — asks the gateway what it actually serves, so a wrong key
  * or a wrong URL is an answer now rather than a 401 in the middle of a comparison later.
  */
@@ -33,13 +31,13 @@ export interface SetupDeps {
   ask?: (question: string) => Promise<string>;
 }
 
-/** OpenAI-compatible model listing, which every gateway worth pointing orca at implements. */
+/** OpenAI-compatible model listing, which every gateway worth pointing agenticreplay at implements. */
 async function probeModels(gateway: string, headers: Record<string, string>): Promise<string[]> {
   // PINNED, like push and pull (orcacode-review). These are the same headers
   // gatewayHeaders builds — authorization AND x-api-key, both the stored key —
   // and undici forwards x-api-key across an origin it strips authorization on,
   // so a gateway answering /v1/models with a 3xx handed the configured key to
-  // whatever the Location named. `orca setup --gateway http://gw --key sk-…`
+  // whatever the Location named. `agenticreplay setup --gateway http://gw --key sk-…`
   // was enough to reach it.
   const res = await fetchPinned(`${gateway.replace(/\/+$/, '')}/v1/models`, { headers });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -67,7 +65,7 @@ export async function setupCommand(
   args: ParsedArgs,
   out: Output,
   deps: SetupDeps = {},
-): Promise<OrcaConfig> {
+): Promise<AgenticReplayConfig> {
   const env = deps.env ?? process.env;
   const probe = deps.probe ?? probeModels;
   const ask = deps.ask ?? terminalAsk();
@@ -76,18 +74,10 @@ export async function setupCommand(
   let key = args.str('key');
   const keyEnv = args.str('key-env');
 
-  // OrcaRouter fills the blank, and Enter accepts it. Offered rather than imposed: the whole point
-  // of a gateway is that one origin serves several models, and most people asking for that do not
-  // have one already — but anyone who does types over it, and `--gateway` skips the question.
-  //
-  // WHICH OF THE TWO HAPPENED IS RECORDED, because push needs to know and the URL alone cannot say
-  // (GatewayConfig.url_source). A default that is right for model traffic — proxying a call the
-  // agent was already making — is not right for a RUN, which carries source, shell output and
-  // workspace snapshots. Without this, `orca setup` + `orca push last` sent all of it to a host
-  // the user never typed, against the README's "Never a default destination".
-  if (!url && ask) url = await ask(`Gateway URL (serves the model APIs) [${ORCAROUTER_URL}]: `);
-  const urlSource: NonNullable<OrcaConfig['gateway']>['url_source'] = url ? 'named' : 'default';
-  if (!url) url = ORCAROUTER_URL;
+  if (!url && ask) url = (await ask('Gateway URL (required; serves the model APIs): ')).trim();
+  if (!url)
+    throw new Error('setup requires an explicit gateway: --gateway https://gateway.example');
+  const urlSource = 'named' as const;
 
   // Refused here, before it is stored or echoed. Sanitising on the way out is not enough on its
   // own: `new URL` parses a scheme-less URL with the username as the protocol, so the sanitiser
@@ -97,26 +87,23 @@ export async function setupCommand(
   const problem = unusableOrigin(url);
   if (problem !== undefined) {
     throw new Error(
-      `--gateway is not an origin orca can use: ${problem}` +
+      `--gateway is not an origin agenticreplay can use: ${problem}` +
         '\n  a gateway is scheme, host and path: --gateway https://gateway.example/v1' +
         '\n  the key goes separately: --key <key>, or --key-env NAME',
     );
   }
   if (!key && !keyEnv && ask) {
-    if (sameOrigin(url, ORCAROUTER_URL)) {
-      out.plain(`  get a key at ${ORCAROUTER_CONSOLE} — OrcaRouter keys start sk-orca-`);
-    }
     key = await ask('API key (stored 0600; leave blank for none): ');
   }
 
-  const gateway: OrcaConfig['gateway'] = { url, url_source: urlSource };
+  const gateway: AgenticReplayConfig['gateway'] = { url, url_source: urlSource };
   // Stored key wins if both are given, and only one is ever written: keeping both would leave a
   // credential on disk for someone who explicitly asked not to have one.
   if (key) gateway.api_key = key;
   else if (keyEnv) gateway.api_key_env = keyEnv;
 
   const existing = await readConfig(env);
-  const config: OrcaConfig = { ...existing, gateway };
+  const config: AgenticReplayConfig = { ...existing, gateway };
 
   // Ask before saving is tempting, but saving first means an unreachable gateway still leaves you
   // configured — being offline should not stop you setting up the thing you will use online.
@@ -152,10 +139,11 @@ export async function setupCommand(
       out.plain('');
       out.plain(`  ${available.length} models available:`);
       for (const m of available.slice(0, 20)) out.plain(`    ${m}`);
-      if (available.length > 20) out.plain(`    … and ${available.length - 20} more — orca models`);
+      if (available.length > 20)
+        out.plain(`    … and ${available.length - 20} more — agenticreplay models`);
     }
 
-    // Ask which of them to compare by default, so `orca compare` needs no flags afterwards. This
+    // Ask which of them to compare by default, so `agenticreplay compare` needs no flags afterwards. This
     // is the half that makes setup worth running: a gateway with nothing chosen still leaves you
     // typing a model list on every invocation, which is what the command exists to remove.
     const chosen = args.str('models') ?? (ask ? await askModels(ask, available) : undefined);
@@ -173,25 +161,26 @@ export async function setupCommand(
     out.warn('gateway.unreachable', {
       // A failed fetch names the URL it was given, credential and all.
       why: withoutCredentials(String(err instanceof Error ? err.message : err)),
-      note: 'the config was saved; fix the URL or key and run orca setup again',
+      note: 'the config was saved; fix the URL or key and run agenticreplay setup again',
     });
   }
 
   out.plain('');
   // Built from what the gateway actually serves, never from two model names picked here. Model ids
   // are gateway-specific — OrcaRouter namespaces them by provider, a direct provider does not — so a
-  // hardcoded pair is a copyable line that fails against the gateway orca just configured.
+  // hardcoded pair is a copyable line that fails against the gateway agenticreplay just configured.
   out.plain(nextStep(config, available));
   return config;
 }
 
 /** The line worth copying next, using real model ids wherever we have them. */
-function nextStep(config: OrcaConfig, available: string[]): string {
-  if (config.models && config.models.length > 0) return '  orca compare last --verify "npm test"';
+function nextStep(config: AgenticReplayConfig, available: string[]): string {
+  if (config.models && config.models.length > 0)
+    return '  agenticreplay compare last --verify "npm test"';
   if (available.length > 0) {
-    return `  orca compare last --models ${available.slice(0, 2).join(',')} --verify "npm test"`;
+    return `  agenticreplay compare last --models ${available.slice(0, 2).join(',')} --verify "npm test"`;
   }
-  return '  orca models                    # what this gateway serves, then compare two of them';
+  return '  agenticreplay models                    # what this gateway serves, then compare two of them';
 }
 
 /** Offer the gateway's own list, so the answer is a choice rather than a spelling test. */
@@ -218,10 +207,8 @@ export async function modelsCommand(
   if (!config.gateway?.url) {
     out.plain('no gateway configured');
     out.plain('');
-    out.plain(`  orca setup                    # ${ORCAROUTER_URL}, or any gateway you name`);
-    out.plain(`  orca setup --gateway <url> --key <key>`);
+    out.plain(`  agenticreplay setup --gateway <url> --key <key>`);
     out.plain('');
-    out.plain(`  a key for the default gateway: ${ORCAROUTER_CONSOLE}`);
     return [];
   }
 
@@ -234,9 +221,9 @@ export async function modelsCommand(
   if (configured !== undefined) {
     out.failure({
       event: 'gateway.unusable',
-      what: `the gateway in ${configPath(env)} is not an origin orca can use`,
+      what: `the gateway in ${configPath(env)} is not an origin agenticreplay can use`,
       why: configured,
-      next: 'orca setup --gateway <url> --key-env NAME',
+      next: 'agenticreplay setup --gateway <url> --key-env NAME',
     });
     return [];
   }
@@ -252,7 +239,7 @@ export async function modelsCommand(
       // be. Naming the file says as much without printing what is in it.
       what: `could not reach ${recordableOrigin(config.gateway.url) ?? `the gateway configured in ${configPath(env)}`}`,
       why: withoutCredentials(String(err instanceof Error ? err.message : err)),
-      next: `check the URL and key in ${configPath(env)}, or run orca setup again`,
+      next: `check the URL and key in ${configPath(env)}, or run agenticreplay setup again`,
     });
     return [];
   }
@@ -283,14 +270,14 @@ function sameOrigin(a: string, b: string): boolean {
 }
 
 /** Says whether a key is set and where it came from, never what it is. */
-function describeKey(gateway: NonNullable<OrcaConfig['gateway']>): string {
+function describeKey(gateway: NonNullable<AgenticReplayConfig['gateway']>): string {
   if (gateway.api_key) return 'stored';
   if (gateway.api_key_env) return `from $${gateway.api_key_env}`;
   return 'none';
 }
 
 /**
- * Whether a URL carries anything beyond the origin and path orca is willing to show.
+ * Whether a URL carries anything beyond the origin and path agenticreplay is willing to show.
  *
  * Used only to decide whether to explain the shortening. The shortening itself is
  * `recordableOrigin`, and it happens whether or not this returns true.

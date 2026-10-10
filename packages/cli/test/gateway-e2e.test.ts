@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader } from '@orcareplay/core';
+import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -19,7 +19,7 @@ const GATEWAY = join(here, 'fixtures', 'gateway-agent.mjs');
 /**
  * Recording a gateway that launches the coding agent.
  *
- * This is OpenClaw's shape, and it is the one claim in the README that rests on something orca
+ * This is OpenClaw's shape, and it is the one claim in the README that rests on something agenticreplay
  * does not do itself: a child process inherits its parent's environment, so the agent a gateway
  * spawns is redirected even though the gateway never read the variable. That is true of every
  * POSIX system and of Windows, and it is exactly the kind of thing that is obviously true until
@@ -32,7 +32,7 @@ describe('end to end: a gateway that spawns the agent', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-gateway-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-gateway-'));
     model = await startResponsesModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -84,7 +84,7 @@ describe('end to end: a gateway that spawns the agent', () => {
     const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
 
     expect(replay.exitCode).toBe(0);
-    expect(replay.matchedExact).toBe(2);
+    expect(replay.canonicalExact).toBe(2);
     expect(replay.unmatched).toBe(0);
     expect(model.calls.length).toBe(before);
   });
@@ -94,11 +94,11 @@ describe('end to end: a gateway that spawns the agent', () => {
     // the thing under test — so the same gateway fixture is run under it via generic-openai's
     // command handling, and the inheritance property is what both rely on.
     const launch = await (
-      await import('@orcareplay/adapters')
+      await import('@agenticreplay/adapters')
     ).openClawAdapter.prepare({
       runId: 'run_x',
       cwd: workspace,
-      runDir: join(workspace, '.orca', 'runs', 'run_x'),
+      runDir: join(workspace, '.agenticreplay', 'runs', 'run_x'),
       proxyUrl: 'http://127.0.0.1:44100',
       userArgs: [],
       env: {},

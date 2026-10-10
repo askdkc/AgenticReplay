@@ -7,16 +7,16 @@ import { DEFAULT_INSTRUMENTED_HOSTS, hostMatches, rewriteUrl } from './rewrite.j
  *
  * The hook is written out as one self-contained CommonJS file rather than imported from this
  * package, and that is not a style choice: it runs inside the *agent's* process, which resolves
- * `require` against its own dependency tree. A `require('@orcareplay/node-instrument')` in there
+ * `require` against its own dependency tree. A `require('@agenticreplay/node-instrument')` in there
  * throws before the agent's first line and takes the whole run with it. The shell shim and the
  * MCP config rewrite already work this way for the same reason.
  *
- * `--require` rather than `--import` because `--import` landed in Node 20.6 and the CLI supports
- * Node 20.0. A CommonJS preload runs before an ESM entry point just as well, and `globalThis.fetch`
+ * `--require` rather than `--import` because the CommonJS preload works for both CommonJS and ESM
+ * entry points, and `globalThis.fetch`
  * is already there to patch by the time it does.
  */
 
-export const HOOK_FILENAME = 'orca-fetch-hook.cjs';
+export const HOOK_FILENAME = 'agenticreplay-fetch-hook.cjs';
 
 /**
  * The hook's source.
@@ -44,7 +44,7 @@ export const HOOK_FILENAME = 'orca-fetch-hook.cjs';
  */
 const HOOK_SOURCE = `'use strict';
 /**
- * OrcaReplay fetch hook — written by \`orca record\`, deleted with the run directory.
+ * AgenticReplay fetch hook — written by \`agenticreplay record\`, deleted with the run directory.
  *
  * Some agents never read a base-URL variable. The Vercel AI SDK is the common one: \`@ai-sdk/openai\`
  * takes its origin as a constructor argument only, so redirecting the environment captures nothing
@@ -55,9 +55,9 @@ const HOOK_SOURCE = `'use strict';
  * imports nothing, because it loads inside an agent that has never heard of us.
  */
 (function () {
-  var proxy = process.env.ORCA_PROXY_URL || '';
+  var proxy = process.env.AGENTICREPLAY_PROXY_URL || '';
   if (!proxy || typeof globalThis.fetch !== 'function') return;
-  if (globalThis.__orcaFetchHooked) return;
+  if (globalThis.__agenticReplayFetchHooked) return;
 
   ${hostMatches.toString()}
 
@@ -65,14 +65,14 @@ const HOOK_SOURCE = `'use strict';
 
   var config = {
     proxyUrl: proxy,
-    hosts: (process.env.ORCA_INSTRUMENT_HOSTS || ${JSON.stringify(DEFAULT_INSTRUMENTED_HOSTS.join(','))})
+    hosts: (process.env.AGENTICREPLAY_INSTRUMENT_HOSTS || ${JSON.stringify(DEFAULT_INSTRUMENTED_HOSTS.join(','))})
       .split(',')
       .map(function (h) { return h.trim(); })
       .filter(Boolean),
   };
 
   var original = globalThis.fetch;
-  globalThis.fetch = function orcaFetch(input, init) {
+  globalThis.fetch = function agenticreplayFetch(input, init) {
     try {
       if (typeof input === 'string' || input instanceof URL) {
         var next = rewriteUrl(String(input), config);
@@ -88,7 +88,7 @@ const HOOK_SOURCE = `'use strict';
     }
     return original.call(this, input, init);
   };
-  globalThis.__orcaFetchHooked = true;
+  globalThis.__agenticReplayFetchHooked = true;
 })();
 `;
 
@@ -135,7 +135,7 @@ function withHook(flag: string, hookPath: string, existing: string | undefined):
 /**
  * A path that survives being read back out of a quoted options variable.
  *
- * Checked against node 22 on Windows: `--require "C:\\a b\\h.cjs"` reports
+ * Checked against Node 24 on Windows: `--require "C:\\a b\\h.cjs"` reports
  * `Cannot find module 'C:abh.cjs'`, while the same path with its backslashes doubled loads.
  */
 function escapeForOptionsParser(path: string): string {
@@ -153,7 +153,7 @@ export function nodeOptionsWithHook(hookPath: string, existing: string | undefin
  * Bun accepts `NODE_OPTIONS` but ignores `--require` inside it, so a Bun-based agent ran
  * uninstrumented and its traffic went straight to the provider — a silent miss, and the shape this
  * package exists to prevent. `--preload` is Bun's own spelling and `BUN_OPTIONS` is how it reaches
- * a command orca did not write. Both were checked against a real `bun` before this was written.
+ * a command agenticreplay did not write. Both were checked against a real `bun` before this was written.
  */
 export function bunOptionsWithHook(
   hookPath: string,
@@ -169,7 +169,7 @@ export function bunOptionsWithHook(
  * Bun splits that variable with a parser that treats a backslash as an escape, so a Windows path
  * arrives at the loader with its separators eaten and the run dies on `preload not found` before
  * the agent starts. Quoting does not help and is worse: Bun then accepts the argument, loads
- * nothing, and the agent runs uninstrumented while orca reports success — the silent miss this
+ * nothing, and the agent runs uninstrumented while agenticreplay reports success — the silent miss this
  * package exists to prevent.
  *
  * Forward slashes survive that parser and Windows accepts them everywhere, so the separator is

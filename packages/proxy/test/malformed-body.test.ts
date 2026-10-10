@@ -11,7 +11,7 @@ afterEach(async () => {
  *
  * Record mode parsed the body unguarded, so anything malformed reached the server's catch-all and
  * came back as `500 {"error":{"message":"SyntaxError: Unexpected end of JSON input"}}`. To whoever
- * is running the agent that reads as orca falling over, and it sends them to orca's issue tracker
+ * is running the agent that reads as agenticreplay falling over, and it sends them to agenticreplay's issue tracker
  * with a stack trace instead of to the one line of their own harness that sent an empty body.
  * Replay already answered 400 with a real message; record should too.
  */

@@ -1,12 +1,12 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Adapter } from '@orcareplay/plugin-api';
+import type { Adapter } from '@agenticreplay/plugin-api';
 import { checkAdapterContract, scaffoldAdapter } from '../src/index.js';
 import type { ScaffoldFile } from '../src/index.js';
 
 /**
- * The scaffold is the growth loop: adapters are how OrcaReplay reaches agents its maintainers have
+ * The scaffold is the growth loop: adapters are how AgenticReplay reaches agents its maintainers have
  * never run. So the generated code is held to the same contract as the shipped adapters — a
  * starting point that fails the guard on its first run teaches the contributor to ignore it.
  */
@@ -103,14 +103,14 @@ describe('scaffoldAdapter', () => {
       runId: 'run_1',
       cwd: '/work',
       proxyUrl: 'http://127.0.0.1:51733',
-      runDir: '/work/.orca/runs/run_1',
+      runDir: '/work/.agenticreplay/runs/run_1',
       userArgs: ['--task', 'x'],
       env: {},
     });
     expect(launch.command).toBe('my-agent');
     expect(launch.args).toEqual(['--task', 'x']);
     expect(launch.env['OPENAI_BASE_URL']).toBe('http://127.0.0.1:51733/v1');
-    expect(launch.env['OPENAI_API_KEY']).toBe('orca-recorded');
+    expect(launch.env['OPENAI_API_KEY']).toBe('agenticreplay-recorded');
   });
 
   it('generates a detect that resolves rather than throwing', async () => {

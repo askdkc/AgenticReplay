@@ -3,7 +3,7 @@
  * A stand-in agent that uses an MCP server, for end-to-end tests.
  *
  * It does the two things that matter to the recorder: it reads its MCP config from the environment
- * (orca rewrites a copy and points the agent at it), and it talks to the configured stdio server
+ * (agenticreplay rewrites a copy and points the agent at it), and it talks to the configured stdio server
  * over newline-delimited JSON-RPC — which is what the shim tees.
  *
  * It also drives a model turn either side of the MCP call, and sits for a while before exiting, so

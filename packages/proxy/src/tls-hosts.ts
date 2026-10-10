@@ -5,14 +5,14 @@
  * the agent touches is a keylogger with a nice CLI: the agent's shell runs `git push`, `pip
  * install`, `gh auth login`, and a debugger has no business reading any of it. So interception is
  * an allowlist, the default holds model APIs only, and every host outside it is tunnelled as
- * opaque bytes — orca sees the address it connected to and nothing else.
+ * opaque bytes — agenticreplay sees the address it connected to and nothing else.
  *
  * The list is overridable, because the whole reason the feature exists is a harness talking to an
  * endpoint we did not predict. It is not overridable with `*`.
  */
 
 /**
- * The hosts orca will decrypt when nobody says otherwise: model APIs, and only model APIs.
+ * The hosts agenticreplay will decrypt when nobody says otherwise: model APIs, and only model APIs.
  *
  * Deliberately absent: `auth.openai.com` and every other sign-in origin. The OAuth flow a
  * subscription login runs through is where the credential itself crosses the wire, and the point
@@ -44,7 +44,7 @@ export const DEFAULT_TLS_HOSTS: readonly string[] = [
   'api.xiaomimimo.com',
   // The token-plan endpoints, one per region. All three are in the shipped binary alongside
   // `api.xiaomimimo.com`; without them a run on a token plan is decrypted for none of its
-  // traffic, which reads as "orca recorded nothing" rather than as a missing host.
+  // traffic, which reads as "agenticreplay recorded nothing" rather than as a missing host.
   'token-plan-cn.xiaomimimo.com',
   'token-plan-sgp.xiaomimimo.com',
   'token-plan-ams.xiaomimimo.com',

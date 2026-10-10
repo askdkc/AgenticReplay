@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import { ensureRunsDir, resolveRunSelector, runDirFor, sha256File } from '@orcareplay/core';
+import { ensureRunsDir, resolveRunSelector, runDirFor, sha256File } from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
 import { tame, type Output } from '../out.js';
 import {
@@ -20,19 +20,19 @@ import {
   gatewayHeaders,
   namedPushDestination,
   sameOrigin,
-  type OrcaConfig,
+  type AgenticReplayConfig,
   fetchPinned,
 } from '../config.js';
-import { recordableOrigin } from '@orcareplay/proxy';
+import { recordableOrigin } from '@agenticreplay/proxy';
 import { readArchive, writeArchive, type ArchiveEntry } from '../archive.js';
 
 /**
- * Moving a run between this machine and an OrcaRouter gateway.
+ * Moving a run between this machine and a configured gateway.
  *
- * The gateway records what a local `orca record` cannot see — every key, every colleague, every CI
+ * The gateway records what a local `agenticreplay record` cannot see — every key, every colleague, every CI
  * job, and the routing decision behind each call — while the local recorder sees the shell, the
- * filesystem and MCP. Both write the same `orca-trace v0`, so the interesting direction is neither
- * one alone: pull a run a colleague's CI produced and `orca show` it, or push a local reproduction
+ * filesystem and MCP. Both write the same `agenticreplay-trace v0`, so the interesting direction is neither
+ * one alone: pull a run a colleague's CI produced and `agenticreplay show` it, or push a local reproduction
  * to where the rest of the team can read it.
  *
  * THE REDACTOR IS UPSTREAM OF THIS SINK, BY CONSTRUCTION. CONTRIBUTING requires a new sink to go
@@ -106,14 +106,8 @@ const NEEDS_KEY: Record<GatewayUse, string> = {
  * The gateway a sync command talks to: flag, then environment, then a configured gateway THE USER
  * NAMED.
  *
- * The same precedence `resolveUpstream` uses for model traffic, and for the same reason — the more
- * specific and more recent the instruction, the more it wins. The last step is where the two part
- * company, and the comment that used to stand here ("there is deliberately NO default") described
- * an intention the code did not implement: it read `config.gateway?.url`, and `orca setup` writes
- * ORCAROUTER_URL into that field when nobody names anything. So `orca setup` followed by
- * `orca push last` sent the run — source, shell output, workspace snapshots — to a host the user
- * never typed, which is exactly what README's "Never a default destination" promises cannot
- * happen.
+ * Gateway configuration is explicit. Configurations that explicitly mark an unnamed default
+ * are refused; neither sync command selects a destination on the user's behalf.
  *
  * `namedPushDestination` is that promise as one function, so both sync commands and anything added
  * later ask the same question instead of each re-deriving it.
@@ -123,21 +117,21 @@ async function resolveGateway(
   env: NodeJS.ProcessEnv,
   use: GatewayUse,
 ): Promise<{ url: string; headers: Record<string, string> }> {
-  const config: OrcaConfig = await readConfig(env);
+  const config: AgenticReplayConfig = await readConfig(env);
   const named = namedPushDestination(config);
-  const url = args.str('gateway') ?? env.ORCA_GATEWAY_URL ?? named;
+  const url = args.str('gateway') ?? env.AGENTICREPLAY_GATEWAY_URL ?? named;
   if (!url) {
     // Two different situations, and telling them apart is the whole value of the message: nothing
     // configured at all, versus a gateway that IS configured but only as setup's own default for
     // model traffic. The second reads as a bug unless it says so.
     throw new Error(
       config.gateway?.url !== undefined
-        ? `the configured gateway (${recordableOrigin(config.gateway.url) ?? '(unprintable)'}) is orca setup's default for MODEL ` +
+        ? `the configured gateway (${recordableOrigin(config.gateway.url) ?? '(unprintable)'}) is agenticreplay setup's default for MODEL ` +
             `traffic, not a destination you named for your runs. ${AT_STAKE[use]} ` +
             'Name it explicitly: pass --gateway <url>, set ' +
-            'ORCA_GATEWAY_URL, or re-run `orca setup --gateway <url>`.'
-        : 'no gateway configured. Run `orca setup --gateway <url>`, or pass --gateway, ' +
-            'or set ORCA_GATEWAY_URL.',
+            'AGENTICREPLAY_GATEWAY_URL, or re-run `agenticreplay setup --gateway <url>`.'
+        : 'no gateway configured. Run `agenticreplay setup --gateway <url>`, or pass --gateway, ' +
+            'or set AGENTICREPLAY_GATEWAY_URL.',
     );
   }
 
@@ -146,9 +140,9 @@ async function resolveGateway(
   // The first version of this gate applied the origin check to the stored key only, and I argued
   // on the thread that an env key alongside an override was "a deliberate pairing made in one
   // invocation". Review pointed at the README in this same PR, which tells you to
-  // `read -rs ORCA_GATEWAY_KEY && export ORCA_GATEWAY_KEY` — and an export PERSISTS. So the
+  // `read -rs AGENTICREPLAY_GATEWAY_KEY && export AGENTICREPLAY_GATEWAY_KEY` — and an export PERSISTS. So the
   // pairing was an assumption nothing enforced: a user who exported the key for their real gateway
-  // and later runs `orca push --gateway <other-host>` (a typo, a stale alias, a URL someone sent
+  // and later runs `agenticreplay push --gateway <other-host>` (a typo, a stale alias, a URL someone sent
   // them) attaches that key and the whole recording to the other host — the exact request that is
   // REFUSED when the same key sits in config. An asymmetry that depends on where a credential is
   // stored rather than on where it is going is not a security boundary.
@@ -156,25 +150,25 @@ async function resolveGateway(
   // Each key therefore has a HOME: the origin it was configured for.
   //
   //   stored key -> config.gateway.url
-  //   env key    -> ORCA_GATEWAY_URL
+  //   env key    -> AGENTICREPLAY_GATEWAY_URL
   //
   // and a key is only sent when the destination matches its home.
   //
   // AN ENV KEY WITH NO HOME IS NOT HOMED AT THE CONFIGURED GATEWAY (orcacode-review). This read
-  // `env.ORCA_GATEWAY_URL ?? configured`, which substituted a home the key had never been
+  // `env.AGENTICREPLAY_GATEWAY_URL ?? configured`, which substituted a home the key had never been
   // associated with — and the README's CI recipe exports the KEY ALONE, so the substitution fired
   // on the common case rather than an exotic one. A key exported for host A then travelled to the
   // configured host B, in place of B's OWN stored key, because the stored branch is this branch's
   // `else`. That is the fail-open shape the whole gate exists to prevent, and it contradicted both
-  // the README ("an exported key's [home] is ORCA_GATEWAY_URL") and the sentence two lines above
+  // the README ("an exported key's [home] is AGENTICREPLAY_GATEWAY_URL") and the sentence two lines above
   // it: the exemption is for a key whose only destination is the one THIS INVOCATION named, and
   // here nothing in the invocation named it — the config did.
   //
   // So a homeless env key travels only when `--gateway` named the destination on this command
   // line. That is exactly the CI shape the env key exists for, and nothing else.
-  const envKey = env.ORCA_GATEWAY_KEY?.trim();
+  const envKey = env.AGENTICREPLAY_GATEWAY_KEY?.trim();
   const configured = config.gateway?.url;
-  const envHome = env.ORCA_GATEWAY_URL?.trim() || undefined;
+  const envHome = env.AGENTICREPLAY_GATEWAY_URL?.trim() || undefined;
   const invocationNamedTheHost = args.str('gateway') !== undefined;
   const envKeyApplies =
     envKey !== undefined &&
@@ -199,7 +193,7 @@ async function resolveGateway(
     // with no owner; for a pull or a listing, that what came back was never scoped to you.
     throw new Error(
       `no API key for this gateway. ${NEEDS_KEY[use]} a key carrying the \`replay\` scope: ` +
-        'set ORCA_GATEWAY_KEY, or run `orca setup --gateway <url> --key-env <VAR>`.',
+        'set AGENTICREPLAY_GATEWAY_KEY, or run `agenticreplay setup --gateway <url> --key-env <VAR>`.',
     );
   }
   return { url: url.replace(/\/+$/, ''), headers };
@@ -215,7 +209,7 @@ async function resolveGateway(
  *
  * ON ONE LINE, whatever the gateway sent. The CLI prints the first line of an error as what
  * happened and every line after it as why, each line indented alike — so a newline in the
- * gateway's words became a line of the CLI's own, and `Invalid key\nnext: orca push --force`
+ * gateway's words became a line of the CLI's own, and `Invalid key\nnext: agenticreplay push --force`
  * printed a `next:` this code never wrote. Tamed here, where the text comes in, because nothing
  * downstream can tell the gateway's line breaks from the ones a message was composed with.
  */
@@ -277,8 +271,8 @@ export interface GatewayRun {
  * event was 09:36:26 was pushed and stored at 09:38:09, and the local manifest of another says
  * 09:40:11.6 against a `first_ts` of 09:40:12 and a `created_at` of 09:40:13. Preferring
  * `created_at` labelled the push as the start, so a run recorded on Monday and pushed on Friday
- * read as Friday's — and the same run showed two different start times in `orca list` and
- * `orca list --remote`.
+ * read as Friday's — and the same run showed two different start times in `agenticreplay list` and
+ * `agenticreplay list --remote`.
  */
 const STARTED_KEYS = ['started_at', 'first_ts', 'created_at'] as const;
 
@@ -312,7 +306,7 @@ function startedFrom(it: Record<string, unknown>): number {
 }
 
 /**
- * What the gateway is holding, so that `orca pull` has somewhere to get a run id from.
+ * What the gateway is holding, so that `agenticreplay pull` has somewhere to get a run id from.
  *
  * `pull` is the only command whose required argument cannot be obtained from the CLI: `push`
  * defaults to the last run, but "last" means nothing for a run this machine has never seen (the
@@ -324,7 +318,7 @@ function startedFrom(it: Record<string, unknown>): number {
  * redirect-refusing fetch: nothing about where a key may travel changes because the verb did.
  */
 /**
- * `--limit` as a count, the way `orca gc --keep` reads its own.
+ * `--limit` as a count, the way `agenticreplay gc --keep` reads its own.
  *
  * `NUMERIC` guarantees it parsed as a number and nothing more, so `--limit 0` asked the gateway
  * for no runs and `--limit -1` asked it for a negative number of them. Both were sent. What comes
@@ -390,7 +384,7 @@ export async function listGatewayRuns(
   // A 2xx THAT IS NOT JSON IS SOMEBODY ELSE ANSWERING. `refusal` already says as much about error
   // bodies — "a proxy in between may answer instead of the gateway" — and the success path had no
   // such thought: a captive portal's login page came back as `Unexpected token '<'`, which reads
-  // as a bug in orca rather than as the network fact it is.
+  // as a bug in agenticreplay rather than as the network fact it is.
   const body = await res.json().catch(() => {
     throw new Error(
       `${url} answered ${res.status} but not JSON ` +
@@ -406,7 +400,7 @@ export async function listGatewayRuns(
   const raw = (body as { data?: { items?: unknown } } | null)?.data?.items;
   const all = Array.isArray(raw) ? raw : [];
   // A row that is not an object, or names no run, is not a run you could pull — and reading
-  // `run_key` off `null` threw a TypeError at the user with orca's name on it. Counted rather
+  // `run_key` off `null` threw a TypeError at the user with agenticreplay's name on it. Counted rather
   // than dropped in silence: a gateway sending these is broken, and that is worth saying.
   const items = all.filter(isRunRow);
   const runs = items.map((it): GatewayRun => {
@@ -429,7 +423,7 @@ export async function listGatewayRuns(
  * The run directory's top-level entries that a push SHIPS. Everything else stays on the machine.
  *
  * AN ALLOWLIST, AND IT USED TO BE A DENYLIST OF ONE (`tls/`). That is the whole fix
- * (orcacode-review, `orca push` packing unredacted capture scaffolding): a denylist ships every
+ * (orcacode-review, `agenticreplay push` packing unredacted capture scaffolding): a denylist ships every
  * file nobody has thought about yet, and a run directory accumulates files that are not trace
  * content — `mcp-config.json` (MCP server `env` blocks, preserved verbatim by `rewriteMcpConfig`,
  * which is where an MCP server's API token lives), `shell-frames.jsonl` (raw argv of every command
@@ -437,7 +431,7 @@ export async function listGatewayRuns(
  * this machine's paths), `tls/` (the run's own interception CA private key). Each of those was
  * being POSTed to the gateway, stored there, and served to everyone who pulls the run.
  *
- * The reason a denylist cannot be made complete here is `orca scrub`. Scrub rewrites
+ * The reason a denylist cannot be made complete here is `agenticreplay scrub`. Scrub rewrites
  * `manifest.json`, `events.jsonl` and `blobs/` and nothing else, so a user who scrubs a secret and
  * then pushes was shipping an unscrubbed copy of it in the raw frame logs — the scrub reported
  * success and the secret went out anyway. `push` is the sharing path; shipping a file scrub cannot
@@ -454,7 +448,7 @@ export async function listGatewayRuns(
  *                                         the user recorded ON PURPOSE, and README says a run
  *                                         carries them.
  *
- * ONE THING IS DELIBERATELY LOST, and it is worth stating rather than discovering: `orca replay`
+ * ONE THING IS DELIBERATELY LOST, and it is worth stating rather than discovering: `agenticreplay replay`
  * mocks MCP servers from `mcp-frames.jsonl`, so replaying a PULLED run no longer has those frames.
  * That is a degraded secondary feature against a credential disclosure, and the unblock is the
  * project rule this file already lives under — redaction belongs in the write path
@@ -474,7 +468,7 @@ const PUSHED_TOP_LEVEL = new Set(['manifest.json', 'events.jsonl', 'redactions.j
  * purpose too, and `shell-frames.jsonl` came off this list all the same.
  *
  * What actually decides it is the rule the rest of the allowlist is built on — push must not ship
- * a file `orca scrub` cannot reach. The shadow git store is the largest such file by far. Scrub
+ * a file `agenticreplay scrub` cannot reach. The shadow git store is the largest such file by far. Scrub
  * says so itself: it cannot rewrite the store (the objects are zlib-deflated and addressed by the
  * hash of their contents, so editing one rewrites every id that reaches it), so it SEARCHES and
  * REPORTS instead and offers `--drop-fs`. SECURITY.md states the same in the same words: after a
@@ -488,7 +482,7 @@ const PUSHED_TOP_LEVEL = new Set(['manifest.json', 'events.jsonl', 'redactions.j
  *
  * `--fs` keeps the capability for the case it exists for (a teammate who needs the tree to
  * reproduce), as a decision the pusher makes rather than a default they inherit, and push says out
- * loud what it is about to send. `orca scrub --drop-fs` remains the way to make the run safe
+ * loud what it is about to send. `agenticreplay scrub --drop-fs` remains the way to make the run safe
  * rather than merely quiet.
  */
 const FS_SNAPSHOT_DIR = 'fs';
@@ -531,7 +525,7 @@ function multipart(
   fileName: string,
   bytes: Uint8Array,
 ): { body: Uint8Array; contentType: string } {
-  const boundary = `----orca${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const boundary = `----agenticreplay${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
   const head = new TextEncoder().encode(
     `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="${fieldName}"; filename="${fileName}"\r\n` +
@@ -747,7 +741,7 @@ async function withRunLock<T>(
       // ONLY EEXIST MEANS "someone else holds it". Anything else — a missing parent, a read-only
       // store, no space — is a real failure, and spinning on it burns the whole retry budget before
       // reporting an error that was never going to change. The first version caught everything and
-      // took six seconds to fail on a workspace whose .orca/runs did not exist yet, which is the
+      // took six seconds to fail on a workspace whose .agenticreplay/runs did not exist yet, which is the
       // ordinary first-pull case.
       if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
       const stale = await stat(lock)
@@ -762,7 +756,7 @@ async function withRunLock<T>(
   }
   if (!held) {
     throw new Error(
-      `another orca pull is working on this run (${lock} is held). Wait for it to finish, or ` +
+      `another agenticreplay pull is working on this run (${lock} is held). Wait for it to finish, or ` +
         `remove that file if no pull is running.`,
     );
   }
@@ -948,7 +942,7 @@ export async function revertStagedSwap(
 /**
  * push — send a local run to the gateway.
  *
- * `orca push [run] [--gateway URL] [--force]`
+ * `agenticreplay push [run] [--gateway URL] [--force]`
  */
 export async function pushCommand(
   args: ParsedArgs,
@@ -978,7 +972,7 @@ export async function pushCommand(
   if (includeFs) {
     out.warn('push.fs_included', {
       note:
-        'workspace file contents travel raw: `orca scrub` cannot rewrite the snapshot store, ' +
+        'workspace file contents travel raw: `agenticreplay scrub` cannot rewrite the snapshot store, ' +
         'so anything it reported as still present is going with this push',
     });
   }
@@ -986,7 +980,7 @@ export async function pushCommand(
   // `force` is the gateway's own flag for "store this even though the scan found something". It is
   // opt-in on purpose: the default refusal is what stops a secret reaching a shared server.
   const target = `${url}${UPLOAD_PATH}${args.bool('force') ? '?force=1' : ''}`;
-  const { body, contentType } = multipart('file', `${runId}.orca.zip`, archive);
+  const { body, contentType } = multipart('file', `${runId}.agenticreplay.zip`, archive);
   const res = await fetchPinned(target, {
     method: 'POST',
     headers: { ...headers, 'content-type': contentType },
@@ -1007,7 +1001,7 @@ export async function pushCommand(
   // states the promise this keeps — "nothing ever prints it back" — and a success line is not
   // exempt from it: `https://gw.example/v1?key=SECRET` is an ordinary query-authenticated gateway,
   // and this line lands in the terminal, in --json, and in the CI log of the README's own
-  // `orca push last` recipe.
+  // `agenticreplay push last` recipe.
   out.phase('push.done', {
     run: runId,
     replaced,
@@ -1017,7 +1011,7 @@ export async function pushCommand(
 
 function lostTheLock(): Error {
   return new Error(
-    'another orca pull took this run\u2019s lock while this one was staging; nothing was ' +
+    'another agenticreplay pull took this run\u2019s lock while this one was staging; nothing was ' +
       'installed. Re-run the pull.',
   );
 }
@@ -1034,7 +1028,7 @@ function lostTheLock(): Error {
  * the blend into place and prints `pull.done`.
  *
  * Two archives of one run key differ in ordinary operation — a re-push, a scrub between fetches, or
- * the truncated export the `x-orca-run-truncated` header warns about — so the result is a run whose
+ * the truncated export the `x-agenticreplay-run-truncated` header warns about — so the result is a run whose
  * manifest integrity root covers one copy while some of its blobs are the other's. That is verbatim
  * the outcome withRunLock's own comment says the lock exists to rule out: "the run that lands is a
  * blend of both copies … with nothing reporting it."
@@ -1169,7 +1163,7 @@ export async function swapStagedRun(
   } catch (err) {
     // Best-effort by necessity: if the rename failed because `dest` came back, this
     // fails too and `<run>.replaced` stays for `recoverInterruptedSwap` to reclaim.
-    // Litter that a later `orca pull` puts right, not a run nothing can reach.
+    // Litter that a later `agenticreplay pull` puts right, not a run nothing can reach.
     if (movedAside) await rename(retired, dest).catch(() => undefined);
     throw err;
   }
@@ -1179,7 +1173,7 @@ export async function swapStagedRun(
 /**
  * pull — fetch a gateway run into the local store.
  *
- * `orca pull <run> [--gateway URL] [--force]`
+ * `agenticreplay pull <run> [--gateway URL] [--force]`
  */
 
 /**
@@ -1288,7 +1282,7 @@ async function reportAgainstLocal(
   out.warn('pull.differs', {
     ...fields,
     why: 'the events themselves differ, not just how they were written',
-    next: `orca show ${runId}   # the copy that just replaced the local one`,
+    next: `agenticreplay show ${runId}   # the copy that just replaced the local one`,
   });
 }
 
@@ -1301,7 +1295,7 @@ export async function pullCommand(
   const { url, headers } = await resolveGateway(args, env, 'pull');
   const runKey = args.positionals[0];
   if (!runKey) {
-    throw new Error('pull needs the run to fetch: `orca pull <run-id>`');
+    throw new Error('pull needs the run to fetch: `agenticreplay pull <run-id>`');
   }
 
   // RECOVER BEFORE THE NETWORK, NOT AFTER IT.
@@ -1330,7 +1324,7 @@ export async function pullCommand(
   // The gateway sets this when it could not store the recording whole. Pulling one is allowed —
   // half a trace still debugs — but every command downstream will read the result as if it were
   // complete, so the warning is not optional.
-  if (res.headers.get('x-orca-run-truncated') === 'true') {
+  if (res.headers.get('x-agenticreplay-run-truncated') === 'true') {
     out.warn('pull.truncated', {
       run: runKey,
       detail: 'the gateway stored this recording incompletely; events may be missing',
@@ -1350,7 +1344,7 @@ export async function pullCommand(
   // gateway chose — which is the right number for one that becomes a filesystem path.
   // (ensureRunsDir ran above, before the first lock.) THE STORE ON THE STORE'S OWN TERMS (codex round 3 P1).
   //
-  // record, attach and replay all create `.orca/runs` through ensureRunsDir; pull wrote into it
+  // record, attach and replay all create `.agenticreplay/runs` through ensureRunsDir; pull wrote into it
   // with a bare recursive mkdir and inherited none of what that function is for. Two things were
   // lost, and both matter most in the case pull exists for — a fresh clone with no recording yet,
   // where pull is what creates the store:
@@ -1358,7 +1352,7 @@ export async function pullCommand(
   //   - the 0700 directory and 0600 files SECURITY.md promises. A default umask gives 0755/0644,
   //     so a pulled trace — the gateway's copy of source, shell output and workspace snapshots —
   //     was world-readable on a shared machine.
-  //   - `.orca/.gitignore` containing `*`, git's own idiom for a directory that excludes itself.
+  //   - `.agenticreplay/.gitignore` containing `*`, git's own idiom for a directory that excludes itself.
   //     Without it the whole store lands in `git status` as untracked, one `git add -A` from being
   //     committed and pushed. That is the accident ensureRunsDir was written to prevent.
   const dest = runDirFor(cwd, runId);

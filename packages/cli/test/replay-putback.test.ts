@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Output } from '../src/out.js';
-import { FsCapture } from '@orcareplay/fs-capture';
+import { FsCapture } from '@agenticreplay/fs-capture';
 import { assertOverwritable, removeIntroduced } from '../src/commands/replay.js';
 
 const run = promisify(execFile);
@@ -33,7 +33,7 @@ describe('taking away what a replay introduced', () => {
   let out: Output;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-putback-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-putback-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -76,7 +76,7 @@ describe('taking away what a replay introduced', () => {
     const warned = lines.find((l) => l.includes('replay.left_in_place')) ?? '';
     expect(warned, `nothing said what was left in:\n${lines.join('')}`).toContain('theirs.txt');
     expect(warned).not.toContain('ours.txt');
-    expect((await readdir(dir)).filter((name) => name.includes('.orca-'))).toEqual([]);
+    expect((await readdir(dir)).filter((name) => name.includes('.agenticreplay-'))).toEqual([]);
   });
 
   /**
@@ -93,12 +93,14 @@ describe('taking away what a replay introduced', () => {
       { files: [{ path: 'raced.txt', oids: new Set([recorded]) }], dirs: [], walked: new Map() },
       out,
       async (path) => {
-        await writeFile(path, 'WRITTEN WHILE ORCA WAS LOOKING\n');
+        await writeFile(path, 'WRITTEN WHILE AGENTICREPLAY WAS LOOKING\n');
       },
     );
 
-    expect(await readFile(join(dir, 'raced.txt'), 'utf8')).toBe('WRITTEN WHILE ORCA WAS LOOKING\n');
-    expect((await readdir(dir)).filter((name) => name.includes('.orca-'))).toEqual([]);
+    expect(await readFile(join(dir, 'raced.txt'), 'utf8')).toBe(
+      'WRITTEN WHILE AGENTICREPLAY WAS LOOKING\n',
+    );
+    expect((await readdir(dir)).filter((name) => name.includes('.agenticreplay-'))).toEqual([]);
   });
 
   /**
@@ -116,14 +118,16 @@ describe('taking away what a replay introduced', () => {
       { files: [{ path: 'notes.txt', oids: new Set([recorded]) }], dirs: [], walked: new Map() },
       out,
       async (path) => {
-        await writeFile(path, 'AND THIS ARRIVED WHILE ORCA WAS LOOKING\n');
+        await writeFile(path, 'AND THIS ARRIVED WHILE AGENTICREPLAY WAS LOOKING\n');
       },
     );
 
     expect(await readFile(join(dir, 'notes.txt'), 'utf8')).toBe(
-      'AND THIS ARRIVED WHILE ORCA WAS LOOKING\n',
+      'AND THIS ARRIVED WHILE AGENTICREPLAY WAS LOOKING\n',
     );
-    const aside = (await readdir(dir)).filter((name) => name.startsWith('notes.txt.orca-'));
+    const aside = (await readdir(dir)).filter((name) =>
+      name.startsWith('notes.txt.agenticreplay-'),
+    );
     expect(aside, 'the original must still exist, beside it').toHaveLength(1);
     expect(await readFile(join(dir, aside[0]!), 'utf8')).toBe('THE OPERATOR WROTE THIS\n');
     const warned = lines.find((l) => l.includes('replay.left_in_place')) ?? '';
@@ -144,7 +148,7 @@ describe('taking away what a replay introduced', () => {
       expect(lstatSync(join(dir, 'link')).isSymbolicLink(), 'the link is back, as a link').toBe(
         true,
       );
-      expect((await readdir(dir)).filter((name) => name.includes('.orca-'))).toEqual([]);
+      expect((await readdir(dir)).filter((name) => name.includes('.agenticreplay-'))).toEqual([]);
     } finally {
       unlinkSync(join(dir, 'link'));
     }
@@ -194,7 +198,7 @@ describe('taking away what a replay introduced', () => {
    * The other direction of the same escape. A junction git walked into is a directory to git, and
    * the removal may pass through it — but only while it points where it pointed when the copy was
    * taken. Re-pointed during the replay, it is another link, and following it reached a directory
-   * orca was never given. Only Windows walks into a link (git records a POSIX symlink as itself),
+   * agenticreplay was never given. Only Windows walks into a link (git records a POSIX symlink as itself),
    * so only Windows can have one to re-point.
    */
   it.runIf(process.platform === 'win32')(

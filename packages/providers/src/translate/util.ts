@@ -6,7 +6,7 @@
  * an unfamiliar field is worse than useless.
  */
 
-import type { CanonicalContent } from '@orcareplay/plugin-api';
+import type { CanonicalContent } from '@agenticreplay/plugin-api';
 
 /**
  * The provider message inside a canonical error response: its text blocks, joined.

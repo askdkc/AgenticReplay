@@ -7,11 +7,11 @@ import {
   responsesToCanonicalRequest,
   responsesToCanonicalResponse,
 } from '../src/translate/openai-responses.js';
-import type { CanonicalRequest, CanonicalResponse } from '@orcareplay/plugin-api';
+import type { CanonicalRequest, CanonicalResponse } from '@agenticreplay/plugin-api';
 
 /**
  * The Responses API is what the OpenAI Agents SDK and the Codex CLI speak by default, so these
- * tests are the difference between "orca supports OpenAI" and "orca kills your agent on turn one".
+ * tests are the difference between "agenticreplay supports OpenAI" and "agenticreplay kills your agent on turn one".
  *
  * The shape differs from chat completions in every load-bearing way: the system prompt is
  * `instructions` rather than a message, tool calls and their results are top-level `input` items

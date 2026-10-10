@@ -1,13 +1,20 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { AUTH_REQUEST_HEADERS, Redactor, fetchPinned } from '@orcareplay/core';
+import {
+  AUTH_REQUEST_HEADERS,
+  AUTH_RESPONSE_HEADERS,
+  BINARY_BODY_PREFIX,
+  Redactor,
+  fetchPinned,
+} from '@agenticreplay/core';
 import type {
   CanonicalRequest,
   CanonicalResponse,
   RetrievalRule,
   Usage,
-} from '@orcareplay/plugin-api';
+} from '@agenticreplay/plugin-api';
+import type { CaptureTransformation } from '@agenticreplay/schema';
 import {
   anthropicToCanonicalRequest,
   anthropicToCanonicalResponse,
@@ -27,7 +34,7 @@ import {
   parseResponsesSse,
   responsesToCanonicalRequest,
   responsesToCanonicalResponse,
-} from '@orcareplay/providers';
+} from '@agenticreplay/providers';
 import {
   anthropicDialect,
   codexDialect,
@@ -48,6 +55,7 @@ import {
 import {
   attachTlsIntercept,
   decodeBody,
+  DEFAULT_MAX_CAPTURED_BYTES,
   type InterceptDecision,
   type InterceptResponse,
   type NetExchange,
@@ -78,13 +86,150 @@ export type {
 
 export type ProxyMode = 'record' | 'replay' | 'hybrid';
 
+function scalarHeaders(headers: Record<string, string | string[]>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    out[key] = Array.isArray(value) ? value.join(', ') : value;
+  }
+  return out;
+}
+
+function captureHeaderTransformations(
+  original: Record<string, string | string[]>,
+  recorded: Record<string, string | string[]>,
+): CaptureTransformation[] {
+  const excluded = Object.keys(original).filter((name) => !(name in recorded));
+  if (excluded.length === 0) return [];
+  return [
+    {
+      kind: 'header_excluded',
+      location: 'request.headers',
+      rule: 'authentication-and-hop-by-hop-header-exclusion',
+      count: excluded.length,
+      reason: excluded
+        .map((name) => name.toLowerCase())
+        .sort()
+        .join(', '),
+    },
+  ];
+}
+
+function captureResponseHeaders(headers: Headers, decoded = false): Record<string, string> {
+  const result: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    const key = name.toLowerCase();
+    if (AUTH_RESPONSE_HEADERS.includes(key)) return;
+    if (decoded && (key === 'content-encoding' || key === 'content-length')) return;
+    result[key] = value;
+  });
+  return result;
+}
+
+function captureResponseHeaderTransformations(headers: Headers): CaptureTransformation[] {
+  const excluded: string[] = [];
+  headers.forEach((_value, name) => {
+    if (AUTH_RESPONSE_HEADERS.includes(name.toLowerCase())) excluded.push(name.toLowerCase());
+  });
+  return [
+    ...(excluded.length === 0
+      ? []
+      : [
+          {
+            kind: 'header_excluded' as const,
+            location: 'response.headers',
+            rule: 'authentication-header-exclusion',
+            count: excluded.length,
+            reason: [...new Set(excluded)].sort().join(', '),
+          },
+        ]),
+    {
+      kind: 'encoding' as const,
+      location: 'response.headers',
+      rule: 'fetch-headers-boundary-normalization',
+      count: 1,
+      reason: 'fetch Headers lowercases names and combines repeated fields before capture',
+    },
+  ];
+}
+
+function captureEncodingTransformation(
+  location: string,
+  encoding: string | undefined,
+): CaptureTransformation[] {
+  const values = (encoding ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value !== '' && value !== 'identity');
+  if (values.length === 0) return [];
+  return [
+    {
+      kind: 'decompression',
+      location,
+      rule: 'content-encoding',
+      count: values.length,
+      reason: values.join(', '),
+    },
+  ];
+}
+
+function protocolTranslationTransformation(
+  from: string,
+  to: string,
+  location = 'response.body',
+): CaptureTransformation {
+  return {
+    kind: 'encoding',
+    location,
+    rule: 'provider-protocol-translation',
+    count: 1,
+    reason: `${from} response translated to ${to} for the client`,
+  };
+}
+
+function modelOverrideTransformation(from: string, to: string): CaptureTransformation {
+  return {
+    kind: 'encoding',
+    location: 'request.body',
+    rule: 'model-override-and-serialization',
+    count: 1,
+    reason: `${from} request model overridden with ${to} and serialized for the live fork`,
+  };
+}
+
+function captureUrlTransformations(origin: string): CaptureTransformation[] {
+  const scrubbed = recordableOrigin(origin);
+  if (scrubbed === undefined || scrubbed === origin) return [];
+  return [
+    {
+      kind: 'url_scrubbed',
+      location: 'destination.url',
+      rule: 'credential-and-query-secret-scrub',
+      count: 1,
+      reason: 'destination credentials or secret query parameters removed before persistence',
+    },
+  ];
+}
+
+function binaryBodyTransformation(location: string, body: string): CaptureTransformation[] {
+  if (!body.startsWith(BINARY_BODY_PREFIX)) return [];
+  return [
+    {
+      kind: 'encoding',
+      location,
+      rule: 'binary-body-base64-persistence',
+      count: 1,
+      reason: 'invalid UTF-8 preserved as base64 because the transport body is binary',
+    },
+  ];
+}
+
 /**
  * Beta flags that belong to the model that was recorded, not to the request.
  *
  * `anthropic-beta` is a header, so substituting a model in the body leaves it untouched — and a
  * fork of a run made on a 1M-context model onto one without that entitlement comes back
  * `400 The long context beta is not yet available for this subscription`. The failure names the
- * subscription rather than the flag, so it reads as an account problem and not as orca carrying
+ * subscription rather than the flag, so it reads as an account problem and not as agenticreplay carrying
  * over something it should have dropped.
  *
  * Only entitlement-gated flags are removed. The rest of the header is what the harness needs to
@@ -123,14 +268,14 @@ function headersForModel(
 /**
  * An origin with the parts a credential rides in taken out.
  *
- * `orca setup --gateway` accepts whatever URL it is handed and stores it in `~/.orca/config.json`,
+ * `agenticreplay setup --gateway` accepts whatever URL it is handed and stores it in `~/.agenticreplay/config.json`,
  * and a gateway that authenticates by URL rather than by header is handed one that carries the key:
  * `https://user:pw@gw.example` or `https://gw.example?key=…`. The proxy has to *send* that — it is
  * how the request authenticates — but recording it verbatim would have written the key into every
  * trace made on that machine, breaking the promise stated where the key is read:
  *
  *   > the proxy adds it to the outbound request only, while what gets recorded is derived from the
- *   > *incoming* request with auth stripped, so a gateway key orca injects is invisible to the
+ *   > *incoming* request with auth stripped, so a gateway key agenticreplay injects is invisible to the
  *   > recording by construction rather than by a rule someone has to remember.
  *
  * So the stripping happens here, in the one place an exchange is built, rather than at each call
@@ -229,7 +374,7 @@ export function withoutCredentials(text: string): string {
 }
 
 /**
- * An origin orca could not parse, reduced to the host it names and nothing else.
+ * An origin agenticreplay could not parse, reduced to the host it names and nothing else.
  *
  * Three rounds of review here, each finding a shape the last one let through, and the lesson is
  * the same each time: a string no parser accepted has no structure to rely on, so nothing may be
@@ -273,6 +418,8 @@ export function scrubOrigin(origin: string): string {
 
 export interface RecordedExchange {
   seq: number;
+  requestId?: string;
+  requestStartedAt?: number;
   dialect: string;
   path: string;
   /** Verbatim request body. Keeping it is what makes exact replay exact. */
@@ -286,27 +433,27 @@ export interface RecordedExchange {
   usage?: Usage;
   requestHeaders?: Record<string, string>;
   /**
-   * Which application protocol carried it: `h2`, `http/1.1`, or absent where orca did not
+   * Which application protocol carried it: `h2`, `http/1.1`, or absent where agenticreplay did not
    * establish the connection itself and so cannot say. Only interception knows this -- the
    * base-URL route hands the call to `fetch`, which chooses for itself and does not report back.
    */
   alpn?: string;
   /**
-   * The `content-encoding` orca decoded away before recording the response, when there was one.
+   * The `content-encoding` agenticreplay decoded away before recording the response, when there was one.
    * Interception only, for the same reason: on the base-URL route the HTTP client decompresses
-   * before orca sees a body, so there is nothing orca could truthfully claim to have removed.
+   * before agenticreplay sees a body, so there is nothing agenticreplay could truthfully claim to have removed.
    */
   responseDecodedFrom?: string;
   /**
    * The origin that actually answered this call.
    *
    * A run's destination is not one value that could live in the manifest: the origin is chosen per
-   * request, from an explicit `--upstream-*`, the gateway `orca setup` configured, a `/forward/`
+   * request, from an explicit `--upstream-*`, the gateway `agenticreplay setup` configured, a `/forward/`
    * base the client announced, or the dialect's vendor default — and a fork that changes provider
    * changes it again mid-run. So it is recorded where it is decided, once per exchange.
    *
    * The trace could say what was sent and what came back but not who answered it, which is the
-   * question asked first when a recording looks wrong: a gateway left over in `~/.orca/config.json`
+   * question asked first when a recording looks wrong: a gateway left over in `~/.agenticreplay/config.json`
    * redirects every run on the machine, and nothing in the run said so.
    */
   upstream?: string;
@@ -326,6 +473,11 @@ export interface ProxyOptions {
   upstream?: Record<string, string>;
   dialects?: Dialect[];
   onExchange?: (e: RecordedExchange) => void;
+  onRequestStart?: (request: NetRequest) => void | Promise<void>;
+  /** Maximum bytes retained per request or response body. */
+  maxCapturedBytes?: number;
+  /** Aggregate retained body bytes across concurrent TLS exchanges. */
+  maxBufferedBytes?: number;
   onDivergence?: (d: Divergence & { seq: number }) => void;
   /** Called once per live call that carried a model substitution. See {@link RouteDecision}. */
   onRoute?: (decision: RouteDecision) => void;
@@ -352,14 +504,14 @@ export interface ProxyOptions {
   /**
    * Where to send a POST whose path no dialect claims.
    *
-   * Orca pointed the harness's base URL at itself, so every call the harness makes arrives here —
-   * including the ones orca has no translator for. Refusing those does not mean "not captured", it
+   * AgenticReplay pointed the harness's base URL at itself, so every call the harness makes arrives here —
+   * including the ones agenticreplay has no translator for. Refusing those does not mean "not captured", it
    * means the agent gets an error for a call that would have worked, from a tool whose whole job is
    * not to change the run it is watching. Left unset, an origin is inferred; see `passthroughOrigin`.
    */
   passthroughUpstream?: string;
   /**
-   * An exchange orca forwarded but could not interpret.
+   * An exchange agenticreplay forwarded but could not interpret.
    *
    * Deliberately the same type the TLS interceptor reports unrecognised traffic with, so both
    * arrive in the trace as `net.request` / `net.response` and a reader does not have to learn a
@@ -486,10 +638,10 @@ export interface ProxyHandle {
  * The full RFC 7230 §6.1 set, plus `host` and `accept-encoding`, which describe this hop for the
  * same reason. `transfer-encoding` is the one that was missing and the one that bites: an SDK
  * that hands `fetch` a `Request` — or any stream body — sends `transfer-encoding: chunked` and no
- * `content-length`, and orca then copied that header onto an outbound call whose body it had
+ * `content-length`, and agenticreplay then copied that header onto an outbound call whose body it had
  * already buffered. undici refuses the contradiction, so the agent got
  * `500 {"error":{"message":"TypeError: fetch failed"}}` on every such turn, with nothing in the
- * message pointing at a header, at orca, or at the agent.
+ * message pointing at a header, at agenticreplay, or at the agent.
  */
 const HOP_BY_HOP_HEADERS = new Set([
   'host',
@@ -547,10 +699,31 @@ export function defaultDialects(): Dialect[] {
   ];
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
+class BodyLimitError extends Error {
+  constructor(
+    readonly bytes: number,
+    readonly limit: number,
+  ) {
+    super(`request body exceeded capture limit of ${limit} bytes`);
+  }
+}
+
+async function readBody(
+  req: IncomingMessage,
+  limit: number,
+): Promise<{ body: Buffer; bytes: number }> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
+  let bytes = 0;
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer;
+    bytes += buffer.length;
+    if (bytes > limit) {
+      req.resume();
+      throw new BodyLimitError(bytes, limit);
+    }
+    chunks.push(buffer);
+  }
+  return { body: Buffer.concat(chunks), bytes };
 }
 
 /** Is this something a dialect could parse at all? Cheap guard, run before anything is forwarded. */
@@ -595,6 +768,11 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const doFetch = options.fetchImpl ?? fetchPinned;
   const recorded = options.exchanges ?? [];
   const captured: RecordedExchange[] = [];
+  // Plain base-URL traffic needs the same aggregate bound as intercepted traffic. This counter
+  // covers bodies retained by concurrent fetch responses while each response still streams to the
+  // caller; it is released only after that response has been materialized into evidence.
+  let plainBufferedBytes = 0;
+  const plainBufferLimit = options.maxBufferedBytes ?? 256 * 1024 * 1024;
 
   const stats: ProxyStats = {
     mode: options.mode,
@@ -695,6 +873,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       dialect &&
       exchange.method === 'POST' &&
       !exchange.requestTruncated &&
+      exchange.responseComplete &&
+      !exchange.responseTruncated &&
       exchange.status !== 0
     ) {
       try {
@@ -711,21 +891,27 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           rawResponse: exchange.responseBody,
           status: exchange.status,
           streamed,
-          headers: exchange.requestHeaders,
+          headers: scalarHeaders(exchange.requestHeaders),
           seq: captured.length,
+          requestId: exchange.requestId,
+          requestStartedAt: exchange.requestStartedAt,
           durationMs: exchange.durationMs,
           // The two things only the interceptor witnessed. Without them a promoted exchange is
           // indistinguishable from one captured over the base-URL route, which is the point --
           // except where the difference is the thing being debugged.
           alpn: exchange.alpn,
           responseDecodedFrom: exchange.responseDecodedFrom,
-          // Under interception orca did not choose this origin, the agent did — which is the
+          // Under interception agenticreplay did not choose this origin, the agent did — which is the
           // case where "who answered" is least obvious from the command line, and so the one most
           // worth having in the trace. The port is kept only where https does not imply it.
           upstream: `https://${exchange.host}${exchange.port === 443 ? '' : `:${exchange.port}`}`,
         });
         captured.push(built);
         options.onExchange?.(built);
+        // Keep the authoritative wire record even when the dialect projection succeeds. The
+        // model event is a convenient replay view; the net event retains headers, framing and
+        // transport completion details needed to audit capture fidelity.
+        options.tls?.onNetExchange?.({ ...exchange, modelDialect: dialect.id });
         return;
       } catch {
         // Not a model call after all — a path that merely looks like one, or a body this dialect
@@ -741,7 +927,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
    * the same matcher before it opens an origin connection.
    *
    * Live calls used to return `undefined` here, which forwarded the client's bytes unchanged —
-   * so `orca replay --from N --model X` on a TLS-intercepted recording echoed `model=X` and then
+   * so `agenticreplay replay --from N --model X` on a TLS-intercepted recording echoed `model=X` and then
    * called the recorded model. `replayed=0 live=0` was the tell: `goLive` never ran, substitution
    * never had a chance. Same-provider `--model` now rewrites the body and still talks to the
    * intercepted origin (the only origin that origin's credential can reach). A cross-provider
@@ -757,7 +943,13 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     let rawBody: string;
     try {
-      rawBody = decodeBody(request.requestBytes, request.requestHeaders['content-encoding']);
+      rawBody = decodeBody(
+        request.requestBytes,
+        Array.isArray(request.requestHeaders['content-encoding'])
+          ? request.requestHeaders['content-encoding'].join(', ')
+          : request.requestHeaders['content-encoding'],
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+      );
     } catch (err) {
       if (options.mode !== 'replay' || !options.loose) {
         stats.unmatched += 1;
@@ -879,7 +1071,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       index: result.index,
       reason,
     });
-    return { error: `orca: replay halted — ${reason}` };
+    return { error: `agenticreplay: replay halted — ${reason}` };
   }
 
   function replayError(message: string): InterceptResponse {
@@ -891,8 +1083,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         error: {
           type: 'invalid_request_error',
           message:
-            `${message}. Re-run with \`orca replay <run> --loose\` to continue live from this point, ` +
-            'or `orca show <run>` to see what was recorded.',
+            `${message}. Re-run with \`agenticreplay replay <run> --loose\` to continue live from this point, ` +
+            'or `agenticreplay show <run>` to see what was recorded.',
         },
       }),
     };
@@ -903,6 +1095,13 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         server,
         {
           ...options.tls,
+          ...(options.maxCapturedBytes === undefined
+            ? {}
+            : { maxCapturedBytes: options.maxCapturedBytes }),
+          ...(options.maxBufferedBytes === undefined
+            ? {}
+            : { maxBufferedBytes: options.maxBufferedBytes }),
+          onRequestStart: options.onRequestStart,
           ...(options.mode === 'record' ? {} : { onRequest: onInterceptedRequest }),
           onNetExchange: onDecrypted,
         },
@@ -934,12 +1133,14 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     /** Sent upstream, auth included. */
     headers: Record<string, string>,
     /** Written to the trace, auth removed. */
-    recordableHeaders: Record<string, string>,
+    recordableHeaders: Record<string, string | string[]>,
     res: ServerResponse,
     startedAt: number,
+    requestId: string,
+    requestEncoding?: string,
     /**
      * The base URL the request itself names, from a `/forward/` path. It restores the destination
-     * orca took the call away from, so it outranks only the dialect's vendor default — an upstream
+     * agenticreplay took the call away from, so it outranks only the dialect's vendor default — an upstream
      * the operator configured is an instruction and wins. Dropped on a cross-provider fork, where
      * the model asked for is being served by a different origin on purpose.
      */
@@ -969,7 +1170,19 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     } else if (options.forkModel) {
       parsed = dialect.withModel(parsed, options.forkModel);
     }
-    const outboundBody = JSON.stringify(parsed);
+    // A recording must retain the provider's serialized bytes. Re-serializing an unchanged
+    // request silently loses whitespace, field ordering, and unknown textual fields before the
+    // endpoint oracle can compare it. Only a model/provider fork is allowed to construct a new
+    // request body.
+    const outboundBody = options.forkModel === undefined ? rawBody : JSON.stringify(parsed);
+    const requestTranslation =
+      options.forkModel === undefined
+        ? []
+        : [
+            crossProvider
+              ? protocolTranslationTransformation(dialect.id, target.id, 'request.body')
+              : modelOverrideTransformation(dialect.id, options.forkModel),
+          ];
 
     // Prefer an override for the provider we are actually calling; fall back to the override for
     // the recorded provider before the vendor default. That fallback is the gateway case, and it
@@ -977,10 +1190,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // origin, and a gateway serves both dialects from it. Going to api.openai.com instead because
     // the fork changed model would ignore an instruction the user gave explicitly.
     // Where this call goes, in strict order of who decided it. A `/forward/` path names its own
-    // destination — that is the whole point of the encoding — so on a live call that orca is
+    // destination — that is the whole point of the encoding — so on a live call that agenticreplay is
     // merely relaying (record, or a loose replay continuing past its recording) the request's own
-    // base outranks every configured origin: a gateway picked up from `orca setup` is a default
-    // for calls orca would otherwise have to guess at, not a licence to readdress one that
+    // base outranks every configured origin: a gateway picked up from `agenticreplay setup` is a default
+    // for calls agenticreplay would otherwise have to guess at, not a licence to readdress one that
     // announces where it was headed. A fork is different: substituting the model is the operator
     // choosing where answers come from, so the fork target's explicit upstream — or the gateway —
     // decides, and the forwarded base is dropped as incoherent for the substitution.
@@ -990,9 +1203,12 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         ? forwardBase
         : (options.upstream?.[target.id] ??
           options.upstream?.[dialect.id] ??
+          (target.id === 'openai-responses' || target.id === 'codex'
+            ? options.upstream?.openai
+            : undefined) ??
           target.defaultUpstream);
     // A relayed call keeps the path the client appended, because the base it names expects
-    // exactly that. Everything else is answered by an origin orca chose, which expects the
+    // exactly that. Everything else is answered by an origin agenticreplay chose, which expects the
     // dialect's own path — and the incoming path cannot be trusted to be it: a bare base url
     // (no `/v1`) reaches this proxy as `/chat/completions`, and a gateway handed that without the
     // version segment answers 404.
@@ -1001,25 +1217,25 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // shape. A path says which endpoint; a query says how to call it, and the client set it —
     // `?api-version=` is required on every Azure OpenAI call, and dropping it turns a working
     // configuration into `404 Resource not found` with nothing in the run explaining why.
-    // Replacing a path is orca normalising an address it chose; replacing the parameters would
-    // be orca editing the request.
+    // Replacing a path is agenticreplay normalising an address it chose; replacing the parameters would
+    // be agenticreplay editing the request.
     const queryAt = path.indexOf('?');
     const query = queryAt === -1 ? '' : path.slice(queryAt);
     const upstreamPath =
       relaying && forwardBase !== undefined ? path : `${target.requestPath}${query}`;
 
-    // Spec §2: "a gateway chose a model". Orca *is* the gateway on this path — it substitutes the
+    // Spec §2: "a gateway chose a model". AgenticReplay *is* the gateway on this path — it substitutes the
     // model, picks the wire format that serves it, and picks the origin — and it was making all
     // three of those choices silently. Which is the one thing a comparison must not do: reading
     // `claude-opus-5 vs gpt-5.2` in a verdict table tells you nothing about where either went, and
     // a fork that quietly fell back to the recorded provider's origin looked identical to one that
     // did not. Emitted only when a decision was actually taken, so an ordinary recording — where
-    // orca forwards what it was given — stays free of an event saying "nothing was chosen".
+    // agenticreplay forwards what it was given — stays free of an event saying "nothing was chosen".
     if (options.forkModel !== undefined) {
       // Sanitised here for the reason {@link buildExchange} sanitises the exchange's `upstream`,
       // and it is the same value: an origin that came from configuration rather than off the wire,
       // so a gateway that authenticates by URL carries its key in it. This payload is not just
-      // reported — `orca replay --model` and `orca compare --models` write it into the fork's
+      // reported — `agenticreplay replay --model` and `agenticreplay compare --models` write it into the fork's
       // trace as `route.decision.attrs` unchanged, and the trace redactor cannot help, because it
       // matches key shapes and field names and this is a password inside a URL under `origin`.
       // Omitted rather than replaced when it will not parse: no consumer reads it — the viewer
@@ -1052,10 +1268,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         body: outboundBody,
       });
     } catch (err) {
-      // An upstream that never answered, on the path orca *does* understand.
+      // An upstream that never answered, on the path agenticreplay *does* understand.
       //
       // `passThrough` learned this already; this is the same fact one branch over, and it was the
-      // worse half. A call orca recognised as a model exchange and could not forward left no
+      // worse half. A call agenticreplay recognised as a model exchange and could not forward left no
       // event at all: `run.start`, a snapshot, `run.end`. The agent got its 500 and the run then
       // warned `capture.empty ... "the agent never called the proxy — it may not read a base-URL
       // variable"` — which is the opposite of what happened, and sends the operator to check
@@ -1074,9 +1290,36 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // and the bytes the trace holds are the same ones. Rethrowing gave the agent the
       // catch-all's `TypeError: fetch failed` while the trace held this scrubbed reason, and a
       // replay then served the trace's version — a recording that did not reproduce itself.
-      // The agent also gets the better of the two messages: one that names orca and the origin.
+      // The agent also gets the better of the two messages: one that names agenticreplay and the origin.
       const body = JSON.stringify({
-        error: { message: `orca did not forward this call: ${reasonFor(err, origin)}` },
+        error: { message: `agenticreplay did not forward this call: ${reasonFor(err, origin)}` },
+      });
+      options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
+        ...originParts(origin),
+        intercepted: false,
+        method: 'POST',
+        path,
+        requestHeaders: recordableHeaders,
+        requestBody: outboundBody,
+        requestBytes: Buffer.byteLength(outboundBody),
+        requestTruncated: false,
+        status: 0,
+        responseHeaders: {},
+        responseBody: '',
+        responseTruncated: false,
+        responseComplete: false,
+        responseError: reasonFor(err, origin),
+        responseBytes: 0,
+        durationMs: Date.now() - startedAt,
+        transformations: [
+          ...captureHeaderTransformations(headers, recordableHeaders),
+          ...captureEncodingTransformation('request.body', requestEncoding),
+          ...captureUrlTransformations(origin),
+          ...binaryBodyTransformation('request.body', outboundBody),
+          ...binaryBodyTransformation('response.body', body),
+        ],
       });
       recordExchange(body, 500, false);
       res.writeHead(500, { 'content-type': 'application/json' });
@@ -1086,6 +1329,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     const upstreamType = upstreamRes.headers.get('content-type') ?? 'application/json';
     const upstreamStreamed = upstreamType.includes('event-stream');
+    const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
+    const responseDecoded = responseEncoding !== undefined && responseEncoding.trim() !== '';
 
     // The agent asked one provider and must be answered in that provider's shape, whatever served
     // the request. Handing an agent a `chat.completion` body it cannot parse is indistinguishable
@@ -1096,17 +1341,102 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // fork that deliberately changed provider — the recording path, which is what an interactive
     // session runs through, still streams.
     if (crossProvider) {
-      const raw = await upstreamRes.text();
-      const canonical = upstreamStreamed
-        ? target.parseStream(raw)
-        : target.toCanonicalResponse(JSON.parse(raw));
-      // Match the shape the agent asked for, not the shape the other provider happened to send.
+      const received = await readBoundedResponse(
+        upstreamRes,
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+        plainBufferLimit,
+      );
+      if (received.truncated) {
+        emitNetExchange({
+          path: upstreamPath,
+          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+          responseBody: received.text,
+          responseBytes: received.bytes,
+          responseTruncated: true,
+          status: upstreamRes.status,
+          responseComplete: false,
+          responseError: 'cross-provider response exceeded capture limit',
+          streamed: upstreamStreamed,
+          modelDialect: target.id,
+          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
+        });
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({ error: { message: 'cross-provider response exceeded capture limit' } }),
+        );
+        return;
+      }
+      const raw = received.text;
+      // Keep the origin bytes even when protocol translation fails. The client receives an error,
+      // but the recorder must still prove that the origin answered and preserve the response that
+      // caused the translation failure.
+      let body: string;
       const wantsStream = requestedStream(rawBody);
-      const body = dialect.fromCanonicalResponse(canonical, wantsStream);
+      try {
+        const canonical = upstreamStreamed
+          ? target.parseStream(raw)
+          : target.toCanonicalResponse(JSON.parse(raw));
+        // Match the shape the agent asked for, not the shape the other provider happened to send.
+        body = dialect.fromCanonicalResponse(canonical, wantsStream);
+      } catch (err) {
+        emitNetExchange({
+          path: upstreamPath,
+          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+          responseBody: raw,
+          responseBytes: received.bytes,
+          responseTruncated: false,
+          status: upstreamRes.status,
+          responseComplete: received.encodingError === undefined,
+          responseError:
+            received.encodingError ?? `cross-provider response translation failed: ${String(err)}`,
+          streamed: upstreamStreamed,
+          modelDialect: target.id,
+          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
+        });
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({ error: { message: 'cross-provider response translation failed' } }),
+        );
+        return;
+      }
+      if (Buffer.byteLength(body) > (options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES)) {
+        emitNetExchange({
+          path: upstreamPath,
+          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+          responseBody: raw,
+          responseBytes: received.bytes,
+          responseTruncated: false,
+          status: upstreamRes.status,
+          responseComplete: false,
+          responseError: 'cross-provider translated response exceeded capture limit',
+          streamed: wantsStream,
+          modelDialect: target.id,
+          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
+        });
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: { message: 'cross-provider translated response exceeded capture limit' },
+          }),
+        );
+        return;
+      }
       res.writeHead(upstreamRes.status, {
         'content-type': wantsStream ? 'text/event-stream' : 'application/json',
       });
       res.end(body);
+      emitNetExchange({
+        path: upstreamPath,
+        responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+        responseBody: raw,
+        responseBytes: received.bytes,
+        status: upstreamRes.status,
+        responseComplete: received.encodingError === undefined,
+        ...(received.encodingError === undefined ? {} : { responseError: received.encodingError }),
+        streamed: wantsStream,
+        modelDialect: target.id,
+        extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
+      });
       recordExchange(body, upstreamRes.status, wantsStream);
       return;
     }
@@ -1121,9 +1451,96 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // duration — the agent's own progressive rendering stops working because there is nothing
     // progressive left to render. Chunks go straight through; the copy we keep is assembled on the
     // way past, so the recording is still the complete body.
-    const text = await pipeThrough(upstreamRes, res);
+    let piped: PipedBody;
+    try {
+      piped = await pipeThrough(
+        upstreamRes,
+        res,
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+        plainBufferLimit,
+      );
+    } catch (err) {
+      const partial =
+        err instanceof ResponsePipeAbortedError
+          ? err.partial
+          : (err as { partial?: PipedBody }).partial;
+      emitNetExchange({
+        responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+        responseBody: partial?.text ?? '',
+        responseBytes: partial?.bytes ?? 0,
+        status: upstreamRes.status,
+        responseComplete: false,
+        responseTruncated: partial?.truncated ?? false,
+        responseError: String(err),
+        streamed,
+        abandoned: err instanceof ResponsePipeAbortedError,
+      });
+      if (err instanceof ResponsePipeAbortedError) return;
+      throw err;
+    }
 
-    recordExchange(text, upstreamRes.status, streamed);
+    emitNetExchange({
+      responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
+      responseBody: piped.text,
+      responseBytes: piped.bytes,
+      responseTruncated: piped.truncated,
+      status: upstreamRes.status,
+      responseComplete: piped.encodingError === undefined,
+      ...(piped.encodingError === undefined ? {} : { responseError: piped.encodingError }),
+      streamed,
+    });
+
+    if (!piped.truncated && piped.encodingError === undefined)
+      recordExchange(piped.text, upstreamRes.status, streamed);
+
+    function emitNetExchange(input: {
+      responseHeaders: Record<string, string | string[]>;
+      path?: string;
+      responseBody: string;
+      responseBytes: number;
+      status: number;
+      responseComplete: boolean;
+      responseTruncated?: boolean;
+      responseError?: string;
+      abandoned?: boolean;
+      streamed: boolean;
+      modelDialect?: string;
+      extraTransformations?: CaptureTransformation[];
+    }): void {
+      options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
+        ...originParts(origin),
+        intercepted: false,
+        method: 'POST',
+        path: input.path ?? path,
+        requestHeaders: recordableHeaders,
+        requestBody: outboundBody,
+        requestBytes: Buffer.byteLength(outboundBody),
+        requestTruncated: false,
+        status: input.status,
+        responseHeaders: input.responseHeaders,
+        responseBody: input.responseBody,
+        responseComplete: input.responseComplete,
+        responseTruncated: input.responseTruncated ?? false,
+        ...(input.abandoned === true ? { abandoned: true } : {}),
+        ...(input.responseError === undefined ? {} : { responseError: input.responseError }),
+        responseBytes: input.responseBytes,
+        durationMs: Date.now() - startedAt,
+        modelDialect: input.modelDialect ?? dialect.id,
+        transformations: [
+          ...captureHeaderTransformations(headers, recordableHeaders),
+          ...requestTranslation,
+          ...captureEncodingTransformation('request.body', requestEncoding),
+          ...captureResponseHeaderTransformations(upstreamRes.headers),
+          ...captureEncodingTransformation('response.body', responseEncoding),
+          ...(input.extraTransformations ?? []),
+          ...captureUrlTransformations(origin),
+          ...binaryBodyTransformation('request.body', outboundBody),
+          ...binaryBodyTransformation('response.body', input.responseBody),
+        ],
+      });
+    }
 
     /**
      * Recorded whatever the status. A run that died on rate limits used to produce a trace with no
@@ -1142,8 +1559,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         rawResponse,
         status,
         streamed: isStreamed,
-        headers: recordableHeaders,
+        headers: scalarHeaders(recordableHeaders),
         seq: captured.length,
+        requestId,
+        requestStartedAt: startedAt,
         durationMs: Date.now() - startedAt,
         // The origin resolved above, not the one configured: a relayed call keeps the base the
         // client announced, and a fork's substitution can send it somewhere else again.
@@ -1155,24 +1574,24 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   /**
-   * Where a request orca could not read should have gone.
+   * Where a request agenticreplay could not read should have gone.
    *
    * Explicit first, then the gateway: someone who pointed this run at one origin pointed *all* of
-   * it there, and splitting a run across two origins because orca could not read one call is not a
+   * it there, and splitting a run across two origins because agenticreplay could not read one call is not a
    * choice they made. Only then the guess — and the guess is narrow, because it is not choosing a
-   * destination so much as restoring one. Orca took this request away from a provider by rewriting
+   * destination so much as restoring one. AgenticReplay took this request away from a provider by rewriting
    * a base URL; the client's own headers say which provider that was, and its own credential is
    * already on the request addressed to them.
    */
   function passthroughOrigin(
-    headers: Record<string, string>,
+    headers: Record<string, string | string[]>,
     forwardBase?: string,
     opts: { verbatim?: boolean } = {},
   ): string {
     if (options.passthroughUpstream !== undefined) return options.passthroughUpstream;
     // A relayed request's own destination, before anything configured: on a live call with no
     // model substitution, the request says where it was headed, and a gateway picked up from
-    // setup is a default for calls orca would otherwise guess at — not a readdressing of one that
+    // setup is a default for calls agenticreplay would otherwise guess at — not a readdressing of one that
     // announces its own. A fork is a substitution, and its configured origins decide instead.
     //
     // `verbatim` is for a call the fork does *not* substitute anything in. A retrieval call is
@@ -1196,7 +1615,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // Two configured values only means the run has more than one destination — not that this
     // request's own destination is unknown — and picking a vendor default over an origin the
     // operator named is how a run configured with `--upstream-openai <stub>` alongside a gateway
-    // left in `~/.orca/config.json` sent its embedding calls to `api.openai.com`: a third place,
+    // left in `~/.agenticreplay/config.json` sent its embedding calls to `api.openai.com`: a third place,
     // neither of the two configured, carrying the agent's own credential. For a team whose
     // gateway is the point of the gateway, that is every retrieval call bypassing it silently.
     const forFamily = anthropic ? options.upstream?.['anthropic'] : options.upstream?.['openai'];
@@ -1221,9 +1640,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     path: string,
     rawBody: string,
     headers: Record<string, string>,
-    recordableHeaders: Record<string, string>,
+    recordableHeaders: Record<string, string | string[]>,
     res: ServerResponse,
     startedAt: number,
+    requestId: string,
     forwardBase?: string,
   ): Promise<void> {
     let key: string;
@@ -1232,16 +1652,27 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       parsed = JSON.parse(rawBody);
       key = rule.key(parsed);
     } catch (err) {
-      // A body this rule cannot key is a body orca cannot promise anything about. Passthrough is
+      // A body this rule cannot key is a body agenticreplay cannot promise anything about. Passthrough is
       // the honest fallback: forward it, record the bytes, say it is not replayable.
       if (options.mode === 'replay') {
         stats.unmatched += 1;
         const reason = `${path} could not be keyed for replay: ${String(err)}`;
         options.onUnmatched?.({ seq: -1, index: -1, reason });
-        json(res, 502, { error: { message: `orca replay cannot reproduce ${path}: ${reason}` } });
+        json(res, 502, {
+          error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
+        });
         return;
       }
-      await passThrough(path, rawBody, headers, recordableHeaders, res, startedAt, forwardBase);
+      await passThrough(
+        path,
+        rawBody,
+        headers,
+        recordableHeaders,
+        res,
+        startedAt,
+        requestId,
+        forwardBase,
+      );
       return;
     }
 
@@ -1277,7 +1708,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       }
     }
     if (match !== undefined) {
-      // Consumed only where it is actually served. A recorded call orca cannot serve is still the
+      // Consumed only where it is actually served. A recorded call agenticreplay cannot serve is still the
       // answer to this request, and dropping it turned a client's retry — langchain retries a 502
       // — into "no recorded retrieval call matches this request", which is false and sends the
       // reader looking for a mismatch that is not there.
@@ -1290,14 +1721,16 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         return;
       }
       if (match.rawResponse === '') {
-        // Recorded with `--retrieval-store=digest`: orca kept proof of the answer, not the answer.
+        // Recorded with `--retrieval-store=digest`: agenticreplay kept proof of the answer, not the answer.
         const reason =
           `${path} was recorded with --retrieval-store=digest, so the trace holds a digest of ` +
           'the response and not the response. Re-record with the default (full) to replay it';
         if (options.mode === 'replay' && !options.loose) {
           stats.unmatched += 1;
           options.onUnmatched?.({ seq: match.seq, index: -1, reason });
-          json(res, 502, { error: { message: `orca replay cannot reproduce ${path}: ${reason}` } });
+          json(res, 502, {
+            error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
+          });
           return;
         }
       } else {
@@ -1316,7 +1749,9 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         `${key.slice(0, 12)}…). The recording holds ${stats.retrievalTotal} retrieval ` +
         `call${stats.retrievalTotal === 1 ? '' : 's'}, and this is not one of them`;
       options.onUnmatched?.({ seq: -1, index: -1, reason });
-      json(res, 502, { error: { message: `orca replay cannot reproduce ${path}: ${reason}` } });
+      json(res, 502, {
+        error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
+      });
       return;
     }
 
@@ -1332,6 +1767,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       recordableHeaders,
       res,
       startedAt,
+      requestId,
       forwardBase,
     );
   }
@@ -1353,9 +1789,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     path: string,
     rawBody: string,
     headers: Record<string, string>,
-    recordableHeaders: Record<string, string>,
+    recordableHeaders: Record<string, string | string[]>,
     res: ServerResponse,
     startedAt: number,
+    requestId: string,
     forwardBase?: string,
   ): Promise<void> {
     stats.passedThrough += 1;
@@ -1384,6 +1821,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // seen, and a retrieval call is already recorded as network traffic rather than as a
       // replayable model exchange.
       options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
         ...originParts(origin),
         method: 'POST',
         path,
@@ -1393,30 +1832,76 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         ...(batchKey === undefined ? {} : { batchKey }),
         requestHeaders: recordableHeaders,
         requestBody: rawBody,
+        requestBytes: Buffer.byteLength(rawBody),
         requestTruncated: false,
         status: 0,
         responseHeaders: {},
-        responseBody: `orca did not forward this call: ${reasonFor(err, origin)}`,
+        responseBody: `agenticreplay did not forward this call: ${reasonFor(err, origin)}`,
         responseTruncated: false,
+        responseComplete: false,
+        responseError: reasonFor(err, origin),
         responseBytes: 0,
         durationMs: Date.now() - startedAt,
       });
       throw err;
     }
 
-    const responseHeaders: Record<string, string> = {};
-    upstreamRes.headers.forEach((value, key2) => {
-      responseHeaders[key2.toLowerCase()] = value;
-    });
+    const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
+    const responseHeaders = captureResponseHeaders(
+      upstreamRes.headers,
+      responseEncoding !== undefined && responseEncoding.trim() !== '',
+    );
     res.writeHead(upstreamRes.status, {
       'content-type': responseHeaders['content-type'] ?? 'application/json',
     });
-    const body = await pipeThrough(upstreamRes, res);
+    let piped: PipedBody;
+    try {
+      piped = await pipeThrough(
+        upstreamRes,
+        res,
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+        plainBufferLimit,
+      );
+    } catch (err) {
+      const partial =
+        err instanceof ResponsePipeAbortedError
+          ? err.partial
+          : (err as { partial?: PipedBody }).partial;
+      options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
+        ...originParts(origin),
+        method: 'POST',
+        path,
+        intercepted: false,
+        rule: rule.id,
+        replayKey: key,
+        ...(batchKey === undefined ? {} : { batchKey }),
+        requestHeaders: recordableHeaders,
+        requestBody: rawBody,
+        requestBytes: Buffer.byteLength(rawBody),
+        requestTruncated: false,
+        status: upstreamRes.status,
+        responseHeaders,
+        responseBody: partial?.text ?? '',
+        responseTruncated: partial?.truncated ?? false,
+        responseComplete: false,
+        responseError: String(err),
+        responseBytes: partial?.bytes ?? 0,
+        ...(err instanceof ResponsePipeAbortedError ? { abandoned: true } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+      if (err instanceof ResponsePipeAbortedError) return;
+      throw err;
+    }
+    const body = piped.text;
 
     const digest = createHash('sha256').update(body).digest('hex');
     const keepBody = (options.retrievalStore ?? 'full') === 'full';
     const { host, port } = originParts(origin);
     options.onNetExchange?.({
+      requestId,
+      requestStartedAt: startedAt,
       host,
       port,
       method: 'POST',
@@ -1429,6 +1914,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       ...(batchKey === undefined ? {} : { batchKey }),
       requestHeaders: recordableHeaders,
       requestBody: rawBody,
+      requestBytes: Buffer.byteLength(rawBody),
       requestTruncated: false,
       status: upstreamRes.status,
       responseHeaders,
@@ -1436,9 +1922,23 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // a wrong one, and the digest already says whether a later run agreed.
       responseBody: keepBody ? body : '',
       responseDigest: digest,
-      responseTruncated: false,
-      responseBytes: Buffer.byteLength(body),
+      responseTruncated: piped.truncated,
+      responseComplete: !piped.truncated && piped.encodingError === undefined,
+      ...(piped.truncated
+        ? { responseError: 'response exceeded capture limit' }
+        : piped.encodingError === undefined
+          ? {}
+          : { responseError: piped.encodingError }),
+      responseBytes: piped.bytes,
       durationMs: Date.now() - startedAt,
+      transformations: [
+        ...captureHeaderTransformations(headers, recordableHeaders),
+        ...captureResponseHeaderTransformations(upstreamRes.headers),
+        ...captureEncodingTransformation('response.body', responseEncoding),
+        ...captureUrlTransformations(origin),
+        ...binaryBodyTransformation('request.body', rawBody),
+        ...binaryBodyTransformation('response.body', body),
+      ],
     });
   }
 
@@ -1471,7 +1971,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   /**
    * Forward a POST no dialect claims, and record that it happened.
    *
-   * It is recorded as `NetExchange` rather than `RecordedExchange` on purpose: orca holds the bytes
+   * It is recorded as `NetExchange` rather than `RecordedExchange` on purpose: agenticreplay holds the bytes
    * but not the meaning, so it cannot match this request on replay or rewrite its model on a fork.
    * Filing it with the model exchanges would inflate `reused=n/m` with turns replay will never
    * serve, and an operator would be reading a fidelity number that is not one.
@@ -1498,24 +1998,28 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     path: string,
     rawBody: string,
     headers: Record<string, string>,
-    recordableHeaders: Record<string, string>,
+    recordableHeaders: Record<string, string | string[]>,
     res: ServerResponse,
     startedAt: number,
+    requestId: string,
     forwardBase?: string,
+    requestEncoding?: string,
   ): Promise<void> {
     // `hybrid` is a fork, and a fork runs a live agent — so it forwards, exactly as `record` does.
-    // Refusing here killed the fork on the first call orca could not read, which is the failure
+    // Refusing here killed the fork on the first call agenticreplay could not read, which is the failure
     // passthrough exists to prevent, reintroduced one mode over.
     if (options.mode === 'replay') {
-      // Strict replay has the network blocked and no recording to serve from — orca never
-      // understood this call well enough to match it. Say so: a bare 502 mid-replay reads as orca
+      // Strict replay has the network blocked and no recording to serve from — agenticreplay never
+      // understood this call well enough to match it. Say so: a bare 502 mid-replay reads as agenticreplay
       // being broken, when the honest fact is narrower and more useful than that.
       stats.unmatched += 1;
       const reason =
         `${path} was captured as opaque network traffic, not as a model exchange, so it ` +
         'cannot be replayed. Recorded with --tls-intercept, or on a path no dialect claims.';
       options.onUnmatched?.({ seq: -1, index: -1, reason });
-      json(res, 502, { error: { message: `orca replay cannot reproduce ${path}: ${reason}` } });
+      json(res, 502, {
+        error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
+      });
       return;
     }
 
@@ -1526,7 +2030,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       upstreamRes = await doFetch(`${origin}${path}`, {
         method: 'POST',
         // `upstreamHeaders` too, as `goLive` does. Omitting them sent a gateway the agent's own
-        // credential — often the `orca-recorded` placeholder — and the call came back 401 for a
+        // credential — often the `agenticreplay-recorded` placeholder — and the call came back 401 for a
         // reason nothing in the trace explained.
         headers: {
           'content-type': 'application/json',
@@ -1551,31 +2055,74 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // was ever seen. The reason travels in the body, scrubbed, because the message names the
       // origin it was given.
       options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
         ...originParts(origin),
         method: 'POST',
         intercepted: false,
         path,
         requestHeaders: recordableHeaders,
         requestBody: rawBody,
+        requestBytes: Buffer.byteLength(rawBody),
         requestTruncated: false,
         status: 0,
         responseHeaders: {},
-        responseBody: `orca did not forward this call: ${reasonFor(err, origin)}`,
+        responseBody: `agenticreplay did not forward this call: ${reasonFor(err, origin)}`,
         responseTruncated: false,
+        responseComplete: false,
+        responseError: reasonFor(err, origin),
         responseBytes: 0,
         durationMs: Date.now() - startedAt,
       });
       throw err;
     }
 
-    const responseHeaders: Record<string, string> = {};
-    upstreamRes.headers.forEach((value, key) => {
-      responseHeaders[key.toLowerCase()] = value;
-    });
+    const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
+    const responseHeaders = captureResponseHeaders(
+      upstreamRes.headers,
+      responseEncoding !== undefined && responseEncoding.trim() !== '',
+    );
     res.writeHead(upstreamRes.status, {
       'content-type': responseHeaders['content-type'] ?? 'application/json',
     });
-    const body = await pipeThrough(upstreamRes, res);
+    let piped: PipedBody;
+    try {
+      piped = await pipeThrough(
+        upstreamRes,
+        res,
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+        plainBufferLimit,
+      );
+    } catch (err) {
+      const partial =
+        err instanceof ResponsePipeAbortedError
+          ? err.partial
+          : (err as { partial?: PipedBody }).partial;
+      options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
+        ...originParts(origin),
+        method: 'POST',
+        path,
+        intercepted: false,
+        requestHeaders: recordableHeaders,
+        requestBody: rawBody,
+        requestBytes: Buffer.byteLength(rawBody),
+        requestTruncated: false,
+        status: upstreamRes.status,
+        responseHeaders,
+        responseBody: partial?.text ?? '',
+        responseTruncated: partial?.truncated ?? false,
+        responseComplete: false,
+        responseError: String(err),
+        responseBytes: partial?.bytes ?? 0,
+        ...(err instanceof ResponsePipeAbortedError ? { abandoned: true } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+      if (err instanceof ResponsePipeAbortedError) return;
+      throw err;
+    }
+    const body = piped.text;
 
     let host = origin;
     let port = 443;
@@ -1587,32 +2134,50 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // An origin that does not parse is still worth recording under the string we were given.
     }
     options.onNetExchange?.({
+      requestId,
+      requestStartedAt: startedAt,
       host,
       port,
       method: 'POST',
       path,
-      // Orca decrypted nothing here: the harness sent this in plaintext to the local proxy, and
-      // orca relayed it. Saying otherwise puts a claim about TLS termination in the trace over a
-      // host orca never terminated TLS for.
+      // AgenticReplay decrypted nothing here: the harness sent this in plaintext to the local proxy, and
+      // agenticreplay relayed it. Saying otherwise puts a claim about TLS termination in the trace over a
+      // host agenticreplay never terminated TLS for.
       intercepted: false,
       // `recordableHeaders`, never `headers`: the auth material was forwarded a moment ago and
       // must not now be written down. §7 says never write it, which is not the same as never relay it.
       requestHeaders: recordableHeaders,
       requestBody: rawBody,
+      requestBytes: Buffer.byteLength(rawBody),
       requestTruncated: false,
       status: upstreamRes.status,
       responseHeaders,
       responseBody: body,
-      responseTruncated: false,
-      responseBytes: Buffer.byteLength(body),
+      responseTruncated: piped.truncated,
+      responseComplete: !piped.truncated && piped.encodingError === undefined,
+      ...(piped.truncated
+        ? { responseError: 'response exceeded capture limit' }
+        : piped.encodingError === undefined
+          ? {}
+          : { responseError: piped.encodingError }),
+      responseBytes: piped.bytes,
       durationMs: Date.now() - startedAt,
+      transformations: [
+        ...captureHeaderTransformations(headers, recordableHeaders),
+        ...captureEncodingTransformation('request.body', requestEncoding),
+        ...captureResponseHeaderTransformations(upstreamRes.headers),
+        ...captureEncodingTransformation('response.body', responseEncoding),
+        ...captureUrlTransformations(origin),
+        ...binaryBodyTransformation('request.body', rawBody),
+        ...binaryBodyTransformation('response.body', body),
+      ],
     });
   }
 
   /**
    * The host a `/forward/` path names, for a rule that wants to tell two vendors apart.
    *
-   * Only where the request announced its own destination. On an ordinary redirected call orca knows
+   * Only where the request announced its own destination. On an ordinary redirected call agenticreplay knows
    * where it is *sending* the request but not where the client thought it was going, and inventing
    * a host would let a rule claim an endpoint on evidence that does not exist.
    */
@@ -1641,33 +2206,178 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
    * built without one — so fall back to buffering rather than failing: the point is never to lose
    * the recording.
    */
-  async function pipeThrough(upstream: Response, res: ServerResponse): Promise<string> {
-    const body = upstream.body;
-    if (!body) {
-      const text = await upstream.text();
-      res.end(text);
-      return text;
-    }
+  interface PipedBody {
+    text: string;
+    bytes: number;
+    truncated: boolean;
+    encodingError?: string;
+  }
 
-    const decoder = new TextDecoder();
-    const reader = body.getReader();
-    let text = '';
+  function recordableUtf8(bytes: Buffer): { text: string; encodingError?: string } {
+    const text = bytes.toString('utf8');
+    if (Buffer.compare(Buffer.from(text, 'utf8'), bytes) === 0) return { text };
+    return {
+      text: `${BINARY_BODY_PREFIX}${bytes.toString('base64')}`,
+      encodingError: 'unsupported_binary_body',
+    };
+  }
+
+  class ResponsePipeAbortedError extends Error {
+    constructor(
+      readonly partial: PipedBody,
+      message = 'client closed response',
+    ) {
+      super(message);
+      this.name = 'ResponsePipeAbortedError';
+    }
+  }
+
+  async function readBoundedResponse(
+    upstream: Response,
+    captureLimit: number,
+    aggregateLimit: number,
+  ): Promise<PipedBody> {
+    if (!upstream.body) {
+      const bytesBuffer = Buffer.from(await upstream.arrayBuffer());
+      const bytes = bytesBuffer.byteLength;
+      const decoded = recordableUtf8(bytesBuffer.subarray(0, captureLimit));
+      return {
+        text: decoded.text,
+        bytes,
+        truncated: bytes > captureLimit,
+        ...(decoded.encodingError === undefined ? {} : { encodingError: decoded.encodingError }),
+      };
+    }
+    const reader = upstream.body.getReader();
+    const chunks: Buffer[] = [];
+    let capturedBytes = 0;
+    let bytes = 0;
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        text += decoder.decode(value, { stream: true });
+        bytes += value.byteLength;
+        const room = Math.min(captureLimit - capturedBytes, aggregateLimit - plainBufferedBytes);
+        if (room > 0) {
+          const keep = Math.min(room, value.byteLength);
+          chunks.push(Buffer.from(value.subarray(0, keep)));
+          capturedBytes += keep;
+          plainBufferedBytes += keep;
+        }
+      }
+      const decoded = recordableUtf8(Buffer.concat(chunks));
+      return {
+        text: decoded.text,
+        bytes,
+        truncated: bytes > captureLimit || capturedBytes < bytes,
+        ...(decoded.encodingError === undefined ? {} : { encodingError: decoded.encodingError }),
+      };
+    } finally {
+      plainBufferedBytes = Math.max(0, plainBufferedBytes - capturedBytes);
+    }
+  }
+
+  async function pipeThrough(
+    upstream: Response,
+    res: ServerResponse,
+    captureLimit = Number.MAX_SAFE_INTEGER,
+    aggregateLimit = Number.MAX_SAFE_INTEGER,
+  ): Promise<PipedBody> {
+    const body = upstream.body;
+    if (!body) {
+      const bytesBuffer = Buffer.from(await upstream.arrayBuffer());
+      res.end(bytesBuffer);
+      const bytes = bytesBuffer.byteLength;
+      const decoded = recordableUtf8(bytesBuffer.subarray(0, captureLimit));
+      return {
+        text: decoded.text,
+        bytes,
+        truncated: bytes > captureLimit,
+        ...(decoded.encodingError === undefined ? {} : { encodingError: decoded.encodingError }),
+      };
+    }
+
+    const reader = body.getReader();
+    const captured: Buffer[] = [];
+    let capturedBytes = 0;
+    let bytes = 0;
+    let closed = res.destroyed || res.writableEnded;
+    const onClose = () => {
+      closed = true;
+      void reader.cancel();
+    };
+    res.once('close', onClose);
+    const partial = (): PipedBody => {
+      const buffer = Buffer.concat(captured);
+      const decoded = recordableUtf8(buffer);
+      return {
+        text: decoded.text,
+        bytes,
+        truncated: bytes > captureLimit || capturedBytes < bytes,
+        ...(decoded.encodingError === undefined ? {} : { encodingError: decoded.encodingError }),
+      };
+    };
+    try {
+      for (;;) {
+        if (closed) throw new ResponsePipeAbortedError(partial());
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (capturedBytes < captureLimit) {
+          const aggregateRoom = Math.max(0, aggregateLimit - plainBufferedBytes);
+          const keep = Math.min(value.byteLength, captureLimit - capturedBytes, aggregateRoom);
+          if (keep > 0) {
+            captured.push(Buffer.from(value.subarray(0, keep)));
+            capturedBytes += keep;
+            plainBufferedBytes += keep;
+          }
+        }
         // Backpressure: if the socket says it is full, wait for it rather than buffering in memory
         // on the agent's behalf.
         if (!res.write(value)) {
-          await new Promise<void>((resolve) => res.once('drain', resolve));
+          await new Promise<void>((resolve, reject) => {
+            const onDrain = () => {
+              cleanup();
+              resolve();
+            };
+            const onResponseClose = () => {
+              cleanup();
+              closed = true;
+              reject(new ResponsePipeAbortedError(partial()));
+            };
+            const cleanup = () => {
+              res.off('drain', onDrain);
+              res.off('close', onResponseClose);
+            };
+            res.once('drain', onDrain);
+            res.once('close', onResponseClose);
+            if (res.destroyed || res.writableEnded) onResponseClose();
+          });
         }
       }
-      text += decoder.decode();
+    } catch (err) {
+      plainBufferedBytes = Math.max(0, plainBufferedBytes - capturedBytes);
+      if (err instanceof ResponsePipeAbortedError) throw err;
+      if (err instanceof Error) {
+        Object.defineProperty(err, 'partial', { value: partial(), enumerable: false });
+        throw err;
+      }
+      const wrapped = new Error(String(err));
+      Object.defineProperty(wrapped, 'partial', { value: partial(), enumerable: false });
+      throw wrapped;
     } finally {
+      res.off('close', onClose);
       res.end();
     }
-    return text;
+    const buffer = Buffer.concat(captured);
+    const decoded = recordableUtf8(buffer);
+    plainBufferedBytes = Math.max(0, plainBufferedBytes - capturedBytes);
+    return {
+      text: decoded.text,
+      bytes,
+      truncated: bytes > captureLimit || capturedBytes < bytes,
+      ...(decoded.encodingError === undefined ? {} : { encodingError: decoded.encodingError }),
+    };
   }
 
   function buildExchange(input: {
@@ -1679,6 +2389,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     streamed: boolean;
     headers: Record<string, string>;
     seq: number;
+    requestId?: string;
+    requestStartedAt?: number;
     durationMs: number;
     alpn?: string;
     responseDecodedFrom?: string;
@@ -1697,6 +2409,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     }
     return {
       seq: input.seq,
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.requestStartedAt === undefined ? {} : { requestStartedAt: input.requestStartedAt }),
       dialect: input.dialect.id,
       path: input.path,
       rawRequest: input.rawRequest,
@@ -1729,10 +2443,11 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // `/v1/chat/completions`, which is `404 Resource not found` on Azure OpenAI, where that
     // parameter is required on every call. The trace lost it too, so nothing in the run said why.
     const rawPath = req.url ?? '/';
+    const requestId = randomUUID();
     const path = rawPath.split('?')[0] ?? '/';
     const query = rawPath.slice(path.length);
 
-    if (path === '/__orca/health') {
+    if (path === '/__agenticreplay/health') {
       json(res, 200, { ok: true, ...stats });
       return;
     }
@@ -1740,81 +2455,378 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // A `/forward/` path carries the base URL the client was actually given — see
     // `decodeForwardPath`. The dialect reads the real path behind the prefix, and everything
     // recorded below does too, so the trace shows the conversation the agent had, not the
-    // envelope orca wrapped it in.
+    // envelope agenticreplay wrapped it in.
     const forward: ForwardPath | undefined = decodeForwardPath(path);
     const dialectPath = forward?.path ?? path;
-    /** What goes upstream and into the trace: the endpoint orca resolved, called the way it was. */
+    /** What goes upstream and into the trace: the endpoint agenticreplay resolved, called the way it was. */
     const requestedPath = `${dialectPath}${query}`;
 
     const dialect = selectDialect(dialects, dialectPath);
     // Only a POST is ever a model call. Relaxing this to `!dialect && …` let a PUT or a DELETE on
     // a dialect path through to `goLive`, which forwarded it upstream and recorded it as a model
     // exchange; and it turned `GET /v1/messages` into a 400 about unreadable JSON rather than the
-    // honest answer. Method first, then passthrough decides what to do with a POST orca cannot read.
-    if (req.method !== 'POST') {
+    // honest answer. Method first, then passthrough decides what to do with a POST agenticreplay cannot read.
+    if (req.method !== 'POST' && req.headers.upgrade === undefined) {
       json(res, 404, {
-        error: { message: `orca proxy does not handle ${req.method ?? 'GET'} ${dialectPath}` },
+        error: {
+          message: `agenticreplay proxy does not handle ${req.method ?? 'GET'} ${dialectPath}`,
+        },
       });
       return;
     }
 
-    const rawBody = await readBody(req);
-    const headers: Record<string, string> = {};
-    const recordableHeaders: Record<string, string> = {};
-    for (const [k, v] of Object.entries(req.headers)) {
-      const key = k.toLowerCase();
-      if (HOP_BY_HOP_HEADERS.has(key)) continue;
-      if (typeof v !== 'string') continue;
-      headers[k] = v;
-      if (!SECRET_REQUEST_HEADERS.has(key)) recordableHeaders[k] = v;
+    const startHeaders: Record<string, string | string[]> = {};
+    for (const [name, value] of Object.entries(req.headers)) {
+      const key = name.toLowerCase();
+      if (HOP_BY_HOP_HEADERS.has(key) || SECRET_REQUEST_HEADERS.has(key) || value === undefined)
+        continue;
+      startHeaders[key] = value;
+    }
+    const configuredDialectOrigin = dialect
+      ? (options.upstream?.[dialect.id] ??
+        (dialect.id === 'openai-responses' || dialect.id === 'codex'
+          ? options.upstream?.openai
+          : undefined) ??
+        dialect.defaultUpstream)
+      : undefined;
+    const startOrigin = dialect
+      ? (forward?.base ?? configuredDialectOrigin)
+      : passthroughOrigin(startHeaders, forward?.base);
+    if (startOrigin === undefined) throw new Error('unable to resolve request destination');
+    const startDestination = originParts(startOrigin);
+    const startRequest: NetRequest = {
+      requestId,
+      requestStartedAt: startedAt,
+      host: startDestination.host,
+      port: startDestination.port,
+      method: req.method ?? 'GET',
+      path: requestedPath,
+      requestHeaders: startHeaders,
+      requestBytes: Buffer.alloc(0),
+      requestTruncated: false,
+    };
+    try {
+      await options.onRequestStart?.(startRequest);
+    } catch (err) {
+      try {
+        options.onNetExchange?.({
+          ...startRequest,
+          requestBytes: 0,
+          requestBody: '',
+          status: 0,
+          responseHeaders: {},
+          responseBody: '',
+          responseTruncated: false,
+          responseComplete: false,
+          responseError: `request-start recorder failed: ${String(err)}`,
+          responseBytes: 0,
+          intercepted: false,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // Preserve the recorder failure when terminal persistence cannot itself be recorded.
+      }
+      throw err;
     }
 
-    if (!dialect) {
-      // Before passthrough, and only where no dialect claims the path: a dialect is the richer
-      // reading of a call — replayable, forkable, counted in `exact` — and a rule that outranked
-      // one would turn a chat completion into opaque bytes keyed by their own body.
-      const rule = selectRetrievalRule(retrievalRules, dialectPath, forwardHost(forward));
-      if (rule && isReadable(rawBody)) {
-        await serveRetrieval(
-          rule,
+    if (req.headers.upgrade !== undefined) {
+      const message = 'unsupported WebSocket transport';
+      const responseBody = JSON.stringify({ error: { message } });
+      options.onNetExchange?.({
+        ...startRequest,
+        requestBytes: 0,
+        requestBody: '',
+        status: 501,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody,
+        responseBytes: Buffer.byteLength(responseBody),
+        responseComplete: false,
+        responseTruncated: false,
+        responseError: message,
+        intercepted: false,
+        durationMs: Date.now() - startedAt,
+        transformations: [
+          {
+            kind: 'omission',
+            location: 'transport',
+            rule: 'unsupported_transport',
+            count: 1,
+            reason: 'WebSocket frames are not captured',
+          },
+        ],
+      });
+      json(res, 501, { error: { message } });
+      return;
+    }
+
+    let rawBody: string;
+    let requestBytes: number;
+    let requestReservedBytes = 0;
+    try {
+      const read = await readBody(req, options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES);
+      rawBody = decodeBody(
+        read.body,
+        Array.isArray(req.headers['content-encoding'])
+          ? req.headers['content-encoding'].join(', ')
+          : req.headers['content-encoding'],
+        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+      );
+      requestBytes = read.bytes;
+      requestReservedBytes = Buffer.byteLength(rawBody);
+      if (plainBufferedBytes + requestReservedBytes > plainBufferLimit) {
+        throw new BodyLimitError(requestReservedBytes, plainBufferLimit);
+      }
+      plainBufferedBytes += requestReservedBytes;
+    } catch (err) {
+      if (!(err instanceof BodyLimitError)) {
+        options.onNetExchange?.({
+          requestId,
+          requestStartedAt: startedAt,
+          host: req.headers.host ?? 'local',
+          port: 0,
+          intercepted: false,
+          method: req.method ?? 'POST',
+          path: requestedPath,
+          requestHeaders: {},
+          requestBody: '',
+          requestBytes: 0,
+          requestTruncated: true,
+          status: 0,
+          responseHeaders: {},
+          responseBody: '',
+          responseTruncated: false,
+          responseComplete: false,
+          responseError: String(err),
+          responseBytes: 0,
+          durationMs: Date.now() - startedAt,
+        });
+        json(res, 400, {
+          error: { message: `agenticreplay could not decode request body: ${String(err)}` },
+        });
+        return;
+      }
+      options.onNetExchange?.({
+        requestId,
+        requestStartedAt: startedAt,
+        host: req.headers.host ?? 'local',
+        port: 0,
+        intercepted: false,
+        method: req.method ?? 'POST',
+        path: requestedPath,
+        requestHeaders: {},
+        requestBody: '',
+        requestBytes: err.bytes,
+        requestTruncated: true,
+        status: 0,
+        responseHeaders: {},
+        responseBody: '',
+        responseTruncated: false,
+        responseComplete: false,
+        responseError: String(err),
+        responseBytes: 0,
+        durationMs: Date.now() - startedAt,
+      });
+      json(res, 413, { error: { message: String(err) } });
+      return;
+    }
+    const inboundRequestHeader = req.headers['content-encoding'] as string | string[] | undefined;
+    const inboundRequestEncoding = Array.isArray(inboundRequestHeader)
+      ? inboundRequestHeader.join(', ')
+      : inboundRequestHeader;
+    try {
+      const headers: Record<string, string> = {};
+      const recordableHeaders: Record<string, string | string[]> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        const key = k.toLowerCase();
+        if (HOP_BY_HOP_HEADERS.has(key)) continue;
+        if (v === undefined) continue;
+        headers[k] = Array.isArray(v) ? v.join(', ') : v;
+      }
+      // Node's parsed headers combine repeated fields. Keep the raw field order and multiplicity
+      // for persisted evidence while retaining the scalar map above for fetch forwarding.
+      for (let index = 0; index + 1 < req.rawHeaders.length; index += 2) {
+        const key = req.rawHeaders[index]!.toLowerCase();
+        if (HOP_BY_HOP_HEADERS.has(key) || SECRET_REQUEST_HEADERS.has(key)) continue;
+        const value = req.rawHeaders[index + 1]!;
+        const prior = recordableHeaders[key];
+        recordableHeaders[key] =
+          prior === undefined ? value : Array.isArray(prior) ? [...prior, value] : [prior, value];
+      }
+      // `decodeBody` above gives the origin the serialized JSON rather than the compressed wire
+      // bytes. Remove the stale framing headers or the origin will try to decompress plaintext.
+      if (headers['content-encoding'] !== undefined) {
+        delete headers['content-encoding'];
+        delete recordableHeaders['content-encoding'];
+        const length = String(Buffer.byteLength(rawBody));
+        headers['content-length'] = length;
+        recordableHeaders['content-length'] = length;
+      }
+
+      if (!dialect) {
+        // Before passthrough, and only where no dialect claims the path: a dialect is the richer
+        // reading of a call — replayable, forkable, counted in `exact` — and a rule that outranked
+        // one would turn a chat completion into opaque bytes keyed by their own body.
+        const rule = selectRetrievalRule(retrievalRules, dialectPath, forwardHost(forward));
+        if (rule && isReadable(rawBody)) {
+          await serveRetrieval(
+            rule,
+            requestedPath,
+            rawBody,
+            headers,
+            recordableHeaders,
+            res,
+            startedAt,
+            requestId,
+            forward?.base,
+          );
+          return;
+        }
+        await passThrough(
           requestedPath,
           rawBody,
           headers,
           recordableHeaders,
           res,
           startedAt,
+          requestId,
+          forward?.base,
+          inboundRequestEncoding,
+        );
+        return;
+      }
+
+      // Parsed here rather than inside `goLive`, which read it unguarded — so a body agenticreplay could not
+      // read reached the server's catch-all and came back as `500 SyntaxError: …`. To whoever is
+      // running the agent that reads as agenticreplay falling over, and sends them to agenticreplay's issue tracker
+      // instead of to the line of their own harness that sent it. Replay already answered 400.
+      if (!isReadable(rawBody)) {
+        const errorBody = {
+          error: {
+            message:
+              `agenticreplay proxy could not read the body of POST ${dialectPath}: expected JSON, got ` +
+              `${rawBody === '' ? 'an empty body' : `${rawBody.length} bytes that do not parse`}`,
+          },
+        };
+        options.onNetExchange?.({
+          requestId,
+          requestStartedAt: startedAt,
+          host: req.headers.host ?? 'local',
+          port: 0,
+          intercepted: false,
+          method: req.method ?? 'POST',
+          path: requestedPath,
+          requestHeaders: recordableHeaders,
+          requestBody: rawBody,
+          requestBytes,
+          requestTruncated: false,
+          status: 400,
+          responseHeaders: { 'content-type': 'application/json' },
+          responseBody: JSON.stringify(errorBody),
+          responseTruncated: false,
+          responseComplete: true,
+          responseBytes: Buffer.byteLength(JSON.stringify(errorBody)),
+          durationMs: Date.now() - startedAt,
+          transformations: binaryBodyTransformation('request.body', rawBody),
+        });
+        json(res, 400, errorBody);
+        return;
+      }
+
+      if (options.mode === 'record') {
+        await goLive(
+          dialect,
+          requestedPath,
+          rawBody,
+          headers,
+          recordableHeaders,
+          res,
+          startedAt,
+          requestId,
+          inboundRequestEncoding,
           forward?.base,
         );
         return;
       }
-      await passThrough(
-        requestedPath,
-        rawBody,
-        headers,
-        recordableHeaders,
-        res,
-        startedAt,
-        forward?.base,
-      );
-      return;
-    }
 
-    // Parsed here rather than inside `goLive`, which read it unguarded — so a body orca could not
-    // read reached the server's catch-all and came back as `500 SyntaxError: …`. To whoever is
-    // running the agent that reads as orca falling over, and sends them to orca's issue tracker
-    // instead of to the line of their own harness that sent it. Replay already answered 400.
-    if (!isReadable(rawBody)) {
-      json(res, 400, {
-        error: {
-          message:
-            `orca proxy could not read the body of POST ${dialectPath}: expected JSON, got ` +
-            `${rawBody === '' ? 'an empty body' : `${rawBody.length} bytes that do not parse`}`,
-        },
-      });
-      return;
-    }
+      // Replay and hybrid: try the recording first.
+      let canonical: CanonicalRequest;
+      try {
+        canonical = dialect.toCanonicalRequest(JSON.parse(rawBody));
+      } catch (err) {
+        json(res, 400, { error: { message: `unparseable request body: ${String(err)}` } });
+        return;
+      }
 
-    if (options.mode === 'record') {
+      const beyondFork =
+        options.mode === 'hybrid' && matcher.cursor >= (options.forkAt ?? replayable.length);
+
+      if (!beyondFork) {
+        const result = matcher.match(canonical);
+        if (result.matched) {
+          const exchange = replayable[result.index]!;
+          if (result.reordered) stats.reordered += 1;
+          if (result.divergence) {
+            stats.matchedInexact += 1;
+            stats.divergences += 1;
+            options.onDivergence?.({ ...result.divergence, seq: exchange.seq });
+          } else {
+            stats.matchedExact += 1;
+          }
+          res.writeHead(exchange.status, {
+            'content-type': exchange.streamed ? 'text/event-stream' : 'application/json',
+          });
+          res.end(exchange.rawResponse);
+          return;
+        }
+
+        stats.unmatched += 1;
+
+        // Hybrid mode is *supposed* to continue live here — that is what forking means — but spec §4
+        // says replay must not silently approximate, and every inexact match is an event in the
+        // trace. Without this a fork could start diverging below its own fork point and every
+        // artifact it produced would look clean. Going live is the right behaviour; being quiet
+        // about it is not.
+        if (options.mode === 'hybrid' || options.loose) {
+          stats.divergences += 1;
+          options.onDivergence?.({
+            level: 'major',
+            rung: 4,
+            distance: -1,
+            detail: result.reason ?? 'request does not match the recording; served live instead',
+            seq: replayable[result.index]?.seq ?? -1,
+          });
+        }
+
+        if (!options.loose && options.mode === 'replay') {
+          // Halt loudly. Inventing a reply here would make every downstream conclusion worthless.
+          const reason = result.reason ?? 'request does not match the recording';
+          options.onUnmatched?.({
+            seq: replayable[result.index]?.seq ?? -1,
+            index: result.index,
+            reason,
+          });
+
+          // 400, emphatically not 409. Every mainstream client retries 408/409/429/5xx by default,
+          // so a 409 halt is re-sent until the retry budget is gone — the operator gets a stalled
+          // terminal and no reason, which is strictly worse than a wrong answer because it looks
+          // like a hang in agenticreplay rather than a mismatch in the recording. 400 is terminal everywhere.
+          //
+          // The envelope is the provider's own error shape for the same reason: clients read
+          // `error.message` and print it, so this sentence is what actually reaches the human.
+          json(res, 400, {
+            type: 'error',
+            error: {
+              type: 'invalid_request_error',
+              message:
+                `agenticreplay: replay halted — ${reason}. ` +
+                'Re-run with `agenticreplay replay <run> --loose` to continue live from this point, ' +
+                'or `agenticreplay show <run>` to see what was recorded.',
+            },
+          });
+          return;
+        }
+      }
+
       await goLive(
         dialect,
         requestedPath,
@@ -1823,100 +2835,13 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         recordableHeaders,
         res,
         startedAt,
+        requestId,
+        inboundRequestEncoding,
         forward?.base,
       );
-      return;
+    } finally {
+      plainBufferedBytes = Math.max(0, plainBufferedBytes - requestReservedBytes);
     }
-
-    // Replay and hybrid: try the recording first.
-    let canonical: CanonicalRequest;
-    try {
-      canonical = dialect.toCanonicalRequest(JSON.parse(rawBody));
-    } catch (err) {
-      json(res, 400, { error: { message: `unparseable request body: ${String(err)}` } });
-      return;
-    }
-
-    const beyondFork =
-      options.mode === 'hybrid' && matcher.cursor >= (options.forkAt ?? replayable.length);
-
-    if (!beyondFork) {
-      const result = matcher.match(canonical);
-      if (result.matched) {
-        const exchange = replayable[result.index]!;
-        if (result.reordered) stats.reordered += 1;
-        if (result.divergence) {
-          stats.matchedInexact += 1;
-          stats.divergences += 1;
-          options.onDivergence?.({ ...result.divergence, seq: exchange.seq });
-        } else {
-          stats.matchedExact += 1;
-        }
-        res.writeHead(exchange.status, {
-          'content-type': exchange.streamed ? 'text/event-stream' : 'application/json',
-        });
-        res.end(exchange.rawResponse);
-        return;
-      }
-
-      stats.unmatched += 1;
-
-      // Hybrid mode is *supposed* to continue live here — that is what forking means — but spec §4
-      // says replay must not silently approximate, and every inexact match is an event in the
-      // trace. Without this a fork could start diverging below its own fork point and every
-      // artifact it produced would look clean. Going live is the right behaviour; being quiet
-      // about it is not.
-      if (options.mode === 'hybrid' || options.loose) {
-        stats.divergences += 1;
-        options.onDivergence?.({
-          level: 'major',
-          rung: 4,
-          distance: -1,
-          detail: result.reason ?? 'request does not match the recording; served live instead',
-          seq: replayable[result.index]?.seq ?? -1,
-        });
-      }
-
-      if (!options.loose && options.mode === 'replay') {
-        // Halt loudly. Inventing a reply here would make every downstream conclusion worthless.
-        const reason = result.reason ?? 'request does not match the recording';
-        options.onUnmatched?.({
-          seq: replayable[result.index]?.seq ?? -1,
-          index: result.index,
-          reason,
-        });
-
-        // 400, emphatically not 409. Every mainstream client retries 408/409/429/5xx by default,
-        // so a 409 halt is re-sent until the retry budget is gone — the operator gets a stalled
-        // terminal and no reason, which is strictly worse than a wrong answer because it looks
-        // like a hang in orca rather than a mismatch in the recording. 400 is terminal everywhere.
-        //
-        // The envelope is the provider's own error shape for the same reason: clients read
-        // `error.message` and print it, so this sentence is what actually reaches the human.
-        json(res, 400, {
-          type: 'error',
-          error: {
-            type: 'invalid_request_error',
-            message:
-              `orca: replay halted — ${reason}. ` +
-              'Re-run with `orca replay <run> --loose` to continue live from this point, ' +
-              'or `orca show <run>` to see what was recorded.',
-          },
-        });
-        return;
-      }
-    }
-
-    await goLive(
-      dialect,
-      requestedPath,
-      rawBody,
-      headers,
-      recordableHeaders,
-      res,
-      startedAt,
-      forward?.base,
-    );
   }
 
   const host = options.host ?? '127.0.0.1';

@@ -37,7 +37,7 @@ describe('shell shim', () => {
     // Before the writes, not after: `icacls` does not re-propagate to children that already exist,
     // so a directory narrowed once `owner.pid` and the frames file were there would leave both of
     // them holding the ACL they inherited. Asserting the files too is how that ordering is pinned.
-    const runDir = await mkdtemp(join(tmpdir(), 'orca-shim-acl-'));
+    const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-shim-acl-'));
     const shim = await installShellShim({ runDir });
     expect(shim.transportDir, 'no transport was minted').toBeDefined();
     await expectOwnerOnly(shim.transportDir!);
@@ -54,7 +54,7 @@ describe('shell shim', () => {
   let shim: Awaited<ReturnType<typeof installShellShim>>;
 
   beforeEach(async () => {
-    runDir = await mkdtemp(join(tmpdir(), 'orca-shell-'));
+    runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-shell-'));
     shim = await installShellShim({ runDir });
   });
 
@@ -62,7 +62,7 @@ describe('shell shim', () => {
     await rm(runDir, { recursive: true, force: true });
   });
 
-  /** Run a command through a PATH that has the shim directory first, as `orca record` does. */
+  /** Run a command through a PATH that has the shim directory first, as `agenticreplay record` does. */
   async function through(command: string, args: string[]) {
     return run(command, args, {
       env: { ...process.env, PATH: `${shim.dir}${':'}${process.env.PATH ?? ''}` },
@@ -123,7 +123,7 @@ describe('shell shim', () => {
     expect(frame.name).toBe('sh');
     expect(frame.argv).toEqual(['-c', 'exit 2']);
     expect(frame.exitCode).toBe(2);
-    expect(frame.cwd).toContain('orca-shell-');
+    expect(frame.cwd).toContain('agenticreplay-shell-');
     expect(frame.durationMs).toBeGreaterThanOrEqual(0);
     // The reader's recovery of a torn line is anchored on this, so the writer has to keep
     // producing it: `record()` builds the object with `name` first and `JSON.stringify` keeps
@@ -194,7 +194,7 @@ describe('shell shim', () => {
         code: err.code,
       }));
       expect((result as { code?: number }).code).not.toBe(0);
-      expect((result as { stderr: string }).stderr).toMatch(/orca/i);
+      expect((result as { stderr: string }).stderr).toMatch(/agenticreplay/i);
     },
   );
 

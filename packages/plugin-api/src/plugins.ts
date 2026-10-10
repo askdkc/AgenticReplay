@@ -33,13 +33,13 @@ export interface Adapter {
    * The id is a stable internal handle written into every manifest; an alias is what a human
    * types, which is almost always the name of the binary they run. `claude-code` and `claude` are
    * the canonical example — keeping them separate means the manifest stays unambiguous while
-   * `orca record claude` does what anyone would expect it to.
+   * `agenticreplay record claude` does what anyone would expect it to.
    */
   aliases?: readonly string[];
   /** Semver range of harness versions this adapter is tested against. */
   harnessVersions?: string;
   /**
-   * How this adapter gets the agent's traffic to orca.
+   * How this adapter gets the agent's traffic to agenticreplay.
    *
    * `env` — the default, and what every harness-specific adapter does: point a base-URL variable
    * at the proxy, or install the fetch hook, so the agent connects to a local origin in plaintext.
@@ -52,7 +52,7 @@ export interface Adapter {
    *
    * `config` — the adapter redirects through a configuration file rather than the environment,
    * for a harness that keeps its origin in one and reads no variable for it. MiniMax Code is the
-   * first: `MINIMAX_DATA_DIR` moves the whole data directory, and the config orca writes there
+   * first: `MINIMAX_DATA_DIR` moves the whole data directory, and the config agenticreplay writes there
    * carries the redirect. It takes the same exemption as `transport` and for the same reason —
    * the redirect is real but is not an environment variable, so a check that only reads the
    * launch environment is scoring it against a mechanism it does not use. What it redirects is
@@ -64,7 +64,7 @@ export interface Adapter {
   /**
    * The harness's own session records, where it keeps any.
    *
-   * Orca's capture layers see what a run *did*; only the harness knows what it was *asked*. A run
+   * AgenticReplay's capture layers see what a run *did*; only the harness knows what it was *asked*. A run
    * driven by hand has its prompts nowhere on the wire, so without this a replay launches an agent
    * with nothing to make it ask anything. Supplying it is what makes an interactive recording
    * replayable and forkable at all.
@@ -73,9 +73,9 @@ export interface Adapter {
   /**
    * Arguments that load an MCP config from a path, for a harness that takes one.
    *
-   * The environment variables orca sets alongside this are read by none of the harnesses it
+   * The environment variables agenticreplay sets alongside this are read by none of the harnesses it
    * targets: Claude Code loads MCP servers from `.mcp.json`, from the user config, or from
-   * `--mcp-config`, and ignores `CLAUDE_MCP_CONFIG` entirely — so `orca record --mcp-config`
+   * `--mcp-config`, and ignores `CLAUDE_MCP_CONFIG` entirely — so `agenticreplay record --mcp-config`
    * instrumented a copy of the file and then launched an agent that never opened it. The capture
    * reported success and recorded no frames, which is the same silent shape the base-URL variables
    * had before an adapter passed those on the command line too.
@@ -101,7 +101,7 @@ export interface Adapter {
    * Argv for a replay, for a harness that carries no prompt at all.
    *
    * {@link driveArgs} answers "what makes the agent ask the recorded question again", and it only
-   * applies to a harness with a transcript orca can read. A pipeline has neither: its argv *is*
+   * applies to a harness with a transcript agenticreplay can read. A pipeline has neither: its argv *is*
    * the whole instruction and there is nothing to recover. This hook is reached before the
    * transcript is consulted, so such an adapter can still adjust what the replay runs — clamping
    * a concurrency flag, say — instead of having no say at all.
@@ -135,7 +135,7 @@ export interface HarnessArtifacts {
    * call is skipped, nothing is asked, and the replay reports a run it never reproduced. That is
    * `reused=0/6 exit=0` over a recording that was perfectly good.
    *
-   * Not "delete these". Orca clears them and then restores the recording's initial snapshot over
+   * Not "delete these". AgenticReplay clears them and then restores the recording's initial snapshot over
    * the top, so they end up holding exactly what they held when recording began — which for a
    * recording of one mid-pipeline stage is a *populated* cache, and deleting that would take away
    * the stage's own input. The clearing is what the plain restore cannot do: it writes the files
@@ -145,7 +145,7 @@ export interface HarnessArtifacts {
    * Whole directories rather than "the invalid parts": IndexRAG's resume skips by `chunk_id`
    * including entries it recorded as failures, so keeping what looks valid silently promotes the
    * previous run's failures to completed work. Nothing is lost either way — an exact replay
-   * restores the working tree when it ends, and where it will not (`--in-place`), orca says so
+   * restores the working tree when it ends, and where it will not (`--in-place`), agenticreplay says so
    * and leaves these alone.
    */
   resetBeforeReplay?: readonly string[];
@@ -154,7 +154,7 @@ export interface HarnessArtifacts {
    *
    * Declared, never applied on its own: clamping concurrency changes the run being replayed, and
    * a replay that quietly runs the pipeline differently from the recording is not a replay. It is
-   * what `orca replay --serialize` reaches for when the operator asks for determinism explicitly.
+   * what `agenticreplay replay --serialize` reaches for when the operator asks for determinism explicitly.
    */
   concurrencyFlag?: { flag: string; serialValue: string };
 }
@@ -162,7 +162,7 @@ export interface HarnessArtifacts {
 /**
  * A non-model HTTP call whose answer is a pure function of its request.
  *
- * The proxy's own comment on passthrough says orca "holds the bytes but not the meaning, so it
+ * The proxy's own comment on passthrough says agenticreplay "holds the bytes but not the meaning, so it
  * cannot match this request on replay" — and for an embedding that is the one thing it does not
  * need. `embed(model, input)` is deterministic in a way a chat completion is not: the same text
  * to the same model is the same vector, every time, from any provider. So this class of call is

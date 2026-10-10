@@ -61,9 +61,12 @@ describe('rewriteUrl', () => {
   });
 
   it('keeps the proxy port and any path prefix the proxy was given', () => {
-    const prefixed = { proxyUrl: 'http://127.0.0.1:8080/orca', hosts: DEFAULT_INSTRUMENTED_HOSTS };
+    const prefixed = {
+      proxyUrl: 'http://127.0.0.1:8080/agenticreplay',
+      hosts: DEFAULT_INSTRUMENTED_HOSTS,
+    };
     expect(rewriteUrl('https://api.openai.com/v1/responses', prefixed)).toBe(
-      'http://127.0.0.1:8080/orca/v1/responses',
+      'http://127.0.0.1:8080/agenticreplay/v1/responses',
     );
   });
 

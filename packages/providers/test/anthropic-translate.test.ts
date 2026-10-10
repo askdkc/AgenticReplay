@@ -7,7 +7,7 @@ import {
   canonicalToAnthropicSse,
   parseAnthropicSse,
 } from '../src/index.js';
-import type { CanonicalRequest, CanonicalResponse } from '@orcareplay/plugin-api';
+import type { CanonicalRequest, CanonicalResponse } from '@agenticreplay/plugin-api';
 
 /** A request shaped like what Claude Code actually puts on the wire. */
 function toolRequest(): Record<string, unknown> {

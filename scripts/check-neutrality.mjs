@@ -2,8 +2,8 @@
 /**
  * Plugin API neutrality check.
  *
- * The OrcaRouter plugin — and any other vendor plugin — must reach OrcaReplay only through the
- * published @orcareplay/plugin-api surface. Enforcing that mechanically is the difference between
+ * The OrcaRouter plugin — and any other vendor plugin — must reach AgenticReplay only through the
+ * published @agenticreplay/plugin-api surface. Enforcing that mechanically is the difference between
  * a neutrality commitment and a neutrality claim: nobody writes an adapter for a project that
  * might grow a privileged path for its owner.
  */
@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const providersSrc = join(root, 'packages', 'providers', 'src');
 
 /** Packages a vendor provider plugin may import. Anything else is a privileged path. */
-const ALLOWED = new Set(['@orcareplay/plugin-api', '@orcareplay/schema']);
+const ALLOWED = new Set(['@agenticreplay/plugin-api', '@agenticreplay/schema']);
 const VENDOR_HINT = /orcarouter/i;
 
 let failures = 0;
@@ -43,7 +43,7 @@ for (const file of files) {
   const src = await readFile(file, 'utf8');
   const isVendor = VENDOR_HINT.test(file) || VENDOR_HINT.test(src.slice(0, 400));
   if (!isVendor) continue;
-  for (const m of src.matchAll(/from\s+'(@orcareplay\/[^']+)'/g)) {
+  for (const m of src.matchAll(/from\s+'(@agenticreplay\/[^']+)'/g)) {
     const pkg = m[1];
     if (!ALLOWED.has(pkg)) {
       failures += 1;

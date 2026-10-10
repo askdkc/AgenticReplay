@@ -3,7 +3,7 @@
  * Render the README's card art.
  *
  * Nothing here is drawn for the README. The script records a real run — a real child process, the
- * real proxy, the real PATH shim — and then asks orca for the same cards `orca export` gives
+ * real proxy, the real PATH shim — and then asks agenticreplay for the same cards `agenticreplay export` gives
  * anyone else. If the card renderers change, this output changes with them, which is the only way
  * README art stays honest.
  *
@@ -23,7 +23,7 @@
  *   npm i --no-save playwright-core pngjs gifenc
  *   npm run build && node scripts/render-cards.mjs   # -> docs/graph-card.png, docs/chain-card.png
  *
- * Set ORCA_CHROMIUM if Playwright's browser is somewhere it will not find on its own.
+ * Set AGENTICREPLAY_CHROMIUM if Playwright's browser is somewhere it will not find on its own.
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -138,7 +138,7 @@ function startModel() {
   });
 }
 
-const workspace = mkdtempSync(join(tmpdir(), 'orca-cards-'));
+const workspace = mkdtempSync(join(tmpdir(), 'agenticreplay-cards-'));
 const run = (cmd, args) => execFileSync(cmd, args, { cwd: workspace, encoding: 'utf8' });
 /**
  * Async, and that is not incidental: the model stub serves from *this* process, so a synchronous

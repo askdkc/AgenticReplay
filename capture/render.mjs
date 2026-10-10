@@ -27,19 +27,19 @@ const { GIFEncoder, quantize, applyPalette } = gifenc;
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TARGET = join(HERE, 'fable-capture.gif');
-const FRAMES = mkdtempSync(join(tmpdir(), 'orca-capture-'));
+const FRAMES = mkdtempSync(join(tmpdir(), 'agenticreplay-capture-'));
 
 const SCENES = [
   {
     label: '1/6 · hold a proxy open',
     lines: [
-      ['cmd', '$ orca attach --for claude --port 46001 \\'],
+      ['cmd', '$ agenticreplay attach --for claude --port 46001 \\'],
       ['cmd', '    --upstream-anthropic https://api.anthropic.com'],
       ['dim', 'info attached run=run_bc749535e248 proxy=http://127.0.0.1:46001 for=claude-code'],
       ['gap', ''],
       ['out', '  # in the sandbox, before starting your agent:'],
       ['ok', "  export ANTHROPIC_BASE_URL='http://127.0.0.1:46001'"],
-      ['out', "  # your agent's own credential is unchanged - orca forwards it upstream"],
+      ['out', "  # your agent's own credential is unchanged - agenticreplay forwards it upstream"],
       ['gap', ''],
       ['dim', '  Recording. Press ctrl-C when the agent is done.'],
     ],
@@ -61,7 +61,7 @@ const SCENES = [
   {
     label: '3/6 · what the proxy wrote',
     lines: [
-      ['cmd', '$ orca show run_bc749535e248'],
+      ['cmd', '$ agenticreplay show run_bc749535e248'],
       ['head', 'SEQ  TYPE            DETAIL'],
       ['row', '  4  model.request   claude-fable-5-1   tools=35   blob=175,255 bytes'],
       ['row', '  5  model.response  200  end_turn  cache_read=59,811 tokens'],
@@ -143,7 +143,7 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const html =
   `<!doctype html><meta charset="utf-8"><style>${CSS}</style>` +
   `<div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>` +
-  `<span style="margin-left:.4rem">ORCAREPLAY — CAPTURING THE CLAUDE FABLE 5.1 SYSTEM PROMPT</span>` +
+  `<span style="margin-left:.4rem">AGENTICREPLAY — CAPTURING THE CLAUDE FABLE 5.1 SYSTEM PROMPT</span>` +
   `<span class="label" id="label"></span></div>` +
   SCENES.map(
     (s, si) =>

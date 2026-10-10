@@ -1,11 +1,25 @@
 # OpenCode API capture
 
-`orca record opencode` captures HTTP model calls to the API bases in the
+`agenticreplay record opencode` captures HTTP model calls to the API bases in the
 [OpenCode model catalog](https://models.opencode.ai/api.json), plus ChatGPT subscription calls,
-through a plugin written into the run directory. It does not modify the user's OpenCode
+through a version-specific plugin written into the run directory. It does not modify the user's OpenCode
 configuration files or credentials.
 
-## Catalog coverage
+## OpenCode versions
+
+The adapter probes `opencode --version` using a temporary isolated home. OpenCode 1 uses a
+final-fetch plugin; OpenCode 2 uses the native `http.request` session hook. Version 2 launches
+with `--standalone` so an already-running background server cannot miss the run's plugin and
+proxy settings. An explicit `--server` or `--attach` is rejected because that server's capture
+installation cannot be verified.
+
+For version 2, the adapter writes a run-local plugin config and sets `OPENCODE_CONFIG` for the
+child process. Existing project/global settings and inline provider settings remain in place.
+An already-set `OPENCODE_CONFIG` is currently rejected: safely composing arbitrary configuration
+files, including their relative plugin paths, is not implemented. Version 2 never invents API-key
+environment variables; credentials remain the client's responsibility.
+
+## Catalog coverage (OpenCode 1)
 
 The plugin collects both `provider.api` and `provider.models[model].provider.api`. It refreshes
 the public catalog once when loaded, with a three-second timeout. Network errors, bad JSON or
@@ -20,14 +34,14 @@ contains 196 distinct API templates from the catalog retrieved on 2026-09-08.
 - Learn additional model and custom provider bases from OpenCode's `chat.params` hook, using
   `model.api.url` and `provider.options.baseURL` without changing those values.
 - Preserve the final destination, path, query, request body and authentication when forwarding
-  through Orca. Configuring an Orca gateway does not override an explicitly captured destination.
+  through AgenticReplay. Configuring an AgenticReplay gateway does not override an explicitly captured destination.
 - OpenAI-compatible completions, Responses and Anthropic messages (including prefixed paths
   such as `/anthropic/v1/messages`) produce `model.request` / `model.response` events. Other POST
   formats produce `net.request` / `net.response` with the raw exchange. Capturing an API does
   **not** imply translation, token accounting, model substitution or offline replay support for
   its wire format; opaque exchanges cannot be replayed.
 
-`OPENCODE_DISABLE_MODELS_FETCH=1` (or `true`) skips the catalog refresh. `orca replay` sets it
+`OPENCODE_DISABLE_MODELS_FETCH=1` (or `true`) skips the catalog refresh. `agenticreplay replay` sets it
 automatically for OpenCode. The bundled list and the model hook remain active. Update the bundled
 list with:
 
@@ -42,7 +56,7 @@ node scripts/update-opencode-api-bases.mjs /path/to/api.json
 In [OpenCode 1.18.29's ChatGPT auth plugin](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/plugin/openai/codex.ts),
 the OAuth fetch replaces the SDK's Responses URL with
 `https://chatgpt.com/backend-api/codex/responses` immediately before sending it. This bypasses
-Orca's `OPENAI_BASE_URL`. PR #36's provider overlay targets `opencode` and `opencode-go`, so it
+AgenticReplay's `OPENAI_BASE_URL`. PR #36's provider overlay targets `opencode` and `opencode-go`, so it
 does not fix this later rewrite. The ordinary API-key path was captured in the harness test.
 
 The compiled OpenCode executable also ignored a `BUN_OPTIONS=--preload ...` probe. The adapter
@@ -50,31 +64,41 @@ therefore uses OpenCode's own plugin loader instead of a runtime preload.
 
 ## Capture behavior
 
+The following final-fetch details describe the version 1 plugin. The version 2 hook forwards each
+model HTTP request through the same proxy while retaining its original destination and body.
+
 - Append a local plugin URL to `OPENCODE_CONFIG_CONTENT`, preserving existing settings and plugins.
 - Wrap the final `fetch` for catalog API bases, the ChatGPT Codex Responses endpoint and the
   public OpenAI `/v1/responses` and `/v1/chat/completions` endpoints.
-- Forward the original origin through Orca's `/forward/` route, retaining the request body,
-  auth headers, abort signal and fetch options. A default Orca gateway does not receive the
+- Forward the original origin through AgenticReplay's `/forward/` route, retaining the request body,
+  auth headers, abort signal and fetch options. A default AgenticReplay gateway does not receive the
   ChatGPT subscription token.
 - Use the existing Responses/Codex translators and event writer to emit `model.request` and
   `model.response`, including streamed responses. Authentication headers are redacted by the
   existing proxy capture path.
 - Leave OpenAI login, token refresh and other ChatGPT endpoints untouched.
-  A failed redirected request is not retried directly outside Orca.
+  A failed redirected request is not retried directly outside AgenticReplay.
 
 ## Verification
 
 ```sh
 npm run build
 npx vitest run packages/adapters packages/proxy packages/cli/test/opencode-capture.test.ts packages/cli/test/opencode-catalog-capture.test.ts
-ORCA_TEST_OPENCODE="$(command -v opencode)" npx vitest run packages/cli/test/opencode-capture.test.ts
+# Loopback-only native custom-provider cases:
+AGENTICREPLAY_TEST_OPENCODE="$(command -v opencode)" npx vitest run \
+  packages/cli/test/opencode-capture.test.ts -t 'records actual OpenCode calls to'
 ```
 
-The opt-in harness test uses the installed executable, an isolated home and Git repository,
-fake OAuth/API-key credentials, and a local upstream stub. It checks the OAuth bypass without
-the plugin, captures both authentication paths with it, and inspects `events.jsonl`.
-Separate child-process tests verify streamed capture and exact offline replay.
-No live ChatGPT/OpenAI account is used in these tests.
+The selected native tests use the installed executable, an isolated home and Git repository,
+a local custom provider, and a guard that rejects external requests. OpenCode 2.0.18 passes both
+loopback URL cases using the adapter's emitted arguments and configuration without test-only
+launch repairs. Separate child-process tests verify streamed capture and canonical offline replay.
+
+Native first-party API-key/OAuth cases now pass for OpenCode 2.0.18 with synthetic credentials in
+its isolated SQLite credential store. All seven capture tests pass, including the negative case
+with interception disabled. The guard permits only the selected first-party hosts to reach the
+capture hook; the proxy's independent stub verifies the destination and authentication headers.
+This verifies native credential routing with synthetic values, not a real subscription login.
 
 Catalog tests exercise every bundled URL template with synthetic environment values. The
 catalog integration test loads the emitted plugin in a child process, checks original upstream
@@ -89,7 +113,7 @@ OpenCode's Anthropic SDK appends `/messages` to `ANTHROPIC_BASE_URL`; Claude Cod
 which returned 404 and was recorded as opaque network traffic rather than model events.
 The OpenCode adapter now sets this variable to `<proxy>/v1`. Claude Code keeps the bare origin.
 
-The built `orca record` CLI was also checked with Claude Code 2.1.220 using API-key, Bearer,
+The built `agenticreplay record` CLI was also checked with Claude Code 2.1.220 using API-key, Bearer,
 and OAuth-token fixtures, and with OpenCode 1.18.29 using an Anthropic API-key fixture.
 All use isolated settings, fake credentials, and a local upstream. The tests check model events,
 streaming replies, credential redaction, and preservation of the Claude Code OAuth beta header.
@@ -97,7 +121,7 @@ OpenCode third-party Anthropic OAuth plugins and live subscription authenticatio
 
 ```sh
 npm run build
-ORCA_TEST_CLAUDE="$(command -v claude)" ORCA_TEST_OPENCODE="$(command -v opencode)" \
+AGENTICREPLAY_TEST_CLAUDE="$(command -v claude)" AGENTICREPLAY_TEST_OPENCODE="$(command -v opencode)" \
   npx vitest run packages/cli/test/claude-capture.test.ts
 ```
 

@@ -282,7 +282,7 @@ describe('exclusions', () => {
     await write(workTree, '.ssh/known_hosts', 'host\n');
     await write(workTree, 'home/.aws/credentials', 'aws_secret_access_key=x\n');
     await write(workTree, 'node_modules/pkg/index.js', 'noise\n');
-    await write(workTree, '.orca/runs/run_a/events.jsonl', '{}\n');
+    await write(workTree, '.agenticreplay/runs/run_a/events.jsonl', '{}\n');
     await write(workTree, 'src/app.ts', 'export const ok = 1;\n');
     expect(await filesIn(shadow, await shadow.snapshot())).toEqual(['src/app.ts']);
   });
@@ -291,12 +291,12 @@ describe('exclusions', () => {
   // not rest on info/exclude alone.
   itGit('never captures secrets even when .gitignore tries to un-ignore them', async () => {
     const { workTree, shadow } = await fixture();
-    await write(workTree, '.gitignore', '!.env\n!id_rsa\n!.ssh/\n!*.key\n!.orca/\n');
+    await write(workTree, '.gitignore', '!.env\n!id_rsa\n!.ssh/\n!*.key\n!.agenticreplay/\n');
     await write(workTree, '.env', 'API_KEY=sk-live-secret\n');
     await write(workTree, 'id_rsa', 'PRIVATE KEY\n');
     await write(workTree, '.ssh/id_ed25519', 'PRIVATE KEY\n');
     await write(workTree, 'deep/nested/secret.key', 'KEY\n');
-    await write(workTree, '.orca/runs/run_a/events.jsonl', '{}\n');
+    await write(workTree, '.agenticreplay/runs/run_a/events.jsonl', '{}\n');
     await write(workTree, 'ok.txt', 'fine\n');
     expect(await filesIn(shadow, await shadow.snapshot())).toEqual(['.gitignore', 'ok.txt']);
   });
@@ -773,7 +773,7 @@ describe('forced capture', () => {
    * a path too long — because `runGit` resolves rather than throws and no exit code was read. The
    * snapshot then returned a tree id as if all was well while silently not holding the declared
    * path, which is worse than failing: on replay the same hole lands in the safety snapshot that
-   * `resetArtifacts` deletes against, so what orca could not copy it deletes anyway.
+   * `resetArtifacts` deletes against, so what agenticreplay could not copy it deletes anyway.
    *
    * A path outside the workspace is the portable way to provoke a non-benign failure (the original
    * report used a file held open by another process, which only Windows makes easy) — and it is
@@ -850,7 +850,7 @@ describe('forced capture', () => {
    * repository cannot be held at all. Both mean the copy is missing something a reset would take —
    * an `.env` the operator keeps beside a cache, a prebuilt store cloned into `vector_store/` —
    * and neither need appear in the recording's own tree, since the operator may have put it there
-   * afterwards. `orca replay` deletes these paths on the strength of this copy, so it has to be
+   * afterwards. `agenticreplay replay` deletes these paths on the strength of this copy, so it has to be
    * able to ask what the copy is missing before it does.
    */
   itGit('reports what a forced snapshot could not hold under the declared paths', async () => {
@@ -888,7 +888,7 @@ describe('forced capture', () => {
   /**
    * The same question `materialize` answers by throwing, asked without writing anything.
    *
-   * `orca replay` deletes the artifacts *before* the restore that puts them back, which is the
+   * `agenticreplay replay` deletes the artifacts *before* the restore that puts them back, which is the
    * only ordering that leaves them holding what they held when recording began. That makes the
    * restore's refusal unrecoverable unless it can be seen coming — and recordings made before
    * gitlinks were dropped are still on disk, which is who this is for.

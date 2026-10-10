@@ -29,7 +29,7 @@ const BUILTIN = { BA: 'S-1-5-32-544', SY: 'S-1-5-18', BU: 'S-1-5-32-545' } as co
  * dependable: PowerShell cannot autoload `Microsoft.PowerShell.Security` on every machine.)
  */
 async function sddl(path: string): Promise<string> {
-  const out = join(await mkdtemp(join(tmpdir(), 'orca-sddl-')), 'acl');
+  const out = join(await mkdtemp(join(tmpdir(), 'agenticreplay-sddl-')), 'acl');
   await run(system32('icacls.exe'), [path, '/save', out]);
   // UTF-16LE, and two lines: the entry's name, then its descriptor.
   const lines = (await readFile(out, 'utf16le')).trim().split(/\r?\n/);
@@ -80,7 +80,7 @@ $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
  */
 describe('restrictToOwner', () => {
   it.runIf(!onWindows)('gives POSIX exactly the mode it was asked for', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-perm-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-perm-'));
     const file = join(dir, 'secret');
     await writeFile(file, 'sk-secret\n', { mode: 0o666 });
 
@@ -94,7 +94,7 @@ describe('restrictToOwner', () => {
   it.runIf(onWindows)(
     'leaves a file to its owner and the superusers, and no one else',
     async () => {
-      const parent = await mkdtemp(join(tmpdir(), 'orca-perm-'));
+      const parent = await mkdtemp(join(tmpdir(), 'agenticreplay-perm-'));
       // Deliberately broad, including on hosted Windows runners whose TEMP is already private.
       await run(system32('icacls.exe'), [parent, '/grant', '*S-1-5-32-545:(OI)(CI)(RX)', '/q']);
       const file = join(parent, 'secret');
@@ -117,13 +117,13 @@ describe('restrictToOwner', () => {
 
   it.runIf(onWindows)('never widens the path it is narrowing, even for an instant', async () => {
     // `/reset` is the obvious way to clear explicit ACEs and the wrong one: it hands the path
-    // whatever its parent has, and only a second call narrows it again. `.orca` is never
-    // restricted — only `.orca/runs` is — so on every Windows command the store root would spend
+    // whatever its parent has, and only a second call narrows it again. `.agenticreplay` is never
+    // restricted — only `.agenticreplay/runs` is — so on every Windows command the store root would spend
     // that window readable by every account on the machine, and a child created in it keeps what
     // it inherited, since icacls does not re-propagate afterwards.
     //
     // A detector, not a proof: it can only fail while such a window exists, never spuriously.
-    const parent = await mkdtemp(join(tmpdir(), 'orca-perm-'));
+    const parent = await mkdtemp(join(tmpdir(), 'agenticreplay-perm-'));
     await run(system32('icacls.exe'), [parent, '/grant', '*S-1-5-32-545:(OI)(CI)(F)', '/q']);
     const store = join(parent, 'runs');
     await mkdir(store);
@@ -158,7 +158,7 @@ describe('restrictToOwner', () => {
     // `mkdtemp` discards its mode on Windows, so under %TEMP% the directory took whatever that
     // handed down — measured on this machine: two further local accounts, both with inheritable
     // Modify. Every other temporary directory this feature mints is narrowed the moment it exists.
-    const dir = join(await mkdtemp(join(tmpdir(), 'orca-perm-')), 'runs');
+    const dir = join(await mkdtemp(join(tmpdir(), 'agenticreplay-perm-')), 'runs');
     await mkdir(dir);
     await restrictToOwner(dir, 0o700);
 
@@ -166,7 +166,7 @@ describe('restrictToOwner', () => {
     // than by difference, because an earlier test in the same file may already have made it.
     const scratch = await Promise.all(
       (await readdir(tmpdir()))
-        .filter((name) => name.startsWith('orca-acl-'))
+        .filter((name) => name.startsWith('agenticreplay-acl-'))
         .map(async (name) => {
           const path = join(tmpdir(), name);
           return { path, at: (await stat(path)).mtimeMs };
@@ -192,7 +192,7 @@ describe('restrictToOwner', () => {
     // the trustees it names, so an explicit grant to anybody else used to survive both. Not a
     // hypothetical shape: "Replace all child object permissions" converts inherited ACEs into
     // explicit ones, and so do `robocopy /SEC` and a tree carried between machines.
-    const dir = join(await mkdtemp(join(tmpdir(), 'orca-perm-')), 'runs');
+    const dir = join(await mkdtemp(join(tmpdir(), 'agenticreplay-perm-')), 'runs');
     await mkdir(dir);
     const USERS = 'S-1-5-32-545'; // BUILTIN\\Users — by SID, so no name has to resolve
     await run(system32('icacls.exe'), [dir, '/grant', `*${USERS}:(OI)(CI)(F)`, '/q']);
@@ -213,7 +213,7 @@ describe('restrictToOwner', () => {
     // it against the current directory on C:, which during a recording is the workspace being
     // recorded, and `Windows/System32/icacls.exe` is a storable git path. The guess hands the key
     // to exactly the reader this function exists to shut out.
-    const file = join(await mkdtemp(join(tmpdir(), 'orca-perm-')), 'secret');
+    const file = join(await mkdtemp(join(tmpdir(), 'agenticreplay-perm-')), 'secret');
     await writeFile(file, 'sk-secret\n');
     const saved = process.env['SystemRoot'];
     try {
@@ -221,7 +221,7 @@ describe('restrictToOwner', () => {
       await expect(restrictToOwner(file, 0o600)).rejects.toThrow(/SystemRoot is not set/);
       // Absolute, not merely present: `C:Windows` rebuilds the same drive-relative lookup out of
       // the environment instead of out of a literal, and a wrapper that sets the variable for
-      // orca's process is an ordinary thing to run into.
+      // agenticreplay's process is an ordinary thing to run into.
       for (const relative of ['C:Windows', 'Windows']) {
         process.env['SystemRoot'] = relative;
         await expect(restrictToOwner(file, 0o600)).rejects.toThrow(/not an absolute path/);
@@ -234,7 +234,7 @@ describe('restrictToOwner', () => {
   it.runIf(onWindows)(
     'restricts a directory so that later writes inside it are covered',
     async () => {
-      const dir = join(await mkdtemp(join(tmpdir(), 'orca-perm-')), 'tls');
+      const dir = join(await mkdtemp(join(tmpdir(), 'agenticreplay-perm-')), 'tls');
       await mkdir(dir);
 
       await restrictToOwner(dir, 0o700);

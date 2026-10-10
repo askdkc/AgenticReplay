@@ -30,7 +30,7 @@ describe('publish order', () => {
     for (const dir of order()) {
       const pkg = manifest(dir);
       for (const dep of Object.keys(pkg.dependencies ?? {})) {
-        if (!dep.startsWith('@orcareplay/')) continue;
+        if (!dep.startsWith('@agenticreplay/')) continue;
         expect(published, `${pkg.name} is published before its dependency ${dep}`).toContain(dep);
       }
       published.add(pkg.name);
@@ -40,9 +40,9 @@ describe('publish order', () => {
   it('includes every publishable workspace and no private one', () => {
     const listed = order().map((d) => manifest(d).name);
     expect(new Set(listed).size, 'a package listed twice would publish twice').toBe(listed.length);
-    expect(listed).toContain('orcareplay');
-    expect(listed).toContain('@orcareplay/core');
-    expect(listed).not.toContain('orcareplay-monorepo');
+    expect(listed).toContain('agenticreplay');
+    expect(listed).toContain('@agenticreplay/core');
+    expect(listed).not.toContain('agenticreplay-monorepo');
   });
 
   /**
@@ -52,7 +52,7 @@ describe('publish order', () => {
    * release died on the first package — the exact moment this file exists to protect.
    */
   it('names the repository in every package, which provenance signing requires', () => {
-    const expected = 'https://github.com/Continuum-AI-Corp/OrcaReplay.git';
+    const expected = 'https://github.com/askdkc/AgenticReplay.git';
     for (const dir of order()) {
       const pkg = manifest(dir);
       expect(pkg.repository?.url, `${pkg.name} declares no repository.url`).toBe(expected);
@@ -70,7 +70,7 @@ describe('publish order', () => {
     for (const dir of order()) {
       const pkg = manifest(dir);
       for (const [dep, range] of Object.entries(pkg.dependencies ?? {})) {
-        if (!dep.startsWith('@orcareplay/')) continue;
+        if (!dep.startsWith('@agenticreplay/')) continue;
         expect(range, `${pkg.name} depends on ${dep} as "${range}"`).toMatch(/^\d+\.\d+\.\d+$/);
       }
     }

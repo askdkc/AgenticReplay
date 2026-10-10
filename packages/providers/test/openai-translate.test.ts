@@ -12,7 +12,7 @@ import {
   parseAnthropicSse,
   parseOpenaiSse,
 } from '../src/index.js';
-import type { CanonicalResponse } from '@orcareplay/plugin-api';
+import type { CanonicalResponse } from '@agenticreplay/plugin-api';
 
 /** An OpenAI-shaped body mid tool loop, the way a gateway would forward it. */
 function toolRequest(): Record<string, unknown> {
@@ -823,7 +823,7 @@ describe('cross dialect responses', () => {
   };
 
   it('carries an Anthropic reply through canonical into OpenAI and back', () => {
-    // The exact path `orca replay --model gpt-5.2` takes on an Anthropic-recorded run.
+    // The exact path `agenticreplay replay --model gpt-5.2` takes on an Anthropic-recorded run.
     const canonical = anthropicToCanonicalResponse(anthropicBody);
     const viaJson = openaiToCanonicalResponse(canonicalToOpenaiResponse(canonical));
     const viaSse = parseOpenaiSse(canonicalToOpenaiSse(canonical));

@@ -2,7 +2,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { EARLIEST_TS_MS, LATEST_TS_MS } from '@orcareplay/schema';
+import { EARLIEST_TS_MS, LATEST_TS_MS } from '@agenticreplay/schema';
 import type { ShellFrame } from './runner.js';
 import {
   assertPrivatePathIdentity,
@@ -10,7 +10,7 @@ import {
   removePrivateDirectory,
   restrictToOwner,
   type PrivatePathIdentity,
-} from '@orcareplay/core';
+} from '@agenticreplay/core';
 
 /**
  * Shells an agent actually reaches for. Shimming more binaries buys detail and costs blast radius.
@@ -27,15 +27,15 @@ export interface InstallOptions {
   /**
    * Defaults to a private temporary directory, not the run directory.
    *
-   * The frames file is a transport: orca reads it once, turns each frame into a `shell.*` event,
+   * The frames file is a transport: agenticreplay reads it once, turns each frame into a `shell.*` event,
    * and those reach disk through `TraceWriter`, which redacts. The file itself is written by the
-   * shim running inside the agent's own shell invocations, so nothing orca owns can redact it on
+   * shim running inside the agent's own shell invocations, so nothing agenticreplay owns can redact it on
    * the way in — and a frame carries `argv` and `cwd` verbatim, which is the most secret-dense
    * text in a run: `curl -H 'Authorization: Bearer …'`, `git clone https://user:token@host/…`,
    * an inline `AWS_SECRET_ACCESS_KEY=…`.
    *
-   * While it sat in the run directory that made it a sink the write path never touched, `orca
-   * scrub` never rewrote, and nobody deleted — so `orca scrub --match <secret>` answered "nothing
+   * While it sat in the run directory that made it a sink the write path never touched, `agenticreplay
+   * scrub` never rewrote, and nobody deleted — so `agenticreplay scrub --match <secret>` answered "nothing
    * matched — the trace is unchanged" with the secret still beside the trace.
    */
   framesPath?: string;
@@ -48,7 +48,7 @@ export interface InstalledShim {
   framesPath: string;
   /**
    * The directory holding {@link framesPath}, for {@link discardShellFrames} — and **only** when
-   * orca minted it.
+   * agenticreplay minted it.
    *
    * `undefined` when the caller supplied `framesPath`, because then the directory is theirs and
    * `discardShellFrames` is `rm -rf`. Returning `dirname(framesPath)` here made a caller who put
@@ -73,7 +73,7 @@ export async function installShellShim(options: InstallOptions): Promise<Install
   const dir = join(options.runDir, 'shims');
   const transport = options.framesPath
     ? undefined
-    : await secureTransport(await mkdtemp(join(tmpdir(), 'orca-shell-')));
+    : await secureTransport(await mkdtemp(join(tmpdir(), 'agenticreplay-shell-')));
   const transportDir = transport?.dir;
   const framesPath = options.framesPath ?? join(transportDir!, 'shell-frames.jsonl');
   const shims = options.shims ?? DEFAULT_SHIMS;
@@ -88,14 +88,14 @@ export async function installShellShim(options: InstallOptions): Promise<Install
     const script = windows
       ? [
           '@echo off',
-          'rem Written by orca record. Runs the real binary and notes what happened.',
+          'rem Written by agenticreplay record. Runs the real binary and notes what happened.',
           `${quoteCmd(node)} ${quoteCmd(runner)} ${quoteCmd(name)} ${quoteCmd(dir)} ${quoteCmd(framesPath)} -- %*`,
           'exit /b %ERRORLEVEL%',
           '',
         ].join('\r\n')
       : [
           '#!/bin/sh',
-          '# Written by orca record. Runs the real binary and notes what happened.',
+          '# Written by agenticreplay record. Runs the real binary and notes what happened.',
           `exec ${quotePosix(node)} ${quotePosix(runner)} ${quotePosix(name)} ${quotePosix(dir)} ${quotePosix(framesPath)} -- "$@"`,
           '',
         ].join('\n');
@@ -105,7 +105,7 @@ export async function installShellShim(options: InstallOptions): Promise<Install
   }
 
   if (transportDir !== undefined && !windows) {
-    // Who to ask about later: orca's sweep decides an abandoned transport by whether the process
+    // Who to ask about later: agenticreplay's sweep decides an abandoned transport by whether the process
     // that minted it is still running, because the directory's own mtime stops moving the moment
     // it is created — every frame after that is an append to the file inside it.
     await writeFile(join(transportDir, 'owner.pid'), String(process.pid), { mode: 0o600 }).catch(
@@ -127,7 +127,7 @@ export async function installShellShim(options: InstallOptions): Promise<Install
     framesPath,
     transportDir,
     shimmed: [...shims],
-    env: { ORCA_SHIM_DIR: dir, ORCA_SHIM_FRAMES: framesPath },
+    env: { AGENTICREPLAY_SHIM_DIR: dir, AGENTICREPLAY_SHIM_FRAMES: framesPath },
   };
 }
 
@@ -352,7 +352,7 @@ export async function resolveRunnerBin(): Promise<string> {
     }
   }
   throw new Error(
-    `orca shell-shim: no compiled runner found (looked in ${candidates.join(', ')})\n` +
+    `agenticreplay shell-shim: no compiled runner found (looked in ${candidates.join(', ')})\n` +
       '  run `npm run build` before recording with shell capture',
   );
 }

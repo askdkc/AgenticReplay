@@ -1,5 +1,5 @@
 /**
- * @orcareplay/providers — all of OrcaReplay's wire-format knowledge in one place.
+ * @agenticreplay/providers — all of AgenticReplay's wire-format knowledge in one place.
  *
  * Two layers, deliberately separable:
  *
@@ -16,13 +16,13 @@
  * lines of production code and 570 of tests, kept because the docstring claimed the live path went
  * through it. It never did: when a replay cursor goes live the proxy forwards the agent's own bytes
  * to a configured upstream and translates only where a fork changed the model. Routing that through
- * a `Provider` would mean re-serialising a request orca already holds verbatim, which loses
+ * a `Provider` would mean re-serialising a request agenticreplay already holds verbatim, which loses
  * fidelity for nothing, so the layer was not one push away from being used — it was the wrong shape
  * for the only job it could have had.
  *
- * The `Provider` interface itself is still published, in `@orcareplay/plugin-api`, for an
+ * The `Provider` interface itself is still published, in `@agenticreplay/plugin-api`, for an
  * out-of-tree implementation and for a future live path that wants one. What is gone is the pile of
- * unused code behind it. To point orca at a different model API today: `orca setup`, or
+ * unused code behind it. To point agenticreplay at a different model API today: `agenticreplay setup`, or
  * `--upstream-anthropic` / `--upstream-openai`.
  */
 

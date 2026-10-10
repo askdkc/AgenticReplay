@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BlobStore, TraceReader, TraceWriter, listRuns } from '@orcareplay/core';
+import { BlobStore, TraceReader, TraceWriter, listRuns } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { stripAnsi } from '../src/out.js';
@@ -11,7 +11,7 @@ import { gcCommand, parseDuration } from '../src/commands/gc.js';
 import { main } from '../src/main.js';
 
 /**
- * `orca gc` deletes recorded evidence, so every test here is really asking the same question:
+ * `agenticreplay gc` deletes recorded evidence, so every test here is really asking the same question:
  * does it delete exactly what it said it would, and nothing else?
  */
 describe('gc', () => {
@@ -20,7 +20,7 @@ describe('gc', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-gc-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-gc-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -32,17 +32,22 @@ describe('gc', () => {
   const text = () => stripAnsi(lines.join(''));
 
   async function makeRun(payloads: unknown[] = ['hello']): Promise<string> {
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     for (const payload of payloads) {
-      await writer.append({ type: 'note', actor: 'orca', turn: 1, payload: payload as never });
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn: 1,
+        payload: payload as never,
+      });
     }
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 1 });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 1 });
     await writer.close(0);
     return writer.runDir;
   }
@@ -50,8 +55,8 @@ describe('gc', () => {
   describe('gc — fork worktrees', () => {
     /**
      * A fork materialises the recorded workspace into a scratch directory under the OS temp dir and
-     * runs the agent there, and nothing ever removed it. `orca compare --models a,b,c,d` therefore
-     * left four full copies of the workspace behind on every invocation, permanently, and `orca gc`
+     * runs the agent there, and nothing ever removed it. `agenticreplay compare --models a,b,c,d` therefore
+     * left four full copies of the workspace behind on every invocation, permanently, and `agenticreplay gc`
      * — the command whose entire job is reclaiming space — could not see them.
      *
      * The worktree is not deleted when the fork ends, because it holds what the model actually did:
@@ -59,7 +64,7 @@ describe('gc', () => {
      * with its run.
      */
     it('removes the worktree belonging to a run it deletes', async () => {
-      const worktree = await mkdtemp(join(tmpdir(), 'orca-4-'));
+      const worktree = await mkdtemp(join(tmpdir(), 'agenticreplay-4-'));
       await writeFile(join(worktree, 'auth.ts'), 'export const fixed = true;\n');
 
       const parent = await makeRun(['parent']);
@@ -75,7 +80,7 @@ describe('gc', () => {
     });
 
     it('leaves a worktree alone on a dry run', async () => {
-      const worktree = await mkdtemp(join(tmpdir(), 'orca-4-'));
+      const worktree = await mkdtemp(join(tmpdir(), 'agenticreplay-4-'));
       const child = await makeRun(['child']);
       await patchManifest(child, { parent_run: 'run_000000000000', fork_point: 4, cwd: worktree });
       await ageRun(child, 30 * DAY);
@@ -90,8 +95,8 @@ describe('gc', () => {
       // path look like one of ours — were the same question asked twice. An exact replay now
       // writes a run with `parent_run` set and the *user's own directory* as its cwd, so the fork
       // half has to be a real question again: only a run that actually forked has a `fork_point`,
-      // and only such a run has a directory orca made and may reclaim.
-      const project = await mkdtemp(join(tmpdir(), 'orca-someones-project-'));
+      // and only such a run has a directory agenticreplay made and may reclaim.
+      const project = await mkdtemp(join(tmpdir(), 'agenticreplay-someones-project-'));
       await writeFile(join(project, 'important.ts'), 'do not delete me\n');
 
       const run = await makeRun(['replay trace']);
@@ -106,7 +111,7 @@ describe('gc', () => {
     });
 
     it('never deletes a directory that is not a scratch worktree', async () => {
-      // The guard that matters. A fork's cwd is a temp directory orca made; a plain recording's cwd
+      // The guard that matters. A fork's cwd is a temp directory agenticreplay made; a plain recording's cwd
       // is the user's actual project, and deleting that would be catastrophic.
       const project = await mkdtemp(join(tmpdir(), 'someones-project-'));
       await writeFile(join(project, 'important.ts'), 'do not delete me\n');
@@ -118,7 +123,7 @@ describe('gc', () => {
       await gcCommand(parseArgs(['gc', '--older-than', '7d']), out, cwd);
 
       expect(existsSync(run), 'the run itself should be gone').toBe(false);
-      expect(existsSync(project), "a recording cwd is not orca's to delete").toBe(true);
+      expect(existsSync(project), "a recording cwd is not agenticreplay's to delete").toBe(true);
     });
   });
 
@@ -314,13 +319,13 @@ describe('gc', () => {
     it('leaves blobs alone for a run that was never sealed, which may still be recording', async () => {
       // A live recording writes the blob before the event that references it. Sweeping an
       // in-flight run would delete a payload the writer is about to point at.
-      const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
         adapter: { id: 'test' },
         argv: ['test'],
         cwd,
-        orcaVersion: '0.1.0',
+        agenticreplayVersion: '0.1.0',
       });
-      await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+      await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
       const store = new BlobStore(join(writer.runDir, 'blobs'));
       await store.put('a payload whose event has not been written yet');
 
@@ -399,15 +404,15 @@ describe('gc', () => {
       const parent = await makeRun();
       const parentId = (await listRuns(cwd)).find((r) => r.dir === parent)!.runId;
 
-      const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
         adapter: { id: 'test' },
         argv: ['test'],
         cwd,
-        orcaVersion: '0.1.0',
+        agenticreplayVersion: '0.1.0',
       });
       await writer.append({
         type: 'fork',
-        actor: 'orca',
+        actor: 'agenticreplay',
         turn: 0,
         attrs: { parent_run: parentId, fork_point: 1 },
       });
@@ -472,7 +477,7 @@ describe('gc', () => {
   });
 
   describe('cli wiring', () => {
-    it('is reachable as `orca gc`, not an unknown command', async () => {
+    it('is reachable as `agenticreplay gc`, not an unknown command', async () => {
       const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
       try {
         await makeRun();

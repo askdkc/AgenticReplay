@@ -1,6 +1,6 @@
 """Puts the SDK on `sys.path` so the suite runs from a clean checkout.
 
-`orca_trace` has no build step and no dependencies; requiring `pip install -e` before
+`agenticreplay_trace` has no build step and no dependencies; requiring `pip install -e` before
 `python3 -m pytest python/` would add one for no benefit.
 """
 

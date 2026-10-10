@@ -1,13 +1,13 @@
 import type { Readable, Writable } from 'node:stream';
-import { JsonRpcFramer } from '@orcareplay/mcp-shim';
-import { Orca } from './api.js';
-import { ORCA_VERSION } from './version.js';
+import { JsonRpcFramer } from '@agenticreplay/mcp-shim';
+import { AgenticReplay } from './api.js';
+import { AGENTICREPLAY_VERSION } from './version.js';
 
 /**
- * Orca as tools an agent can call.
+ * AgenticReplay as tools an agent can call.
  *
- * `@orcareplay/mcp-shim` records an agent's *own* MCP traffic — it is a tee, so nothing has ever
- * let an agent ask orca a question. That is backwards for this product in particular: "replay my
+ * `@agenticreplay/mcp-shim` records an agent's *own* MCP traffic — it is a tee, so nothing has ever
+ * let an agent ask agenticreplay a question. That is backwards for this product in particular: "replay my
  * last run and tell me what diverged" is the most useful thing an agent could ask a replay
  * debugger, and it is a question no observability tool can answer, because a trace is a file.
  *
@@ -15,8 +15,8 @@ import { ORCA_VERSION } from './version.js';
  * newline-delimited JSON-RPC and the surface is four method names, so a runtime dependency here
  * would cost more than it carries — and this package has none.
  *
- * The tool set is deliberately narrow and read-mostly. `orca_replay` costs nothing and touches no
- * network; `orca_compare` spends real tokens, and says so in its own description, because an
+ * The tool set is deliberately narrow and read-mostly. `agenticreplay_replay` costs nothing and touches no
+ * network; `agenticreplay_compare` spends real tokens, and says so in its own description, because an
  * agent choosing a tool reads that string and nothing else.
  */
 
@@ -47,14 +47,14 @@ const RUN_ARG = {
 
 export const MCP_TOOLS: McpTool[] = [
   {
-    name: 'orca_list_runs',
+    name: 'agenticreplay_list_runs',
     description:
       'List every agent run recorded in this project, newest first, with the run it was forked ' +
       'from where there is one. Start here when you do not already know which run to look at.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'orca_show_run',
+    name: 'agenticreplay_show_run',
     description:
       'The full timeline of one run: every model turn with its token counts and stop reason, ' +
       'every tool call with its arguments and result, every shell command with its exit code, ' +
@@ -63,14 +63,14 @@ export const MCP_TOOLS: McpTool[] = [
     inputSchema: { type: 'object', properties: { ...RUN_ARG } },
   },
   {
-    name: 'orca_checkpoints',
+    name: 'agenticreplay_checkpoints',
     description:
       'The points in a run a fork can start from — where the conversation prefix is complete and ' +
-      'the workspace was snapshotted. Use before orca_compare to pick a fork point.',
+      'the workspace was snapshotted. Use before agenticreplay_compare to pick a fork point.',
     inputSchema: { type: 'object', properties: { ...RUN_ARG } },
   },
   {
-    name: 'orca_graph',
+    name: 'agenticreplay_graph',
     description:
       'What caused what in a run, as a list of edges. Each edge says which event produced which, ' +
       'and whether it is `recorded` — the recorder watched it happen and wrote it into the trace ' +
@@ -89,7 +89,7 @@ export const MCP_TOOLS: McpTool[] = [
     },
   },
   {
-    name: 'orca_replay',
+    name: 'agenticreplay_replay',
     description:
       'Re-run a recording exactly, with the network blocked and no tokens spent, and report what ' +
       'could not be reproduced: divergences, and requests the recording could not serve. Free ' +
@@ -110,7 +110,7 @@ export const MCP_TOOLS: McpTool[] = [
     },
   },
   {
-    name: 'orca_compare',
+    name: 'agenticreplay_compare',
     description:
       'Fork one recorded run onto several models from the same checkpoint — same files, same ' +
       'conversation prefix — and grade each with a command you choose. SPENDS REAL TOKENS and ' +
@@ -124,7 +124,10 @@ export const MCP_TOOLS: McpTool[] = [
           items: { type: 'string' },
           description: 'Model ids to compare. Required.',
         },
-        from: { type: 'number', description: 'Checkpoint seq to fork at, from orca_checkpoints.' },
+        from: {
+          type: 'number',
+          description: 'Checkpoint seq to fork at, from agenticreplay_checkpoints.',
+        },
         verify: {
           type: 'string',
           description: 'Shell command whose exit code is the verdict, e.g. "npm test".',
@@ -173,7 +176,7 @@ function ok(json: unknown): Record<string, unknown> {
  * one is a protocol error that some clients treat as fatal.
  */
 export async function handleMcpMessage(
-  orca: Orca,
+  agenticreplay: AgenticReplay,
   message: unknown,
 ): Promise<JsonRpcResponse | undefined> {
   const req = asRecord(message) as JsonRpcRequest;
@@ -192,16 +195,19 @@ export async function handleMcpMessage(
       return reply({
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'orcareplay', version: ORCA_VERSION },
+        serverInfo: { name: 'agenticreplay', version: AGENTICREPLAY_VERSION },
       });
     case 'ping':
       return reply({});
     case 'tools/list':
       return reply({ tools: MCP_TOOLS });
     case 'tools/call':
-      return reply(await callTool(orca, asRecord(req.params)));
+      return reply(await callTool(agenticreplay, asRecord(req.params)));
     default:
-      return fail(METHOD_NOT_FOUND, `orca's MCP server does not implement '${method ?? '(none)'}'`);
+      return fail(
+        METHOD_NOT_FOUND,
+        `agenticreplay's MCP server does not implement '${method ?? '(none)'}'`,
+      );
   }
 }
 
@@ -212,7 +218,10 @@ export async function handleMcpMessage(
  * line so a model can read what went wrong and try something else, where a transport error ends
  * the session. A bad run id is an ordinary answer here, not a crash.
  */
-async function callTool(orca: Orca, params: Record<string, unknown>): Promise<unknown> {
+async function callTool(
+  agenticreplay: AgenticReplay,
+  params: Record<string, unknown>,
+): Promise<unknown> {
   const name = typeof params['name'] === 'string' ? params['name'] : '';
   const args = asRecord(params['arguments']);
   const run = typeof args['run'] === 'string' && args['run'] !== '' ? args['run'] : 'last';
@@ -220,34 +229,34 @@ async function callTool(orca: Orca, params: Record<string, unknown>): Promise<un
   const tool = MCP_TOOLS.find((t) => t.name === name);
   if (!tool) {
     return content(
-      `no such tool '${name}'. orca serves: ${MCP_TOOLS.map((t) => t.name).join(', ')}`,
+      `no such tool '${name}'. agenticreplay serves: ${MCP_TOOLS.map((t) => t.name).join(', ')}`,
       true,
     );
   }
 
   try {
     switch (name) {
-      case 'orca_list_runs':
-        return ok(await orca.list());
-      case 'orca_show_run':
-        return ok(await orca.show(run));
-      case 'orca_checkpoints':
-        return ok(await orca.checkpoints(run));
-      case 'orca_graph': {
+      case 'agenticreplay_list_runs':
+        return ok(await agenticreplay.list());
+      case 'agenticreplay_show_run':
+        return ok(await agenticreplay.show(run));
+      case 'agenticreplay_checkpoints':
+        return ok(await agenticreplay.checkpoints(run));
+      case 'agenticreplay_graph': {
         const to = args['to'];
         if (to !== undefined && typeof to !== 'number') {
           return content('to must be a number', true);
         }
-        return ok(await orca.graph(run, to === undefined ? {} : { to }));
+        return ok(await agenticreplay.graph(run, to === undefined ? {} : { to }));
       }
-      case 'orca_replay': {
+      case 'agenticreplay_replay': {
         const worktree = args['worktree'];
         if (worktree !== undefined && typeof worktree !== 'boolean') {
           return content('worktree must be a boolean', true);
         }
-        return ok(await orca.replay(run, worktree === true ? { worktree: true } : {}));
+        return ok(await agenticreplay.replay(run, worktree === true ? { worktree: true } : {}));
       }
-      case 'orca_compare': {
+      case 'agenticreplay_compare': {
         const models = Array.isArray(args['models'])
           ? args['models'].filter((m): m is string => typeof m === 'string')
           : [];
@@ -263,7 +272,7 @@ async function callTool(orca: Orca, params: Record<string, unknown>): Promise<un
           return content('verify must be a string', true);
         }
         return ok(
-          await orca.compare(run, {
+          await agenticreplay.compare(run, {
             models,
             ...(typeof from === 'number' ? { from } : {}),
             ...(typeof verify === 'string' ? { verify } : {}),
@@ -279,7 +288,7 @@ async function callTool(orca: Orca, params: Record<string, unknown>): Promise<un
 }
 
 export interface ServeMcpOptions {
-  orca: Orca;
+  agenticreplay: AgenticReplay;
   input: Readable;
   output: Writable;
 }
@@ -291,14 +300,14 @@ export interface ServeMcpOptions {
  * file read or a subprocess that owns the working tree — and it would let two replays fight over
  * the same checkout.
  */
-export async function serveMcp({ orca, input, output }: ServeMcpOptions): Promise<void> {
+export async function serveMcp({ agenticreplay, input, output }: ServeMcpOptions): Promise<void> {
   const framer = new JsonRpcFramer();
   for await (const chunk of input) {
     for (const frame of framer.push(chunk as Uint8Array)) {
       // A line that is not JSON is a stray log from something upstream, not a message. Dropping it
       // is the only safe answer: there is no id to report an error against.
       if (frame.message === undefined) continue;
-      const response = await handleMcpMessage(orca, frame.message);
+      const response = await handleMcpMessage(agenticreplay, frame.message);
       if (response !== undefined) output.write(`${JSON.stringify(response)}\n`);
     }
   }

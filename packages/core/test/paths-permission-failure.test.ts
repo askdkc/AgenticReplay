@@ -30,7 +30,7 @@ const { ensureRunsDir, runsDir } = await import('../src/paths.js');
 describe('ensureRunsDir when the permission call refuses', () => {
   let cwd: string;
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-perm-fail-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-perm-fail-'));
   });
 
   /**

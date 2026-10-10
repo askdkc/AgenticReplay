@@ -1,20 +1,26 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { delimiter, resolve } from 'node:path';
-import { TraceWriter, ensureRunsDir } from '@orcareplay/core';
-import { FsCapture } from '@orcareplay/fs-capture';
+import { TraceWriter, ensureRunsDir } from '@agenticreplay/core';
+import { FsCapture } from '@agenticreplay/fs-capture';
 import {
   createProxy,
   unusableOrigin,
   recordableOrigin,
   RunCa,
   type NetExchange,
+  type NetRequest,
   type RecordedExchange,
-} from '@orcareplay/proxy';
-import { captureSession, defaultAdapters, resolveLaunch, snapshotDir } from '@orcareplay/adapters';
-import type { Adapter, RecordContext } from '@orcareplay/plugin-api';
+} from '@agenticreplay/proxy';
+import {
+  captureSession,
+  defaultAdapters,
+  resolveLaunch,
+  snapshotDir,
+} from '@agenticreplay/adapters';
+import type { Adapter, RecordContext } from '@agenticreplay/plugin-api';
 import { ExchangeEventDeriver, appendDerivedEvents } from '../exchange-events.js';
-import { discardShellFrames, installShellShim, readShellFrames } from '@orcareplay/shell-shim';
+import { discardShellFrames, installShellShim, readShellFrames } from '@agenticreplay/shell-shim';
 import {
   eventForSpan,
   discardAgentSpanTransport,
@@ -39,9 +45,11 @@ import {
   setupTlsCapture,
   trustRunCa,
   UnclaimedPaths,
+  persistNetRequestStart,
 } from '../tls-capture.js';
 import { upstreamPlan } from '../upstream.js';
-import { ORCA_VERSION } from '../version.js';
+import { AGENTICREPLAY_VERSION } from '../version.js';
+import { captureLimits } from '../capture-limits.js';
 
 export interface RecordResult {
   /**
@@ -55,10 +63,11 @@ export interface RecordResult {
   runDir: string;
   events: number;
   exitCode: number;
+  childExitCode: number;
 }
 
 /**
- * `orca record <agent>` — stand up the capture layers, launch the agent pointed at them, and get
+ * `agenticreplay record <agent>` — stand up the capture layers, launch the agent pointed at them, and get
  * out of the way. The agent is not patched, wrapped or modified; it is simply started with a
  * couple of environment variables that point its model traffic at a local proxy.
  *
@@ -94,7 +103,7 @@ export async function recordCommand(
 
   const minted: RunCa[] = [];
   // Transport directories, disposed here if the run throws before their drain reaches them. Both
-  // hold material written by a process orca does not own — the agent's shells, the agent's own
+  // hold material written by a process agenticreplay does not own — the agent's shells, the agent's own
   // interpreter — and a run that dies partway must not leave either behind.
   const transports: string[] = [];
   // While this run holds them, they are not orphans, and a sweep that cannot resolve this pid —
@@ -134,9 +143,9 @@ async function runRecording(
     // machine-wide by construction — every adapter's is `detectAgent(binaries, homePaths)`, which
     // asks whether a binary is on PATH or a directory exists under `$HOME`, and neither is a fact
     // about this directory. So on a machine with Claude Code installed,
-    // `orca record -- python my_graph.py` detected `claude-code` and launched *that*, handing it
+    // `agenticreplay record -- python my_graph.py` detected `claude-code` and launched *that*, handing it
     // `python my_graph.py` as arguments. The run recorded, so the failure looked like a bad key
-    // rather than like orca having started the wrong program.
+    // rather than like agenticreplay having started the wrong program.
     //
     // `generic-openai` rather than `exec`: both decline to guess what the command is, but only one
     // of them redirects anything. `exec` points the agent nowhere and warns that interception is
@@ -150,7 +159,7 @@ async function runRecording(
     if (!adapter) {
       throw new Error(
         `could not detect an agent in ${cwd}\n` +
-          `  name one explicitly: orca record <${registry.ids().join('|')}>\n` +
+          `  name one explicitly: agenticreplay record <${registry.ids().join('|')}>\n` +
           `  known agents: ${registry.names().join('; ')}`,
       );
     }
@@ -159,8 +168,8 @@ async function runRecording(
 
   // Before the run directory exists, because both of these refuse: `upstreamPlan` an upstream that
   // is not an origin, `planTlsCapture` a `--tls-hosts` list that names `*` or contradicts itself
-  // and an `ORCA_TLS_UPSTREAM_CA` that cannot be read. Resolved after it, a typo in any of them
-  // left an empty run behind for `orca list` to show. Neither depends on more than the arguments,
+  // and an `AGENTICREPLAY_TLS_UPSTREAM_CA` that cannot be read. Resolved after it, a typo in any of them
+  // left an empty run behind for `agenticreplay list` to show. Neither depends on more than the arguments,
   // the environment and a file the run was going to read anyway, so there is no reason for either
   // to run later — and `planTlsCapture` is the refusing half of `setupTlsCapture` alone, so the
   // certificate authority is still minted below, once the run has a directory to mint it into.
@@ -170,10 +179,14 @@ async function runRecording(
   const dir = await ensureRunsDir(cwd);
 
   const writer = await TraceWriter.create(dir, {
-    adapter: { id: adapter.id, version: ORCA_VERSION, harness_version: adapter.harnessVersions },
+    adapter: {
+      id: adapter.id,
+      version: AGENTICREPLAY_VERSION,
+      harness_version: adapter.harnessVersions,
+    },
     argv: [agentName ?? adapter.id, ...args.passthrough],
     cwd,
-    orcaVersion: ORCA_VERSION,
+    agenticreplayVersion: AGENTICREPLAY_VERSION,
   });
 
   const captureFs = args.bool('fs', true);
@@ -207,7 +220,7 @@ async function runRecording(
     // THE NOTE IS WRITTEN AFTER `run.start`, NOT HERE — see the append below it.
     //
     // Instrumenting MCP has to happen before the agent launches, because it rewrites the config the
-    // agent is about to read. Recording that it happened does not: orca-trace requires `run.start`
+    // agent is about to read. Recording that it happened does not: agenticreplay-trace requires `run.start`
     // at seq 0, and appending here put a `note` there instead, which the gateway's validator
     // refuses on push ("run.start at seq 1, must be seq 0"). Nothing local checks the ordering, so
     // every MCP-instrumented recording looked fine and was unpushable. `tls_intercept` already
@@ -221,7 +234,7 @@ async function runRecording(
   if (args.bool('shell', true)) {
     try {
       shell = await installShellShim({ runDir: writer.runDir });
-      // Only when orca minted it. A caller-supplied `framesPath` leaves the directory theirs,
+      // Only when agenticreplay minted it. A caller-supplied `framesPath` leaves the directory theirs,
       // and this list is deleted wholesale on a failure.
       if (shell.transportDir !== undefined) transports.push(shell.transportDir);
     } catch (err) {
@@ -236,7 +249,7 @@ async function runRecording(
   // SDK's tracing to a run without editing the agent, the same trick as the fetch hook's
   // NODE_OPTIONS. Silent and free where the SDK is absent, which is most runs.
   let agentSpans: AgentSpanCapture | undefined;
-  if (args.bool('agent-spans', true)) {
+  if (args.bool('agent-spans', true) || args.bool('tls-intercept', false)) {
     try {
       agentSpans = await installAgentSpans(writer.runDir);
       transports.push(agentSpans.transportDir);
@@ -270,9 +283,78 @@ async function runRecording(
    * captured only unreadable traffic can say which paths those were instead of blaming a
    * base-URL variable that was set correctly.
    */
-  const unclaimed = new UnclaimedPaths();
+  const unclaimed = new UnclaimedPaths(captureLimits(args).maxCapturedBytes);
 
-  const tls = await setupTlsCapture({ args, out, writer, writes, turn: () => turn, unclaimed });
+  let networkExchanges = 0;
+  const requestTurns = new Map<string, number>();
+  const bufferLimit = captureLimits(args).maxBufferedBytes;
+  let queuedBodyBytes = 0;
+  function enqueueBodyWrite(bytes: number, task: () => Promise<void>): boolean {
+    if (queuedBodyBytes + bytes > bufferLimit) {
+      writer.markCaptureIncomplete('persistence_buffer_limit');
+      return false;
+    }
+    queuedBodyBytes += bytes;
+    writes.push(async () => {
+      try {
+        await task();
+      } finally {
+        queuedBodyBytes -= bytes;
+      }
+    });
+    return true;
+  }
+  async function startRequest(request: NetRequest): Promise<void> {
+    const requestTurn = ++turn;
+    requestTurns.set(request.requestId, requestTurn);
+    turnStartedAt.push({ turn: requestTurn, at: request.requestStartedAt });
+    await persistNetRequestStart(writer, requestTurn, request);
+  }
+  function finishRequest(exchange: NetExchange): void {
+    networkExchanges += 1;
+    unclaimed.note(out, exchange);
+    const requestTurn = requestTurns.get(exchange.requestId);
+    if (requestTurn === undefined) writer.markCaptureIncomplete('missing_request_correlation');
+    const bytes =
+      Buffer.byteLength(exchange.requestBody) + Buffer.byteLength(exchange.responseBody);
+    if (!enqueueBodyWrite(bytes, () => persistNetExchange(writer, requestTurn ?? 0, exchange))) {
+      const omitted: NetExchange = {
+        ...exchange,
+        requestBody: '',
+        responseBody: '',
+        requestTruncated: true,
+        responseTruncated: true,
+        transformations: [
+          ...(exchange.transformations ?? []),
+          {
+            kind: 'omission',
+            location: 'request.body',
+            rule: 'persistence_buffer_limit',
+            count: 1,
+            reason: 'concurrent persistence budget exhausted',
+          },
+          {
+            kind: 'omission',
+            location: 'response.body',
+            rule: 'persistence_buffer_limit',
+            count: 1,
+            reason: 'concurrent persistence budget exhausted',
+          },
+        ],
+      };
+      writes.push(() => persistNetExchange(writer, requestTurn ?? 0, omitted));
+    }
+  }
+  const tls = await setupTlsCapture({
+    args,
+    out,
+    writer,
+    writes,
+    turn: () => turn,
+    unclaimed,
+    onRequestStart: startRequest,
+    onNetExchange: finishRequest,
+  });
   if (tls.ca) minted.push(tls.ca);
   const ca = tls.ca;
 
@@ -303,7 +385,7 @@ async function runRecording(
    * which says nothing about whether the harness ever went through it: Claude Code on Windows
    * resolves its shell without consulting PATH, so `shell=on` printed happily while the frames
    * file stayed empty for a run full of Bash calls. Comparing what the model asked for against
-   * what the shim saw is what turns that silence into something orca can say out loud.
+   * what the shim saw is what turns that silence into something agenticreplay can say out loud.
    */
   let commandToolCalls = 0;
   /** Commands the shim actually saw. Zero against a non-zero `commandToolCalls` is the warning. */
@@ -313,7 +395,7 @@ async function runRecording(
    * Exchanges the upstream answered with an error status.
    *
    * Counted because a run in which every model call failed is indistinguishable, from the summary
-   * line alone, from one that worked: the harness retries, gives up, exits 0, and orca prints
+   * line alone, from one that worked: the harness retries, gives up, exits 0, and agenticreplay prints
    * `recorded … exit=0` over a trace whose every answer is a 503. That happened against a gateway
    * whose credentials had lapsed, and nothing in the output said so.
    */
@@ -345,55 +427,52 @@ async function runRecording(
     upstreamHeaders: plan.headers,
     upstreamHeadersOrigin: plan.headersOrigin,
     retrievalStore,
+    onRequestStart: startRequest,
     onExchange: (exchange: RecordedExchange) => {
       modelExchanges += 1;
       if (exchange.status >= 400) {
         erroredExchanges += 1;
         errorStatuses.set(exchange.status, (errorStatuses.get(exchange.status) ?? 0) + 1);
       }
-      writes.push(() => persist(exchange));
+      enqueueBodyWrite(
+        Buffer.byteLength(exchange.rawRequest) + Buffer.byteLength(exchange.rawResponse),
+        () => persist(exchange),
+      );
     },
     // A POST on a path no dialect claims is forwarded rather than refused, and lands in the trace
-    // as the same `net.*` pair unrecognised TLS traffic does. Orca holds the bytes but not the
+    // as the same `net.*` pair unrecognised TLS traffic does. AgenticReplay holds the bytes but not the
     // meaning, so it is evidence, not a replayable turn.
-    onNetExchange: (exchange: NetExchange) => {
-      // The same warning interception has always printed, on the route most runs actually take.
-      // A harness redirected by a base-URL variable posts to the proxy in plaintext, so nothing
-      // it sent on an unclaimed path was ever reported — and a retrieval pipeline is made of
-      // those. See {@link UnclaimedPaths}.
-      unclaimed.note(out, exchange);
-      writes.push(() => persistNetExchange(writer, turn, exchange));
-    },
+    onNetExchange: finishRequest,
     ...tls.proxyOptions,
   });
 
   async function persist(exchange: RecordedExchange): Promise<void> {
-    turn += 1;
-    turnStartedAt.push({ turn, at: Date.now() });
-    await appendDerivedEvents(writer, deriver, exchange, turn, (derived) => {
+    const requestTurn = exchange.requestId ? requestTurns.get(exchange.requestId) : undefined;
+    if (requestTurn === undefined) writer.markCaptureIncomplete('missing_model_correlation');
+    await appendDerivedEvents(writer, deriver, exchange, requestTurn ?? 0, (derived) => {
       if (derived.type === 'tool.call' && isCommandTool(derived.attrs['input'])) {
         commandToolCalls += 1;
       }
     });
 
-    if (fs) await appendSnapshot(fs, writer, out, turn);
+    if (fs) await appendSnapshot(fs, writer, out, requestTurn ?? 0);
   }
 
   await writer.append({
     type: 'run.start',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 0,
     attrs: { adapter: adapter.id, cwd, proxy: proxy.url },
   });
 
   // The source path, written down because a replay needs it and can get it nowhere else:
-  // `manifest.argv` holds the agent's own arguments, and `--mcp-config` is orca's. Without this a
+  // `manifest.argv` holds the agent's own arguments, and `--mcp-config` is agenticreplay's. Without this a
   // replay of an MCP-using run either loses the layer or cannot start the harness at all. Deferred
   // to here so `run.start` keeps seq 0 — see the note at the setup site.
   if (mcp && mcpConfigPath) {
     await writer.append({
       type: 'note',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 0,
       attrs: {
         rule: 'mcp_instrumented',
@@ -401,6 +480,7 @@ async function runRecording(
         servers: mcp.rewritten.join(',') || undefined,
         skipped: mcp.skipped.join(',') || undefined,
       },
+      operationalPathAttrs: ['source'],
     });
   }
 
@@ -412,7 +492,7 @@ async function runRecording(
    * Two failures share this path, and both were silent in their own way.
    *
    * A listening proxy keeps Node's event loop alive, so a throw printed the error and then hung
-   * — `orca record generic-openai -- /nonexistent` never exited, and mistyping an agent name is
+   * — `agenticreplay record generic-openai -- /nonexistent` never exited, and mistyping an agent name is
    * the first thing a new user does. And an unsealed trace has no `ended_at`, `counts` or
    * `integrity`, so everything the agent did is on disk while `verifyIntegrity` reports the run as
    * *tampered* rather than as unfinished.
@@ -425,7 +505,7 @@ async function runRecording(
     await writes.drain().catch(() => undefined);
     if (ca) await ca.dispose().catch(() => undefined);
     await writer
-      .append({ type: 'run.end', actor: 'orca', turn, attrs: { error: String(err) } })
+      .append({ type: 'run.end', actor: 'agenticreplay', turn, attrs: { error: String(err) } })
       .catch(() => undefined);
     await writer.close().catch(() => undefined);
     throw err;
@@ -437,7 +517,7 @@ async function runRecording(
    *
    * The guard used to start at the spawn, which covered the failure it was written for — an agent
    * that is not on PATH — and missed the one that happens first. An adapter validates the
-   * invocation in `prepare`, before anything is spawned: `orca record node agent.mjs`, with the
+   * invocation in `prepare`, before anything is spawned: `agenticreplay record node agent.mjs`, with the
    * `--` left out, printed exactly the right message about the `--` and then hung forever. So did
    * a failure to snapshot the session directory, or to trust the run CA.
    */
@@ -469,11 +549,11 @@ async function runRecording(
           process.env.PYTHONPATH,
           delimiter,
         );
-        prepared.env[SPANS_ENV] = agentSpans.spansPath;
+        if (args.bool('agent-spans', true)) prepared.env[SPANS_ENV] = agentSpans.spansPath;
       }
       if (mcp) {
         pointAtMcpConfig(prepared.env, mcp.configPath);
-        // The variables above are belt and braces for a harness orca has not met. What actually
+        // The variables above are belt and braces for a harness agenticreplay has not met. What actually
         // reaches Claude Code is this: it takes the path on the command line and reads no
         // environment variable for it, so without this the instrumented config was written and
         // never opened.
@@ -482,7 +562,7 @@ async function runRecording(
         else
           out.warn('mcp.not_wired', {
             adapter: adapter.id,
-            cause: `${adapter.id} has no command-line form for an MCP config, and reads none of the variables orca sets`,
+            cause: `${adapter.id} has no command-line form for an MCP config, and reads none of the variables agenticreplay sets`,
             effect:
               'the instrumented config exists but the agent will not load it, so no MCP frames will be captured',
           });
@@ -502,8 +582,8 @@ async function runRecording(
     run: writer.runId,
     adapter: adapter.id,
     proxy: proxy.url,
-    // `proxy` is orca's own address, so the line said where the agent would call and never where
-    // the call would go on to. A gateway left behind in `~/.orca/config.json` redirects every run
+    // `proxy` is agenticreplay's own address, so the line said where the agent would call and never where
+    // the call would go on to. A gateway left behind in `~/.agenticreplay/config.json` redirects every run
     // on the machine, and the first sign of it used to be an answer from a model nobody asked for.
     //
     // Only when something was configured. Left alone, each dialect has its own vendor default and
@@ -531,7 +611,10 @@ async function runRecording(
     return abandon(err);
   }
 
-  await writes.drain();
+  await writes.drain().catch((err: unknown) => {
+    writer.markCaptureIncomplete('storage_failure');
+    out.warn('capture.storage_failure', { detail: String(err) });
+  });
 
   /** The turn an out-of-band frame belongs to: the last one that had begun when it happened. */
   function turnAt(at: number): number {
@@ -551,7 +634,7 @@ async function runRecording(
     const frames = await readShellFrames(shell.framesPath);
     // Read, then gone, for the same reason the spans transport is: every frame is about to be
     // appended through `writer.append`, which redacts, and what is left on disk afterwards is a
-    // verbatim copy of every command line the agent ran that nothing reads and `orca scrub` never
+    // verbatim copy of every command line the agent ran that nothing reads and `agenticreplay scrub` never
     // rewrites. Before the appends rather than after, so an append that throws still takes it.
     const framesLeft =
       shell.transportDir === undefined ? undefined : await discardShellFrames(shell.transportDir);
@@ -643,7 +726,7 @@ async function runRecording(
       const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
       await writer.append({
         type: derived.type as 'agent.start',
-        // `harness`, not `orca`: we did not observe this, we were told it.
+        // `harness`, not `agenticreplay`: we did not observe this, we were told it.
         actor: 'harness',
         turn: at === undefined ? turn : turnAt(startedAt),
         ...(at === undefined ? {} : { occurredAt: at }),
@@ -658,7 +741,7 @@ async function runRecording(
   if (orphans.length > 0) {
     await writer.append({
       type: 'note',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn,
       attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
     });
@@ -668,7 +751,10 @@ async function runRecording(
   // closes, and closing the proxy is what closes the ones an exiting agent left open — so a
   // `proxy.close()` after `writer.close()` produced tunnel records with nowhere to go.
   await proxy.close();
-  await writes.drain();
+  await writes.drain().catch((err: unknown) => {
+    writer.markCaptureIncomplete('storage_failure');
+    out.warn('capture.storage_failure', { detail: String(err) });
+  });
   // The CA dies with the run. `dispose` is idempotent and best-effort: failing to delete a key is
   // worth a warning, never worth losing the trace the user was recording.
   if (ca) {
@@ -714,7 +800,22 @@ async function runRecording(
     });
   }
 
-  await writer.append({ type: 'run.end', actor: 'orca', turn, attrs: { exit_code: exitCode } });
+  const observed = networkExchanges;
+  if (requestTurns.size !== networkExchanges) writer.markCaptureIncomplete('unfinalized_request');
+  if (retrievalStore === 'digest') writer.markCaptureIncomplete('body_storage_disabled');
+  writer.setCaptureSummary({
+    status: observed > 0 ? 'complete' : 'incomplete',
+    issues: observed > 0 ? [] : ['no_requests_observed'],
+    body_limit_bytes: captureLimits(args).maxCapturedBytes,
+    requests: requestTurns.size,
+    responses: networkExchanges,
+  });
+  await writer.append({
+    type: 'run.end',
+    actor: 'agenticreplay',
+    turn,
+    attrs: { exit_code: exitCode },
+  });
   const manifest = await writer.close(exitCode);
 
   out.phase('recorded', {
@@ -722,16 +823,17 @@ async function runRecording(
     events: manifest.counts?.events ?? writer.seq,
     blobs: manifest.counts?.blobs ?? 0,
     exit: exitCode,
+    capture: manifest.capture?.status ?? 'unverified',
     dir: writer.runDir,
   });
 
   /**
-   * The quietest way orca can fail, and the most damaging.
+   * The quietest way agenticreplay can fail, and the most damaging.
    *
    * Capture works by pointing a base-URL variable at the proxy, so a harness that reads none of
    * them is never redirected — and there is nothing to notice. The agent answers, the exit code is
    * zero, and the trace is empty. An agent with its origin compiled into source is the live
-   * example: it never consults a base-URL variable, so `orca record` produces exactly this.
+   * example: it never consults a base-URL variable, so `agenticreplay record` produces exactly this.
    *
    * `contract.ts` already names this shape as what the adapter checks exist to prevent. They guard
    * the adapters; this guards the run, which is where a user actually meets it.
@@ -747,7 +849,7 @@ async function runRecording(
     // capture bug fixed earlier in this branch stayed hidden through a dozen rounds of debugging.
     //
     // The proxy's own counters come first, because they settle the question the other branches
-    // are guessing at. A call orca forwarded is a call the agent made *to orca*: the variables
+    // are guessing at. A call agenticreplay forwarded is a call the agent made *to agenticreplay*: the variables
     // were read and the redirection worked, so "the agent never called the proxy" is false on its
     // face and costs the reader a search through a configuration that was right all along.
     const captured = proxy.stats().retrievalTotal;
@@ -775,7 +877,7 @@ async function runRecording(
               `${adapter.id} is redirected through its own config, and this run had no ` +
               'configured provider to redirect'
             : tls.ca
-              ? 'this adapter captures at the transport, and nothing orca decrypted looked like a model call'
+              ? 'this adapter captures at the transport, and nothing agenticreplay decrypted looked like a model call'
               : 'this adapter captures at the transport, and interception was not on';
     if (retrievalOnly) {
       out.info('capture.retrieval_only', {
@@ -797,7 +899,7 @@ async function runRecording(
         ...(opaque > 0 ? { passed_through: opaque } : {}),
         ...(captured > 0 ? { retrieval: captured } : {}),
         set: baseUrls.join(',') || 'none',
-        next: opaque > 0 ? 'orca show to read what was forwarded' : 'orca doctor',
+        next: opaque > 0 ? 'agenticreplay show to read what was forwarded' : 'agenticreplay doctor',
       });
     }
   }
@@ -822,7 +924,7 @@ async function runRecording(
       status: commonest ? commonest[0] : 'unknown',
       cause: 'every model call the proxy forwarded came back an error',
       effect: 'the trace holds the failures, not any model output — a replay reproduces those',
-      next: 'orca show to read the errors, then check the upstream credential or model id',
+      next: 'agenticreplay show to read the errors, then check the upstream credential or model id',
     });
   }
 
@@ -854,7 +956,7 @@ async function runRecording(
    *
    * `capture.empty` covers the run that recorded nothing. This is the other half: an interactive
    * run records its model calls perfectly, but the prompts that caused them were typed into a
-   * terminal and exist nowhere orca can see. Replaying it launches an agent with nothing to make
+   * terminal and exist nowhere agenticreplay can see. Replaying it launches an agent with nothing to make
    * it ask anything, and it comes back blank — which the user discovers only after paying for the
    * recording. Saying so here, while they are still looking at it, is the whole point.
    */
@@ -864,22 +966,23 @@ async function runRecording(
       exchanges: modelExchanges,
       cause: adapter.session
         ? 'no prompt in argv, and none found in the harness transcript'
-        : `no prompt in argv, and ${adapter.id} exposes no transcript orca can read`,
+        : `no prompt in argv, and ${adapter.id} exposes no transcript agenticreplay can read`,
       effect: 'this run can be inspected, but replay and fork have nothing to drive the agent with',
-      next: `orca show ${writer.runId}`,
+      next: `agenticreplay show ${writer.runId}`,
     });
   }
 
   out.plain('');
-  out.plain(`  orca replay ${writer.runId}            # reproduce it exactly`);
-  out.plain(`  orca replay ${writer.runId} --ui       # open the timeline`);
+  out.plain(`  agenticreplay replay ${writer.runId}            # reproduce it exactly`);
+  out.plain(`  agenticreplay replay ${writer.runId} --ui       # open the timeline`);
 
   return {
     runId: writer.runId,
     runDir: writer.runDir,
     events: manifest.counts?.events ?? writer.seq,
     modelExchanges,
-    exitCode,
+    childExitCode: exitCode,
+    exitCode: exitCode !== 0 ? exitCode : manifest.capture?.status === 'incomplete' ? 2 : 0,
   };
 }
 
@@ -889,7 +992,7 @@ async function runRecording(
  * `stdio: 'inherit'` by default, and that matters: an interactive harness needs the real terminal,
  * and anything less turns a TUI into a stream of escape codes.
  *
- * `quietStdout` is for `--json`, where orca's stdout is a document rather than a terminal. The
+ * `quietStdout` is for `--json`, where agenticreplay's stdout is a document rather than a terminal. The
  * agent's own chatter is still shown — it moves to stderr, where a human reads it and a parser
  * does not. stdin and stderr stay inherited so the agent can still prompt and still colour.
  */
@@ -901,7 +1004,7 @@ async function runChild(
   quietStdout = false,
 ): Promise<number> {
   // Resolved the way detection resolves, so a launcher never reports ENOENT for an agent that
-  // `orca doctor` just called present.
+  // `agenticreplay doctor` just called present.
   const target = await resolveLaunch(command, argv);
   return new Promise((resolve, reject) => {
     const child = spawn(target.file, target.args, {
@@ -945,7 +1048,7 @@ async function runChild(
  * places traffic can go, which is usually one.
  *
  * Through `recordableOrigin` for the same reason the trace goes through it, and against the same
- * sentence: `orca setup --gateway` accepts a URL carrying the key — `https://user:pw@gw.example`,
+ * sentence: `agenticreplay setup --gateway` accepts a URL carrying the key — `https://user:pw@gw.example`,
  * `https://gw.example?key=…` — and `config.ts` says of that file that "nothing ever prints it
  * back". A line on the terminal is printing it back, and it is a line that ends up in CI logs.
  */

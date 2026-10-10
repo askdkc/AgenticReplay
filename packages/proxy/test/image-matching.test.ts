@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonicalRequest } from '@orcareplay/plugin-api';
+import type { CanonicalRequest } from '@agenticreplay/plugin-api';
 import { RequestMatcher, canonicalHash, structuralDistance } from '../src/matching.js';
 
 /**
  * A replay cannot re-render a screenshot, so the matcher must not compare one.
  *
  * This is the same argument the salted-placeholder fold already makes, arriving through a
- * different door. Orca does not intercept the world: replaying a browser agent drives the *real*
+ * different door. AgenticReplay does not intercept the world: replaying a browser agent drives the *real*
  * browser, which paints the page a second time, and two paintings of one page are not the same
  * bytes — a caret blinked, a font landed a frame later, the article was edited between runs.
  *
@@ -54,7 +54,10 @@ describe('image payloads below rung 1', () => {
   });
 
   it('still counts the text that came with it', () => {
-    const moved = shot(PNG_B, 'url=https://en.wikipedia.org/wiki/Orca\n[18]<input search>');
+    const moved = shot(
+      PNG_B,
+      'url=https://en.wikipedia.org/wiki/AgenticReplay\n[18]<input search>',
+    );
     expect(structuralDistance(shot(PNG_A), moved)).toBeGreaterThan(0);
   });
 

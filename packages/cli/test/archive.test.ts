@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { readArchive, writeArchive, type ArchiveEntry } from '../src/archive.js';
 
 /**
- * The archive format `orca push` speaks.
+ * The archive format `agenticreplay push` speaks.
  *
  * A run is pushed as a zip because that is what the gateway's importer reads, and it is read back
- * by `orca pull`. Both directions live here so the pair is tested against each other rather than
+ * by `agenticreplay pull`. Both directions live here so the pair is tested against each other rather than
  * against a fixture that could drift from either.
  *
  * Written by hand rather than with a library because the CLI takes no new runtime dependencies
@@ -92,7 +92,7 @@ describe('archive', () => {
 
   /**
    * A trace archive names blobs by digest under blobs/<ab>/<sha>, so an entry name containing `..`
-   * or an absolute path is either a bug or an attack. `orca pull` writes what it reads to disk, so
+   * or an absolute path is either a bug or an attack. `agenticreplay pull` writes what it reads to disk, so
    * the check belongs here, at the point the name is parsed, rather than in the caller.
    */
   it('refuses entry names that would escape the run directory', async () => {
@@ -115,8 +115,8 @@ describe('archive', () => {
    *
    * A run directory holds one file per unique content-addressed blob, so a
    * long session with heavy tool output reaches these counts on its own. In
-   * that third band `orca push` sends a structurally corrupt archive and
-   * `orca pull` installs a fraction of the run reporting success — silent
+   * that third band `agenticreplay push` sends a structurally corrupt archive and
+   * `agenticreplay pull` installs a fraction of the run reporting success — silent
    * partial data loss, which is the one outcome this file's stated invariant
    * ("entry bytes round-trip EXACTLY") rules out.
    *

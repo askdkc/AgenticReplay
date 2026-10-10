@@ -1,12 +1,12 @@
 # My agent broke something. How do I find out why?
 
 You ran a coding agent, it changed files, tests fail, and the terminal has scrolled. Re-running
-gives you a different failure. This is the situation OrcaReplay exists for.
+gives you a different failure. This is the situation AgenticReplay exists for.
 
 ## 1. Record the run
 
 ```console
-orca record claude
+agenticreplay record claude
 ```
 
 Your agent runs normally. Nothing about it is patched — it is started with a couple of environment
@@ -17,7 +17,7 @@ When it finishes (or you `^C` it), you get a run id.
 ## 2. Look at what happened, in order
 
 ```console
-orca show last
+agenticreplay show last
 ```
 
 ```
@@ -67,7 +67,7 @@ rows.
 **The `SHELL` rows sit at the end even though they ran in the middle.** The `PATH` shim writes its
 frames to a file, and the recorder drains that file once the agent has exited — so shell events are
 appended last and carry the highest `seq`. Their `ts` and `mono_us` are the real moments they
-happened, so anything sorting by time puts them back where they belong, but `orca show` and the
+happened, so anything sorting by time puts them back where they belong, but `agenticreplay show` and the
 viewer both list a trace in `seq` order, which is append order. Line 17 happened between turns 2
 and 3, not after the run.
 
@@ -88,14 +88,14 @@ while the tests were re-run twice.
 `detectLoops` in `packages/viewer/src/render.ts` is about forty lines and reads nothing but the
 public format, which is the point: it is the model to copy for an analyzer of your own.
 
-The only `note` events a recording contains are the two `orca record` writes itself —
+The only `note` events a recording contains are the two `agenticreplay record` writes itself —
 `fs_snapshot_skipped`, when a workspace snapshot failed and that turn has no checkpoint, and
 `unresolved_tool_calls`, when the run ended with a tool call whose result never came back.
 
 ## 3. Open the timeline
 
 ```console
-orca replay last --ui
+agenticreplay replay last --ui
 ```
 
 Click a step to see exactly what went in and what came out — the request, the tool result, the
@@ -105,11 +105,11 @@ fastest way to feel where it stalled.
 ## 4. Reproduce it exactly
 
 ```console
-orca replay last
+agenticreplay replay last
 ```
 
 Every model response is served from the trace and the network is blocked. If it reproduces, you
-have a deterministic loop to work in. If it *doesn't*, OrcaReplay tells you where it diverged
+have a deterministic loop to work in. If it *doesn't*, AgenticReplay tells you where it diverged
 rather than pretending — that divergence is usually itself the answer.
 
 ## What if replay reports divergences?
@@ -119,7 +119,7 @@ different point. A `minor` divergence is normal. A `major` one means the convers
 differed — usually compaction — and is worth reading.
 
 If replay halts with `does not match the recording`, the agent asked something the recording never
-saw. `orca replay last --loose` continues live from that point.
+saw. `agenticreplay replay last --loose` continues live from that point.
 
 ## Next
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { Redactor } from '@orcareplay/core';
-import type { CanonicalContent, CanonicalRequest } from '@orcareplay/plugin-api';
-import { DIVERGENCE_LEVELS, MATCH_RUNGS } from '@orcareplay/schema';
+import { Redactor } from '@agenticreplay/core';
+import type { CanonicalContent, CanonicalRequest } from '@agenticreplay/plugin-api';
+import { DIVERGENCE_LEVELS, MATCH_RUNGS } from '@agenticreplay/schema';
 
 /**
  * The replay matching ladder (spec §4).
@@ -172,7 +172,7 @@ function foldPlaceholders(text: string): string {
 /**
  * A rendered image is the second value a replay can never reproduce, for the same reason as a
  * salted placeholder and with the same consequence: rung 1 is unreachable for any request carrying
- * one. A replay drives the *real* browser — orca does not intercept the world — so the screenshot
+ * one. A replay drives the *real* browser — agenticreplay does not intercept the world — so the screenshot
  * arriving now was rendered a second time, and two renders of one page are not the same bytes. A
  * caret blinked, a font landed a frame later, the article was edited.
  *
@@ -385,7 +385,7 @@ function messageCount(form: Record<string, unknown>): number {
  * it said.
  *
  * If two requests agree on this and differ elsewhere, the only thing that changed is what the world
- * returned — and on replay it will, because orca does not intercept tool execution. That is the
+ * returned — and on replay it will, because agenticreplay does not intercept tool execution. That is the
  * price of not patching the harness: the agent really re-runs `npm test`, which really reprints its
  * own durations. `is_error` is kept, so a check that went from failing to passing is still a
  * difference; only the text of the output is set aside.
@@ -929,7 +929,7 @@ export class RequestMatcher {
     const images = this.#images[index]!;
 
     // Rung 2a — identical everywhere the trace kept a comparable value. What differs is only what
-    // orca can neither reproduce nor rule out: a placeholder digest, salted per run, and an image,
+    // agenticreplay can neither reproduce nor rule out: a placeholder digest, salted per run, and an image,
     // rendered again. Both are named rather than waved through — this is the ordinary shape of
     // replaying a real harness, whose own prompt carries a session id and whose eyes are a camera.
     if (distance === 0) {

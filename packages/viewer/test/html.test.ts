@@ -6,6 +6,39 @@ import { ev, manifest, resetSeq, snap } from './fixtures.js';
 
 beforeEach(() => resetSeq());
 
+it('shows capture status separately from the agent exit and exposes transformation details', () => {
+  const input = manifest();
+  input.capture = {
+    status: 'incomplete',
+    issues: ['body_limit'],
+    body_limit_bytes: 64,
+    requests: 1,
+    responses: 1,
+  };
+  const page = renderTraceHtml({
+    manifest: input,
+    events: [
+      ev({
+        type: 'net.response',
+        transformations: [
+          {
+            kind: 'redaction',
+            location: 'payload',
+            rule: 'sk_api_key',
+            count: 2,
+            reason: 'credential policy',
+          },
+        ],
+      }),
+    ],
+  });
+  expect(page).toContain('capture');
+  expect(page).toContain('incomplete');
+  expect(page).toContain('body_limit');
+  expect(page).toContain('transformations');
+  expect(page).toContain('sk_api_key');
+});
+
 /** Read the balanced `{ ... }` block that follows `selector` in a stylesheet. */
 function ruleBody(css: string, selector: string): string {
   const at = css.indexOf(selector);
@@ -264,13 +297,11 @@ describe('document structure', () => {
   });
 
   it('titles the document with the run id', () => {
-    expect(basic()).toContain('<title>run_abc123 · OrcaReplay</title>');
+    expect(basic()).toContain('<title>run_abc123 · AgenticReplay</title>');
   });
 
   it('ends with the exact footer line', () => {
-    expect(basic()).toContain(
-      'Recorded with OrcaReplay · built by the OrcaRouter.ai team · github.com/Continuum-AI-Corp/OrcaReplay',
-    );
+    expect(basic()).toContain('Recorded with AgenticReplay · github.com/askdkc/AgenticReplay');
     expect(basic()).not.toMatch(/<img|<svg/i);
   });
 
@@ -283,8 +314,8 @@ describe('document structure', () => {
     expect((markup.match(/aria-selected="true"/g) ?? []).length).toBe(1);
     expect((markup.match(/aria-selected="false"/g) ?? []).length).toBe(2);
     expect(html).toContain('role="tablist"');
-    expect(html).toContain('aria-controls="orca-pane-0"');
-    expect(html).toContain('aria-labelledby="orca-row-0"');
+    expect(html).toContain('aria-controls="agenticreplay-pane-0"');
+    expect(html).toContain('aria-labelledby="agenticreplay-row-0"');
     expect((html.match(/<button/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 
@@ -327,7 +358,7 @@ describe('document structure', () => {
     const html = renderTraceHtml({ manifest: manifest(), events: [] });
     expect(html).toContain('no events');
     expect((html.match(/role="tab"/g) ?? []).length).toBe(0);
-    expect(html).toContain('Recorded with OrcaReplay');
+    expect(html).toContain('Recorded with AgenticReplay');
   });
 
   // Three turns on one tree used to be the definition of a loop, and is now the definition of a
@@ -400,7 +431,8 @@ describe('detail panes', () => {
       { maxInlineChars: 100 },
     );
     expect(html).toContain('truncated');
-    expect(html).not.toContain('x'.repeat(200));
+    expect(html).toContain('download full redacted body');
+    expect(html).toContain('download="agenticreplay-event-0.txt"');
   });
 
   it('marks diff lines by form, without colour', () => {

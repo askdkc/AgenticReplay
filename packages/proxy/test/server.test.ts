@@ -1,11 +1,44 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AUTH_REQUEST_HEADERS } from '@orcareplay/core';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import zlib from 'node:zlib';
+import type { AddressInfo } from 'node:net';
+import { AUTH_REQUEST_HEADERS } from '@agenticreplay/core';
 import type { RecordedExchange } from '../src/server.js';
 import { createProxy } from '../src/server.js';
 
 const closers: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (closers.length) await closers.pop()!();
+});
+
+it('records unsupported WebSocket attempts as incomplete instead of silent 404s', async () => {
+  const seen: import('../src/server.js').NetExchange[] = [];
+  const proxy = await createProxy({
+    mode: 'record',
+    onNetExchange: (e) => {
+      seen.push(e);
+    },
+  });
+  closers.push(proxy.close);
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    const req = httpRequest(
+      `${proxy.url}/v1/responses`,
+      { headers: { connection: 'Upgrade', upgrade: 'websocket' } },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  expect(status).toBe(501);
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toMatchObject({
+    responseComplete: false,
+    responseError: 'unsupported WebSocket transport',
+    method: 'GET',
+  });
 });
 
 const ANTHROPIC_BODY = {
@@ -59,6 +92,337 @@ describe('proxy — record mode', () => {
     expect(up.calls[0]!.url).toContain('/v1/messages');
   });
 
+  it('emits authoritative network evidence for an ordinary model call', async () => {
+    const up = stubUpstream(ANTHROPIC_REPLY);
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => seen.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    const serialized = JSON.stringify(ANTHROPIC_BODY);
+    await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer ordinary-test-secret',
+      },
+      body: serialized,
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      method: 'POST',
+      path: '/v1/messages',
+      requestBody: serialized,
+      requestBytes: Buffer.byteLength(serialized),
+      status: 200,
+      responseBody: JSON.stringify(ANTHROPIC_REPLY),
+      responseComplete: true,
+      responseBytes: Buffer.byteLength(JSON.stringify(ANTHROPIC_REPLY)),
+      modelDialect: 'anthropic',
+    });
+    expect(seen[0]!.requestId).toEqual(expect.any(String));
+    expect(seen[0]!.transformations?.some((t) => t.kind === 'header_excluded')).toBe(true);
+    expect(JSON.stringify(seen[0])).not.toContain('ordinary-test-secret');
+  });
+
+  it('matches the captured exchange against an independent origin log', async () => {
+    const originRequests: Array<{
+      path: string;
+      body: string;
+      headers: Record<string, string | string[]>;
+    }> = [];
+    const origin = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        originRequests.push({
+          path: req.url ?? '/',
+          body: Buffer.concat(chunks).toString('utf8'),
+          headers: req.headers as Record<string, string | string[]>,
+        });
+        res.writeHead(200, { 'content-type': 'application/json', 'x-origin-proof': 'yes' });
+        res.end(JSON.stringify(ANTHROPIC_REPLY));
+      });
+    });
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve));
+    const address = origin.address() as AddressInfo;
+    closers.push(async () => new Promise<void>((resolve) => origin.close(() => resolve())));
+
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      upstream: { anthropic: `http://127.0.0.1:${address.port}` },
+      onNetExchange: (exchange) => seen.push(exchange),
+    });
+    closers.push(proxy.close);
+    const serialized = JSON.stringify({ ...ANTHROPIC_BODY, metadata: { unknown: 'preserve-me' } });
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: serialized,
+    });
+    expect(response.status).toBe(200);
+    const captured = seen.find((exchange) => exchange.modelDialect === 'anthropic');
+    expect(originRequests).toHaveLength(1);
+    expect(captured).toBeDefined();
+    expect(originRequests[0]!.path).toBe('/v1/messages');
+    expect(originRequests[0]!.body).toBe(serialized);
+    expect(captured!.requestBody).toBe(originRequests[0]!.body);
+    expect(captured!.responseBody).toBe(JSON.stringify(ANTHROPIC_REPLY));
+    expect(captured!.responseHeaders['x-origin-proof']).toBe('yes');
+  });
+
+  it('preserves repeated non-secret request fields in plain transport evidence', async () => {
+    const origin = createHttpServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'x-origin-repeat': ['one', 'two'],
+        });
+        res.end(JSON.stringify(ANTHROPIC_REPLY));
+      });
+    });
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve));
+    const address = origin.address() as AddressInfo;
+    closers.push(async () => new Promise<void>((resolve) => origin.close(() => resolve())));
+
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      upstream: { anthropic: `http://127.0.0.1:${address.port}` },
+      onNetExchange: (exchange) => seen.push(exchange),
+    });
+    closers.push(proxy.close);
+    const body = JSON.stringify(ANTHROPIC_BODY);
+    const response = await new Promise<{
+      status: number;
+      headers: import('node:http').IncomingHttpHeaders;
+    }>((resolve, reject) => {
+      const request = httpRequest(
+        `${proxy.url}/v1/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-repeat': ['one', 'two'],
+            'content-length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers }));
+        },
+      );
+      request.on('error', reject);
+      request.end(body);
+    });
+
+    expect(response.status).toBe(200);
+    const captured = seen.find((exchange) => exchange.modelDialect === 'anthropic');
+    expect(captured?.requestHeaders['x-repeat']).toEqual(['one', 'two']);
+    expect(captured?.responseHeaders['x-origin-repeat']).toBe('one, two');
+    expect(captured?.transformations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'encoding',
+          location: 'response.headers',
+          rule: 'fetch-headers-boundary-normalization',
+        }),
+      ]),
+    );
+  });
+
+  it('audits plain request decoding, response decoding, and excluded response headers', async () => {
+    const origin = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        expect(Buffer.concat(chunks).toString('utf8')).toBe(JSON.stringify(ANTHROPIC_BODY));
+        const encoded = zlib.gzipSync(Buffer.from(JSON.stringify(ANTHROPIC_REPLY)));
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'content-encoding': 'gzip',
+          'content-length': String(encoded.length),
+          'set-cookie': 'session=origin-secret',
+          'x-repeat': 'first',
+        });
+        res.end(encoded);
+      });
+    });
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve));
+    const address = origin.address() as AddressInfo;
+    closers.push(async () => new Promise<void>((resolve) => origin.close(() => resolve())));
+
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      upstream: { anthropic: `http://127.0.0.1:${address.port}` },
+      onNetExchange: (exchange) => seen.push(exchange),
+    });
+    closers.push(proxy.close);
+    const requestBytes = zlib.gzipSync(Buffer.from(JSON.stringify(ANTHROPIC_BODY)));
+    const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpRequest(
+        `${proxy.url}/v1/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-encoding': 'gzip',
+            'content-length': requestBytes.length,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }),
+          );
+        },
+      );
+      request.on('error', reject);
+      request.end(requestBytes);
+    });
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual(ANTHROPIC_REPLY);
+    expect(seen).toHaveLength(1);
+    const transformations = seen[0]!.transformations ?? [];
+    expect(transformations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'decompression', location: 'request.body', count: 1 }),
+        expect.objectContaining({ kind: 'decompression', location: 'response.body', count: 1 }),
+        expect.objectContaining({
+          kind: 'header_excluded',
+          location: 'response.headers',
+          reason: expect.stringContaining('set-cookie'),
+        }),
+      ]),
+    );
+    expect(seen[0]!.responseHeaders['content-encoding']).toBeUndefined();
+    expect(seen[0]!.responseHeaders['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(seen[0])).not.toContain('origin-secret');
+  });
+
+  it('streams the full live response while bounding the retained model body', async () => {
+    const full = JSON.stringify({
+      id: 'msg-large',
+      type: 'message',
+      model: 'claude-opus-5',
+      content: [{ type: 'text', text: 'tail-' + 'x'.repeat(512) }],
+      unknown_provider_field: { preserve: true },
+    });
+    const up = stubUpstream(JSON.parse(full));
+    const network: import('../src/server.js').NetExchange[] = [];
+    const exchanges: RecordedExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      maxCapturedBytes: 256,
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => network.push(exchange),
+      onExchange: (exchange) => exchanges.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    const response = await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+    expect(response.status).toBe(200);
+    expect(network).toHaveLength(1);
+    expect(network[0]).toMatchObject({
+      responseBytes: Buffer.byteLength(full),
+      responseTruncated: true,
+      responseComplete: true,
+      modelDialect: 'anthropic',
+    });
+    expect(network[0]!.responseBody).toBe(full.slice(0, 256));
+    expect(exchanges).toHaveLength(0);
+  });
+
+  it('keeps invalid UTF-8 response bytes and marks transport evidence incomplete', async () => {
+    const invalid = Uint8Array.from([0xc3, 0x28, 0xff, 0x00]);
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      fetchImpl: (async () =>
+        new Response(invalid, {
+          status: 200,
+          headers: { 'content-type': 'application/octet-stream' },
+        })) as typeof fetch,
+      onNetExchange: (exchange) => seen.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    const body = JSON.stringify(ANTHROPIC_BODY);
+    const response = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from(invalid));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.responseComplete).toBe(false);
+    expect(seen[0]!.responseError).toBe('unsupported_binary_body');
+    expect(seen[0]!.responseBody).toBe(
+      `agenticreplay-base64:${Buffer.from(invalid).toString('base64')}`,
+    );
+  });
+
+  it('records the resolved destination at request start and reports recorder failure', async () => {
+    const up = stubUpstream(ANTHROPIC_REPLY);
+    const starts: import('../src/server.js').NetRequest[] = [];
+    const network: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      upstream: { anthropic: 'https://gateway.example' },
+      fetchImpl: up.fetchImpl,
+      onRequestStart: (request) => starts.push(request),
+      onNetExchange: (exchange) => network.push(exchange),
+    });
+    closers.push(proxy.close);
+    await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+    expect(starts[0]).toMatchObject({ host: 'gateway.example', port: 443, path: '/v1/messages' });
+    expect(starts[0]!.requestHeaders['content-type']).toBe('application/json');
+
+    const failed: import('../src/server.js').NetExchange[] = [];
+    const blocked = await createProxy({
+      mode: 'record',
+      fetchImpl: up.fetchImpl,
+      onRequestStart: () => {
+        throw new Error('persist failed');
+      },
+      onNetExchange: (exchange) => failed.push(exchange),
+    });
+    closers.push(blocked.close);
+    const response = await post(`${blocked.url}/v1/messages`, ANTHROPIC_BODY);
+    expect(response.status).toBe(500);
+    expect(failed[0]).toMatchObject({
+      responseComplete: false,
+      responseError: expect.stringContaining('persist failed'),
+    });
+  });
+
+  it('records URL scrubbing as a transport transformation', async () => {
+    const up = stubUpstream(ANTHROPIC_REPLY);
+    const network: import('../src/server.js').NetExchange[] = [];
+    const proxy = await createProxy({
+      mode: 'record',
+      upstream: { anthropic: 'https://user:password@gateway.example?key=secret' },
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => network.push(exchange),
+    });
+    closers.push(proxy.close);
+    await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+    expect(network[0]!.transformations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'url_scrubbed', location: 'destination.url' }),
+      ]),
+    );
+  });
+
   it('emits one exchange carrying both raw bytes and the canonical form', async () => {
     const up = stubUpstream(ANTHROPIC_REPLY);
     const seen: RecordedExchange[] = [];
@@ -82,7 +446,7 @@ describe('proxy — record mode', () => {
     expect(ex.usage?.input_tokens).toBe(12);
   });
 
-  it('sends the query the client wrote, on the endpoint orca resolved', async () => {
+  it('sends the query the client wrote, on the endpoint agenticreplay resolved', async () => {
     const up = stubUpstream(ANTHROPIC_REPLY);
     const proxy = await createProxy({
       mode: 'record',
@@ -93,7 +457,7 @@ describe('proxy — record mode', () => {
 
     const res = await post(`${proxy.url}/v1/messages?api-version=2026-02-01`, ANTHROPIC_BODY);
 
-    // The path is orca's to normalise -- it chose this origin, and the incoming path cannot be
+    // The path is agenticreplay's to normalise -- it chose this origin, and the incoming path cannot be
     // trusted to carry the version segment. The query is not: the client set it, and Azure OpenAI
     // requires `api-version` on every call, so losing it is `404 Resource not found` with nothing
     // in the run to explain it.
@@ -442,6 +806,77 @@ describe('proxy — forking onto another provider', () => {
     expect(body.object).toBeUndefined();
   });
 
+  it('retains the origin response bytes in network evidence when translating providers', async () => {
+    const network: import('../src/server.js').NetExchange[] = [];
+    const up = stubUpstream(OPENAI_REPLY);
+    const proxy = await createProxy({
+      mode: 'hybrid',
+      forkAt: 0,
+      forkModel: 'gpt-5.2',
+      exchanges: [recordedAnthropic],
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => network.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+
+    expect(network).toHaveLength(1);
+    expect(network[0]!.responseBody).toBe(JSON.stringify(OPENAI_REPLY));
+    expect(network[0]!.path).toBe('/v1/chat/completions');
+    expect(network[0]!.modelDialect).toBe('openai');
+    expect(network[0]!.transformations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'encoding',
+          location: 'request.body',
+          rule: 'provider-protocol-translation',
+        }),
+        expect.objectContaining({
+          kind: 'encoding',
+          location: 'response.body',
+          rule: 'provider-protocol-translation',
+        }),
+      ]),
+    );
+  });
+
+  it('retains origin evidence when cross-provider response translation fails', async () => {
+    const network: import('../src/server.js').NetExchange[] = [];
+    const up = {
+      calls: [] as { url: string; init: RequestInit }[],
+      fetchImpl: (async (url: string | URL | Request, init: RequestInit = {}) => {
+        up.calls.push({ url: String(url), init });
+        return new Response('{invalid-json', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch,
+    };
+    const proxy = await createProxy({
+      mode: 'hybrid',
+      forkAt: 0,
+      forkModel: 'gpt-5.2',
+      exchanges: [recordedAnthropic],
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => network.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    const result = await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+
+    expect(result.status).toBe(502);
+    expect(network).toHaveLength(1);
+    expect(network[0]).toMatchObject({
+      path: '/v1/chat/completions',
+      responseBody: '{invalid-json',
+      responseComplete: true,
+      responseTruncated: false,
+      responseError: expect.stringContaining('translation failed'),
+      modelDialect: 'openai',
+    });
+  });
+
   it('still goes to the recorded provider when the model belongs to it', async () => {
     const up = stubUpstream(ANTHROPIC_REPLY);
     const proxy = await createProxy({
@@ -457,6 +892,33 @@ describe('proxy — forking onto another provider', () => {
 
     expect(up.calls[0]!.url).toContain('api.anthropic.com');
     expect(JSON.parse(String(up.calls[0]!.init.body)).model).toBe('claude-haiku-4-5');
+  });
+
+  it('audits same-provider model replacement and request serialization', async () => {
+    const network: import('../src/server.js').NetExchange[] = [];
+    const up = stubUpstream(ANTHROPIC_REPLY);
+    const proxy = await createProxy({
+      mode: 'hybrid',
+      forkAt: 0,
+      forkModel: 'claude-haiku-4-5',
+      exchanges: [recordedAnthropic],
+      fetchImpl: up.fetchImpl,
+      onNetExchange: (exchange) => network.push(exchange),
+    });
+    closers.push(proxy.close);
+
+    await post(`${proxy.url}/v1/messages`, ANTHROPIC_BODY);
+
+    expect(JSON.parse(String(up.calls[0]!.init.body)).model).toBe('claude-haiku-4-5');
+    expect(network[0]!.transformations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'encoding',
+          location: 'request.body',
+          rule: 'model-override-and-serialization',
+        }),
+      ]),
+    );
   });
 });
 
@@ -678,7 +1140,7 @@ describe('proxy — replay mode', () => {
     const body = res.json as { type?: string; error?: { type?: string; message?: string } };
 
     expect(body.type).toBe('error');
-    expect(body.error?.message).toContain('orca');
+    expect(body.error?.message).toContain('agenticreplay');
     expect(body.error?.message).toContain('--loose');
   });
 
@@ -787,11 +1249,33 @@ describe('proxy — hybrid (fork) mode', () => {
 });
 
 describe('proxy — health', () => {
-  it('answers /__orca/health without touching the recording', async () => {
+  it('answers /__agenticreplay/health without touching the recording', async () => {
     const proxy = await createProxy({ mode: 'replay', exchanges: [] });
     closers.push(proxy.close);
-    const res = await fetch(`${proxy.url}/__orca/health`);
+    const res = await fetch(`${proxy.url}/__agenticreplay/health`);
     expect(res.status).toBe(200);
     expect((await res.json()).mode).toBe('replay');
+  });
+});
+
+describe('proxy — compressed plain HTTP requests', () => {
+  it('decodes gzip before parsing and removes stale encoding headers upstream', async () => {
+    const up = stubUpstream(ANTHROPIC_REPLY);
+    const proxy = await createProxy({ mode: 'record', fetchImpl: up.fetchImpl });
+    closers.push(proxy.close);
+    const serialized = JSON.stringify(ANTHROPIC_BODY);
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+      },
+      body: zlib.gzipSync(Buffer.from(serialized)),
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(String(up.calls[0]!.init.body))).toEqual(ANTHROPIC_BODY);
+    const headers = new Headers(up.calls[0]!.init.headers);
+    expect(headers.has('content-encoding')).toBe(false);
+    expect(headers.get('content-length')).toBe(String(Buffer.byteLength(serialized)));
   });
 });

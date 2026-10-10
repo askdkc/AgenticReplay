@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import type { GitInfo } from '@orcareplay/schema';
+import type { GitInfo } from '@agenticreplay/schema';
 import { runGit } from './git.js';
 import type { FileChange, ForcedInsideNested, MaterializeOptions, TreeFile } from './shadow.js';
 import { ShadowIndex } from './shadow.js';
@@ -158,9 +158,9 @@ export class FsCapture {
 
   /**
    * The run dir usually sits inside the workspace, so without this every run in a clean checkout
-   * would report `dirty: true` because of orca's own files.
+   * would report `dirty: true` because of agenticreplay's own files.
    *
-   * The whole `.orca` directory is excluded, not just this run's own directory inside it.
+   * The whole `.agenticreplay` directory is excluded, not just this run's own directory inside it.
    * Excluding one run left every *earlier* run counting as an untracked change, so the second
    * recording in a workspace reported the user's tree dirty — the same failure this exists to
    * prevent, one run later, and almost nobody records only once.
@@ -173,11 +173,13 @@ export class FsCapture {
     const rel = relative(root, run);
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return [];
 
-    // Cut the path back to its `.orca` segment rather than assuming a depth, so this keeps working
-    // if the layout under `.orca` ever changes. No such segment: exclude the run dir alone.
+    // Cut the path back to its `.agenticreplay` segment rather than assuming a depth, so this keeps working
+    // if the layout under `.agenticreplay` ever changes. No such segment: exclude the run dir alone.
     const parts = rel.split(sep);
-    const orcaAt = parts.indexOf('.orca');
-    const exclude = (orcaAt === -1 ? parts : parts.slice(0, orcaAt + 1)).join('/');
+    const agenticreplayAt = parts.indexOf('.agenticreplay');
+    const exclude = (agenticreplayAt === -1 ? parts : parts.slice(0, agenticreplayAt + 1)).join(
+      '/',
+    );
     return ['--', ':/', `:(top,exclude,literal)${exclude}`];
   }
 }

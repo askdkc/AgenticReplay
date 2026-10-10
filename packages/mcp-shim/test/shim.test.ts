@@ -223,13 +223,13 @@ describe('runShim', () => {
     await expect(
       runShim({
         name: 'missing',
-        command: 'orca-no-such-mcp-server',
+        command: 'agenticreplay-no-such-mcp-server',
         args: [],
         stdin,
         stdout,
         stderr,
       }),
-    ).rejects.toThrow(/orca-no-such-mcp-server/);
+    ).rejects.toThrow(/agenticreplay-no-such-mcp-server/);
   });
 
   it('reports a launch that fails synchronously, naming the server', async () => {

@@ -3,8 +3,8 @@
  * Render the README's push/pull card.
  *
  * EVERY LINE BELOW IS REAL OUTPUT, read from docs/media/sync-transcript.txt rather than typed
- * here. That transcript is a genuine round trip: `orca record` against the repo's own fake agent,
- * then `orca push`, then `orca pull` into a DIFFERENT workspace, then `orca show` reading the
+ * here. That transcript is a genuine round trip: `agenticreplay record` against the repo's own fake agent,
+ * then `agenticreplay push`, then `agenticreplay pull` into a DIFFERENT workspace, then `agenticreplay show` reading the
  * pulled copy — captured with NO_COLOR=1. Nothing is reworded and no line is invented.
  *
  * The same rule render-demo.mjs states for the hero animation, and for the same reason: a README
@@ -66,7 +66,7 @@ const CSS = `
 
 const html = `<!doctype html><meta charset="utf-8"><style>${CSS}</style>
 <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
-<span>ORCA · PUSH AND PULL</span></div>
+<span>AGENTICREPLAY · PUSH AND PULL</span></div>
 <div class="body">${lines
   .map((l) => {
     const kind = classify(l);
@@ -81,7 +81,7 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 960, height: 600 }, deviceScaleFactor: 2 });
 await page.setContent(html);
 
-// SIZED TO THE OUTPUT, rather than the output trimmed to fit a fixed card. `orca show`'s DETAIL
+// SIZED TO THE OUTPUT, rather than the output trimmed to fit a fixed card. `agenticreplay show`'s DETAIL
 // column is as wide as the tool call it is reporting, and a card that clipped it would be showing
 // an abbreviation of real output while presenting itself as a transcript. Measured from the
 // rendered text, so the width follows whatever the commands actually printed.

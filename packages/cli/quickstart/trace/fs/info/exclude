@@ -6,6 +6,6 @@
 *.key
 id_rsa*
 id_ed25519*
-.orca/
+.agenticreplay/
 node_modules/
 .git/

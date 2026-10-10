@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { validateEvent } from '@orcareplay/schema';
+import { validateEvent } from '@agenticreplay/schema';
 import {
   agentSpanLosses,
   discardAgentSpanTransport,
@@ -31,7 +31,7 @@ const result_seq = () => (seq += 1);
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-spans-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-spans-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -40,7 +40,7 @@ afterEach(async () => {
 /**
  * The sixth capture layer: what a harness reports about itself.
  *
- * Every other layer records something orca observed. This one records something orca was *told*,
+ * Every other layer records something agenticreplay observed. This one records something agenticreplay was *told*,
  * and it exists because three facts were measured as unrecoverable from the wire — which agent a
  * turn belonged to, that a handoff happened and from whom, and that a guardrail ran at all.
  *
@@ -50,12 +50,38 @@ afterEach(async () => {
  * reaches the wire. These tests pin the translation from span to event, and the two properties the
  * bootstrap has to have.
  */
+it('adds the run CA to truststore contexts without disabling verification', async () => {
+  await writeFile(join(dir, 'sitecustomize.py'), SITECUSTOMIZE_SOURCE);
+  await writeFile(
+    join(dir, 'truststore.py'),
+    `class SSLContext:
+    def __init__(self, protocol):
+        self.protocol = protocol
+        self.check_hostname = True
+        self.verify_mode = 2
+        self.roots = ['system']
+    def load_verify_locations(self, cafile):
+        self.roots.append(cafile)
+`,
+  );
+  const { stdout } = await promisify(execFile)(
+    process.platform === 'win32' ? 'python' : 'python3',
+    [
+      '-S',
+      '-c',
+      "import sitecustomize, truststore; c=truststore.SSLContext(16); assert c.check_hostname and c.verify_mode == 2; assert c.roots == ['system', 'run-ca.pem']; print('verified')",
+    ],
+    { env: { PATH: process.env.PATH, PYTHONPATH: dir, AGENTICREPLAY_TLS_CA: 'run-ca.pem' } },
+  );
+  expect(stdout.trim()).toBe('verified');
+});
+
 describe('turning SDK spans into trace events', () => {
   it('narrows its transport before the first span can land in it', async () => {
     // The comment this replaces asserted "`mkdtemp` gives a directory only this user can enter" —
     // true on POSIX, and on Windows the mode is discarded and the directory takes whatever `%TEMP%`
     // hands down. Narrowed before `spans.jsonl` exists, because `icacls` does not re-propagate.
-    const runDir = await mkdtemp(join(tmpdir(), 'orca-spans-acl-'));
+    const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-spans-acl-'));
     const spans = await installAgentSpans(runDir);
     if (process.platform !== 'win32') {
       expect((await stat(spans.transportDir)).mode & 0o777).toBe(0o700);
@@ -257,7 +283,7 @@ describe('reading what the processor wrote', () => {
   });
 });
 
-describe('the bootstrap orca writes', () => {
+describe('the bootstrap agenticreplay writes', () => {
   it('lands where Python will import it', async () => {
     const capture = await installAgentSpans(dir);
     const source = await readFile(join(capture.pythonPath, SITECUSTOMIZE), 'utf8');
@@ -286,9 +312,9 @@ describe('the bootstrap orca writes', () => {
     }
   });
 
-  it('does nothing at all unless orca is recording', () => {
+  it('does nothing at all unless agenticreplay is recording', () => {
     // It is imported by *every* Python process the run starts, including `python --version`.
-    expect(SITECUSTOMIZE_SOURCE).toContain('path = os.environ.get("ORCA_AGENT_SPANS")');
+    expect(SITECUSTOMIZE_SOURCE).toContain('path = os.environ.get("AGENTICREPLAY_AGENT_SPANS")');
     expect(SITECUSTOMIZE_SOURCE).toContain('if not path:');
   });
 
@@ -357,28 +383,32 @@ describe('the bootstrap orca writes', () => {
 
 describe('pythonPathWith', () => {
   it('puts our directory first and keeps theirs', () => {
-    expect(pythonPathWith('/orca', '/theirs:/more', ':')).toBe('/orca:/theirs:/more');
+    expect(pythonPathWith('/agenticreplay', '/theirs:/more', ':')).toBe(
+      '/agenticreplay:/theirs:/more',
+    );
   });
 
   it('does not add itself twice', () => {
-    expect(pythonPathWith('/orca', '/orca:/theirs', ':')).toBe('/orca:/theirs');
+    expect(pythonPathWith('/agenticreplay', '/agenticreplay:/theirs', ':')).toBe(
+      '/agenticreplay:/theirs',
+    );
   });
 
   it('handles an unset PYTHONPATH without leaving an empty segment', () => {
     // An empty segment means "the current directory" to Python, which is not what an unset variable
     // asked for and is a way to shadow a module by where you happened to run from.
-    expect(pythonPathWith('/orca', undefined, ':')).toBe('/orca');
-    expect(pythonPathWith('/orca', '', ':')).toBe('/orca');
+    expect(pythonPathWith('/agenticreplay', undefined, ':')).toBe('/agenticreplay');
+    expect(pythonPathWith('/agenticreplay', '', ':')).toBe('/agenticreplay');
   });
 });
 
 /**
  * The transport is not part of the trace, and the tests say so in both directions.
  *
- * It is written by the agent's own interpreter, so nothing orca owns can redact it on the way in.
- * While it sat in the run directory that made it a sink the write path never touched, `orca scrub`
+ * It is written by the agent's own interpreter, so nothing agenticreplay owns can redact it on the way in.
+ * While it sat in the run directory that made it a sink the write path never touched, `agenticreplay scrub`
  * never rewrote — it reaches `events.jsonl`, the manifest and the blobs, and nothing else — and
- * nobody deleted. A run whose secret was only in that file answered `orca scrub --match` with
+ * nobody deleted. A run whose secret was only in that file answered `agenticreplay scrub --match` with
  * "nothing matched — the trace is unchanged", which SECURITY.md calls the one failure a scrubber
  * must not have.
  */
@@ -387,7 +417,7 @@ describe('the spans transport is not in the trace', () => {
   let workspace: string;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-transport-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-transport-'));
     await exec('git', ['init', '-q'], { cwd: workspace });
     await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
     await exec('git', ['config', 'user.name', 'Test'], { cwd: workspace });
@@ -398,7 +428,7 @@ describe('the spans transport is not in the trace', () => {
   });
 
   it('puts the transport outside the run directory, and the bootstrap inside', async () => {
-    const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+    const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
     const capture = await installAgentSpans(runDir);
     expect(capture.spansPath.startsWith(runDir), 'the transport is in the run directory').toBe(
       false,
@@ -407,7 +437,9 @@ describe('the spans transport is not in the trace', () => {
     expect(capture.pythonPath.startsWith(runDir), 'the bootstrap belongs with the run').toBe(true);
     // Existence, not mode: the mode assertion below can only run on POSIX, and without this a
     // pre-create that stopped happening would be caught on Linux and nowhere else.
-    expect(existsSync(capture.spansPath), 'orca did not create the transport itself').toBe(true);
+    expect(existsSync(capture.spansPath), 'agenticreplay did not create the transport itself').toBe(
+      true,
+    );
     await rm(runDir, { recursive: true, force: true });
     await rm(capture.transportDir, { recursive: true, force: true });
   });
@@ -417,7 +449,7 @@ describe('the spans transport is not in the trace', () => {
   it.skipIf(process.platform === 'win32')(
     'creates the transport 0600 rather than leaving it to the agent’s umask',
     async () => {
-      const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+      const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
       const capture = await installAgentSpans(runDir);
       // SECURITY.md: "Trace files and blobs are written mode 0600."
       expect((await stat(capture.spansPath)).mode & 0o777).toBe(0o600);
@@ -427,7 +459,7 @@ describe('the spans transport is not in the trace', () => {
   );
 
   it('discardAgentSpanTransport takes the directory, not a listing of it', async () => {
-    const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+    const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
     const capture = await installAgentSpans(runDir);
     // A producer that appeared after any listing would have been taken with it.
     await writeFile(`${capture.spansPath}.9999`, '{}\n');
@@ -437,9 +469,9 @@ describe('the spans transport is not in the trace', () => {
   });
 
   it('reports rather than throws when the transport cannot be removed', async () => {
-    expect(await discardAgentSpanTransport(join(tmpdir(), 'orca-spans-never-existed'))).toBe(
-      undefined,
-    );
+    expect(
+      await discardAgentSpanTransport(join(tmpdir(), 'agenticreplay-spans-never-existed')),
+    ).toBe(undefined);
   });
 
   /**
@@ -459,7 +491,7 @@ describe('the spans transport is not in the trace', () => {
       [
         'import os, sys',
         `sys.path.insert(0, ${JSON.stringify(pkg)})`,
-        'from orcareplay_openai_agents import OrcaTracingProcessor',
+        'from agenticreplay_openai_agents import AgenticReplayTracingProcessor',
         'secret = os.environ["CANARY"]',
         'class AgentSpanData:',
         '    def export(self):',
@@ -474,7 +506,7 @@ describe('the spans transport is not in the trace', () => {
         '        self.started_at = "2026-09-13T00:00:00+00:00"',
         '        self.ended_at = "2026-09-13T00:00:01+00:00"',
         '        self.error = {"data": {"echoed": secret}}',
-        'p = OrcaTracingProcessor()',
+        'p = AgenticReplayTracingProcessor()',
         'p.on_span_end(Span(AgentSpanData(), "a"))',
         'p.on_span_end(Span(FunctionSpanData(), "f"))',
         'print("GOT: done")',
@@ -497,7 +529,7 @@ describe('the spans transport is not in the trace', () => {
     }
     expect(result.runId).toBeTruthy();
 
-    const runDir = join(workspace, '.orca', 'runs', result.runId);
+    const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
     const left = await readdir(runDir);
     expect(
       left.filter((f) => f.startsWith('agent-spans')),
@@ -525,7 +557,7 @@ describe('the spans transport is not in the trace', () => {
     const temp = tmpdir();
     const strays: string[] = [];
     for (const entry of await readdir(temp, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !entry.name.startsWith('orca-spans-')) continue;
+      if (!entry.isDirectory() || !entry.name.startsWith('agenticreplay-spans-')) continue;
       const file = join(temp, entry.name, 'agent-spans.jsonl');
       const text = await readFile(file, 'utf8').catch(() => '');
       if (text.includes(marker)) strays.push(file);
@@ -603,7 +635,7 @@ describe('the spans transport is not in the trace', () => {
         out,
         workspace,
       );
-      return { said, exitCode: result.exitCode, exchanges: result.modelExchanges };
+      return { said, exitCode: result.childExitCode, exchanges: result.modelExchanges };
     } finally {
       origin.stop();
       if (previousPath === undefined) delete process.env['PYTHONPATH'];
@@ -659,7 +691,7 @@ describe('the spans transport is not in the trace', () => {
     return found;
   };
 
-  /** One model call through whatever base URL orca set, needing no SDK installed. */
+  /** One model call through whatever base URL agenticreplay set, needing no SDK installed. */
   const CALLS_A_MODEL = [
     'import json, os, urllib.request',
     'base = os.environ["OPENAI_BASE_URL"].rstrip("/")',
@@ -705,7 +737,7 @@ describe('the spans transport is not in the trace', () => {
   it('says nothing about a framework the agent never imported', async () => {
     // Installed is not used. An ordinary machine has frameworks lying around that a given run has
     // no relationship to — this venv has two — and asking `importlib.metadata` at startup would
-    // tell every recorded run on it to install every adapter orca ships. A warning that fires when
+    // tell every recorded run on it to install every adapter agenticreplay ships. A warning that fires when
     // nothing is wrong is how warnings stop being read.
     const shadows = await withoutAdapters(join(workspace, 'shadows'));
     for (const adapter of PYTHON_ADAPTERS) await frameworkPresent(shadows, adapter);
@@ -726,7 +758,7 @@ describe('the spans transport is not in the trace', () => {
     // already says the larger thing that went wrong — naming a package on top of that sends
     // someone to a package manager over a problem that is not about a package.
     const shadows = await withoutAdapters(join(workspace, 'shadows'));
-    const adapter = ADAPTER_BY_PACKAGE('orcareplay-openai-agents');
+    const adapter = ADAPTER_BY_PACKAGE('agenticreplay-openai-agents');
     await frameworkPresent(shadows, adapter);
 
     const { said, exchanges } = await recordWith(
@@ -765,12 +797,12 @@ describe('agentSpanLosses', () => {
     // adapter was counted from the start and consumed by nothing, which is how a field becomes
     // payload.
     const losses = agentSpanLosses([
-      { kind: 'dropped', count: 2, package: 'orcareplay-langgraph' },
-      { kind: 'dropped', count: 1, package: 'orcareplay-openai-agents' },
+      { kind: 'dropped', count: 2, package: 'agenticreplay-langgraph' },
+      { kind: 'dropped', count: 1, package: 'agenticreplay-openai-agents' },
       { kind: 'dropped', count: 4 },
     ] as never[]);
     expect(losses.dropped).toBe(7);
-    expect(losses.droppedBy).toEqual(['orcareplay-langgraph', 'orcareplay-openai-agents']);
+    expect(losses.droppedBy).toEqual(['agenticreplay-langgraph', 'agenticreplay-openai-agents']);
   });
 
   it('reports a missing adapter once however many processes said so', () => {
@@ -779,19 +811,19 @@ describe('agentSpanLosses', () => {
     // reads like six failures.
     const spans = Array.from({ length: 6 }, () => ({
       kind: 'unavailable',
-      package: 'orcareplay-openai-agents',
+      package: 'agenticreplay-openai-agents',
     }));
-    expect(agentSpanLosses(spans).unavailable).toEqual(['orcareplay-openai-agents']);
+    expect(agentSpanLosses(spans).unavailable).toEqual(['agenticreplay-openai-agents']);
   });
 
   it('keeps two different missing adapters apart', () => {
     expect(
       agentSpanLosses([
-        { kind: 'unavailable', package: 'orcareplay-langgraph' },
-        { kind: 'unavailable', package: 'orcareplay-openai-agents' },
-        { kind: 'unavailable', package: 'orcareplay-langgraph' },
+        { kind: 'unavailable', package: 'agenticreplay-langgraph' },
+        { kind: 'unavailable', package: 'agenticreplay-openai-agents' },
+        { kind: 'unavailable', package: 'agenticreplay-langgraph' },
       ]).unavailable,
-    ).toEqual(['orcareplay-langgraph', 'orcareplay-openai-agents']);
+    ).toEqual(['agenticreplay-langgraph', 'agenticreplay-openai-agents']);
   });
 
   it('sums dropped counts rather than taking one', () => {
@@ -806,7 +838,7 @@ describe('agentSpanLosses', () => {
   });
 
   it('ignores a count that is not a usable number', () => {
-    // The file is appended to by a process orca does not own, and a torn line can reparse into
+    // The file is appended to by a process agenticreplay does not own, and a torn line can reparse into
     // anything. A `dropped` whose count is a string must not become `NaN` in a warning.
     for (const count of ['4', null, undefined, Number.NaN, Number.POSITIVE_INFINITY, -1, 0]) {
       expect(agentSpanLosses([{ kind: 'dropped', count } as never]).dropped).toBe(0);
@@ -815,7 +847,7 @@ describe('agentSpanLosses', () => {
 
   it('falls back to the package it is written by when the name is missing', () => {
     for (const span of [{ kind: 'unavailable' }, { kind: 'unavailable', package: '' }]) {
-      expect(agentSpanLosses([span as never]).unavailable).toEqual(['orcareplay-openai-agents']);
+      expect(agentSpanLosses([span as never]).unavailable).toEqual(['agenticreplay-openai-agents']);
     }
   });
 
@@ -832,7 +864,7 @@ describe('agentSpanLosses', () => {
  *
  * A string assertion cannot tell whether the guard is in the right place, and this one is subtle:
  * the marker must be written when the SDK is importable and the adapter is not, and *not* written
- * when neither is — because `orca record` puts this file in front of every `python` in the run and
+ * when neither is — because `agenticreplay record` puts this file in front of every `python` in the run and
  * most of them are not agents.
  */
 describe('the bootstrap reports a missing adapter', () => {
@@ -841,7 +873,7 @@ describe('the bootstrap reports a missing adapter', () => {
   let bootRoot: string;
 
   beforeEach(async () => {
-    bootRoot = await mkdtemp(join(tmpdir(), 'orca-bootstrap-'));
+    bootRoot = await mkdtemp(join(tmpdir(), 'agenticreplay-bootstrap-'));
     for (const candidate of ['python3', 'python']) {
       try {
         await exec(candidate, ['-c', 'pass']);
@@ -902,7 +934,7 @@ describe('the bootstrap reports a missing adapter', () => {
     }
     const program = ['import sitecustomize', ...(fixture.imports ?? []).map((m) => `import ${m}`)];
     await exec(python as string, ['-S', '-c', program.join('; ')], {
-      env: { ...process.env, PYTHONPATH: boot, ORCA_AGENT_SPANS: spans },
+      env: { ...process.env, PYTHONPATH: boot, AGENTICREPLAY_AGENT_SPANS: spans },
     });
     return await readFile(spans, 'utf8').catch(() => '');
   }
@@ -926,7 +958,7 @@ describe('the bootstrap reports a missing adapter', () => {
     // Installed is not used, and this is the case that made the distinction worth drawing: this
     // venv has both frameworks, so reporting on what is installed meant every recorded run on it
     // was told to install two adapters it had no relationship to. The count grows with every
-    // adapter orca ships, and a warning that fires when nothing is wrong is how warnings stop
+    // adapter agenticreplay ships, and a warning that fires when nothing is wrong is how warnings stop
     // being read.
     expect(
       await runBootstrap({
@@ -951,7 +983,7 @@ describe('the bootstrap reports a missing adapter', () => {
 
   it('stays quiet for a Python process that is not an agent', async () => {
     if (!python) return;
-    // `orca record` exports ORCA_AGENT_SPANS to every child. Without this guard a run whose agent
+    // `agenticreplay record` exports AGENTICREPLAY_AGENT_SPANS to every child. Without this guard a run whose agent
     // shells out to `python` would warn about a package that process had no use for.
     expect(await runBootstrap({ name: 'nothing' })).toBe('');
   });
@@ -984,7 +1016,7 @@ describe('the bootstrap reports a missing adapter', () => {
         ...process.env,
         PYTHONPATH: boot,
         // A path no process can append to, which is what a wedged transport looks like.
-        ORCA_AGENT_SPANS: join(bootRoot, 'no', 'such', 'dir', 'spans.jsonl'),
+        AGENTICREPLAY_AGENT_SPANS: join(bootRoot, 'no', 'such', 'dir', 'spans.jsonl'),
       },
     });
     expect(stdout.trim()).toBe('ok');

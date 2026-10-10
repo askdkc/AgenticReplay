@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { applyNamedBaseUrls } from './env.js';
 
 /**
@@ -10,7 +10,7 @@ import { applyNamedBaseUrls } from './env.js';
  *   - a bot with its origin hardcoded in source — a Grok bot posting to `https://api.x.ai/v1`
  *     because someone typed that string, which no environment variable will ever move;
  *   - an agent in a language the fetch hook cannot reach, which is every language except JS;
- *   - an editor that spawns the real agent as a child, where orca launches the editor and the
+ *   - an editor that spawns the real agent as a child, where agenticreplay launches the editor and the
  *     agent inherits the capture two processes down.
  *
  * For all three the redirect happens below the agent, at the socket: `--tls-intercept` terminates
@@ -41,13 +41,13 @@ export const execAdapter: Adapter = {
     const [command, ...args] = ctx.userArgs;
     if (command === undefined || command === '') {
       throw new Error(
-        'exec needs the command to run: orca record exec --tls-intercept -- <command> [args...], ' +
-          'e.g. orca record exec --tls-intercept -- python bot.py',
+        'exec needs the command to run: agenticreplay record exec --tls-intercept -- <command> [args...], ' +
+          'e.g. agenticreplay record exec --tls-intercept -- python bot.py',
       );
     }
 
     // Nothing is invented: no origin, and no credential. An agent recorded this way authenticates
-    // with whatever it already had, because orca never learned which provider it talks to.
+    // with whatever it already had, because agenticreplay never learned which provider it talks to.
     const env: Record<string, string> = {};
     // The one exception, and only because the operator asked for it by name. This is what makes
     // `exec` useful for a harness that reads an unusual variable but has no adapter yet, without

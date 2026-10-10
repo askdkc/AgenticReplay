@@ -18,7 +18,7 @@ import {
  * answers 0o666 whatever was asked for. What actually decides who may read the file is its ACL, so
  * that is what gets checked — `(I)` marks an inherited entry, and an inherited entry on this path
  * is one the config directory handed down to it. `restrictToOwner`'s own tests in
- * @orcareplay/core cover exactly which trustees are left; the property here is that none of them
+ * @agenticreplay/core cover exactly which trustees are left; the property here is that none of them
  * came from outside.
  */
 async function expectOwnerOnly(path: string, mode: number): Promise<void> {
@@ -38,7 +38,7 @@ async function expectOwnerOnly(path: string, mode: number): Promise<void> {
 }
 
 /**
- * Config exists for one job: let `orca compare --models a,b,c` reach several models without the
+ * Config exists for one job: let `agenticreplay compare --models a,b,c` reach several models without the
  * user re-typing a gateway URL and a key on every invocation. That means it holds a credential,
  * which sets the bar for everything here.
  */
@@ -47,7 +47,7 @@ describe('config', () => {
   let env: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-cfg-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-cfg-'));
     env = { XDG_CONFIG_HOME: home };
   });
 
@@ -65,7 +65,7 @@ describe('config', () => {
     await writeConfig({ gateway: { url: 'https://gw.example', api_key: 'sk-secret' } }, env);
 
     await expectOwnerOnly(configPath(env), 0o600);
-    await expectOwnerOnly(join(home, 'orca'), 0o700);
+    await expectOwnerOnly(join(home, 'agenticreplay'), 0o700);
   });
 
   it.runIf(process.platform === 'win32')(
@@ -74,7 +74,7 @@ describe('config', () => {
       // `mode: 0o600` is discarded on Windows, so until `restrictToOwner` has run the file carries
       // whatever the directory handed down. Written straight to its final path, a failure there —
       // icacls unavailable, `SystemRoot` unset — left the key readable by every account, while
-      // `orca setup` reported an error that mentioned none of it. Measured before this was fixed.
+      // `agenticreplay setup` reported an error that mentioned none of it. Measured before this was fixed.
       await writeConfig({ gateway: { url: 'https://gw.example', api_key: 'sk-earlier' } }, env);
 
       const saved = process.env['SystemRoot'];
@@ -89,7 +89,7 @@ describe('config', () => {
 
       // Nowhere under the config directory — the staging file included — and the config that was
       // already there is intact. Truncating in place, or deleting on failure, would have taken it.
-      const dir = join(home, 'orca');
+      const dir = join(home, 'agenticreplay');
       for (const name of await readdir(dir)) {
         expect(await readFile(join(dir, name), 'utf8'), name).not.toContain('sk-must-not-land');
       }
@@ -139,7 +139,9 @@ describe('config', () => {
     );
     expect(config.gateway?.api_key).toMatch(/^sk-\d+$/);
     // And no scratch file survives to be mistaken for a config later.
-    expect((await readdir(join(home, 'orca'))).filter((f) => f.includes('incoming'))).toEqual([]);
+    expect(
+      (await readdir(join(home, 'agenticreplay'))).filter((f) => f.includes('incoming')),
+    ).toEqual([]);
   });
 
   it('round-trips what was written', async () => {
@@ -181,8 +183,8 @@ describe('config', () => {
   });
 
   it('degrades instead of taking the CLI down when the file is corrupt', async () => {
-    // A hand-edited config should not make every orca command unusable.
-    await mkdir(join(home, 'orca'), { recursive: true });
+    // A hand-edited config should not make every agenticreplay command unusable.
+    await mkdir(join(home, 'agenticreplay'), { recursive: true });
     await writeFile(configPath(env), '{ not json', 'utf8');
     expect(await readConfig(env)).toEqual({});
   });
@@ -193,7 +195,7 @@ describe('config', () => {
       const args = parseArgs(['compare', '--upstream-anthropic', 'https://from-flag']);
       const up = await resolveUpstream(args, {
         ...env,
-        ORCA_UPSTREAM_ANTHROPIC: 'https://from-env',
+        AGENTICREPLAY_UPSTREAM_ANTHROPIC: 'https://from-env',
       });
       expect(up?.anthropic).toBe('https://from-flag');
     });
@@ -202,7 +204,7 @@ describe('config', () => {
       await writeConfig({ gateway: { url: 'https://from-config' } }, env);
       const up = await resolveUpstream(parseArgs(['compare']), {
         ...env,
-        ORCA_UPSTREAM_ANTHROPIC: 'https://from-env',
+        AGENTICREPLAY_UPSTREAM_ANTHROPIC: 'https://from-env',
       });
       expect(up?.anthropic).toBe('https://from-env');
     });

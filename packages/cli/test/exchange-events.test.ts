@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RecordedExchange } from '@orcareplay/proxy';
+import type { RecordedExchange } from '@agenticreplay/proxy';
 import { ExchangeEventDeriver } from '../src/exchange-events.js';
 
 function exchange(over: Partial<RecordedExchange> = {}): RecordedExchange {
@@ -37,7 +37,7 @@ describe('ExchangeEventDeriver', () => {
     const events = new ExchangeEventDeriver().derive(exchange(), 0);
     const requestAt = events.findIndex((e) => e.type === 'model.request');
     const response = events.find((e) => e.type === 'model.response')!;
-    // Without this edge `orca graph --to <a model.response>` finds nothing to walk and reports
+    // Without this edge `agenticreplay graph --to <a model.response>` finds nothing to walk and reports
     // that the run has no causal edges, however many tool calls it has.
     expect(response.causesIndex).toEqual([requestAt]);
   });

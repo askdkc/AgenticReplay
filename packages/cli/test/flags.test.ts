@@ -71,7 +71,7 @@ describe('assertKnownFlags', () => {
  * The list is hand-written, and a hand-written mirror of the code drifts the moment the code moves.
  * These two read the source and hold it to the same standard the file claims for itself.
  *
- * Both were written after the list shipped with real holes in it: `orca export --card` — a picture
+ * Both were written after the list shipped with real holes in it: `agenticreplay export --card` — a picture
  * command the README documents and `inspect.ts` implements — was rejected outright, and `graph`
  * had no entry at all, so every flag it took went unchecked. One file, `inspect.ts`, serves show,
  * graph, export and ui, and the list was built a command at a time; the flags of the other three
@@ -112,7 +112,7 @@ describe('the allowlist against the source it mirrors', () => {
    * and the help text offers `--fs`, but `push`'s own entry listed only `gateway` and `force`.
    * Because `record` and `replay` both allow `fs`, the union check was satisfied and said nothing.
    *
-   * What the user got was not a flag quietly ignored — it was `orca push --fs` REFUSED, with an
+   * What the user got was not a flag quietly ignored — it was `agenticreplay push --fs` REFUSED, with an
    * error naming only the two flags that were listed. The snapshots could therefore not be shipped
    * by any invocation, so every run on a gateway carried `blob_count: 0`, and forking a pulled run
    * died inside `git read-tree` on a tree object that had never left the machine.
@@ -126,12 +126,12 @@ describe('the allowlist against the source it mirrors', () => {
     const documented = new Map<string, Set<string>>();
     let command: string | undefined;
     for (const line of help) {
-      // `  orca push [run]   send a run to the gateway` — two spaces, then the command.
-      const heading = line.match(/^ {2}orca ([a-z-]+)\b(.*)$/);
+      // `  agenticreplay push [run]   send a run to the gateway` — two spaces, then the command.
+      const heading = line.match(/^ {2}agenticreplay ([a-z-]+)\b(.*)$/);
       if (heading) {
         command = heading[1]!;
         const flags = documented.get(command) ?? new Set<string>();
-        // A usage line can carry a flag itself: `orca replay [run] --from N`.
+        // A usage line can carry a flag itself: `agenticreplay replay [run] --from N`.
         for (const m of heading[2]!.matchAll(/--([a-z][a-z0-9-]*)/g)) flags.add(m[1]!);
         documented.set(command, flags);
         continue;
@@ -150,7 +150,8 @@ describe('the allowlist against the source it mirrors', () => {
     const refused: string[] = [];
     for (const [cmd, flags] of documented) {
       const allowed = new Set<string>([...(BY_COMMAND[cmd] ?? []), ...GLOBAL]);
-      for (const name of flags) if (!allowed.has(name)) refused.push(`orca ${cmd} --${name}`);
+      for (const name of flags)
+        if (!allowed.has(name)) refused.push(`agenticreplay ${cmd} --${name}`);
     }
     expect(refused.sort()).toEqual([]);
   });
@@ -160,7 +161,7 @@ describe('the allowlist against the source it mirrors', () => {
    * next word and the positional it belonged to disappears.
    *
    * That is the failure `VALUELESS` was written for, and it happened again the moment a flag was
-   * added without an entry: `orca replay --quiet run_a1b2c3` parsed as `quiet="run_a1b2c3"` with an
+   * added without an entry: `agenticreplay replay --quiet run_a1b2c3` parsed as `quiet="run_a1b2c3"` with an
    * empty positional list, so replay fell back to `last` and reproduced a different run than the
    * one named — silently, and `--quiet` had by then suppressed the output that might have given it
    * away. Reading the source rather than restating the list is the point: the list can only stay
@@ -194,7 +195,7 @@ describe('the allowlist against the source it mirrors', () => {
 });
 
 /**
- * The other half of the command line. `orca record codex exec "fix auth.ts"` recorded
+ * The other half of the command line. `agenticreplay record codex exec "fix auth.ts"` recorded
  * `argv: ["codex"]` — the agent started with no arguments at all, did nothing it was asked, and
  * the run was reported as a success. Nothing in the output said the words had been dropped.
  */
@@ -203,10 +204,10 @@ describe('assertNoStrayPositionals', () => {
 
   it('rejects the agent arguments that were silently dropped, and shows where they go', () => {
     expect(check(['record', 'codex', 'exec', 'fix auth.ts'])).toThrow(
-      /unexpected arguments for "orca record": exec "fix auth\.ts"/,
+      /unexpected arguments for "agenticreplay record": exec "fix auth\.ts"/,
     );
     expect(check(['record', 'codex', 'exec', 'fix auth.ts'])).toThrow(
-      /orca record codex -- exec "fix auth\.ts"/,
+      /agenticreplay record codex -- exec "fix auth\.ts"/,
     );
   });
 
@@ -217,21 +218,25 @@ describe('assertNoStrayPositionals', () => {
   });
 
   it('rejects a stray on a read command too, without offering the -- advice', () => {
-    expect(check(['show', 'last', 'extra'])).toThrow(/unexpected argument for "orca show": extra/);
+    expect(check(['show', 'last', 'extra'])).toThrow(
+      /unexpected argument for "agenticreplay show": extra/,
+    );
     expect(check(['show', 'last', 'extra'])).not.toThrow(/--/);
   });
 
   /**
    * Seven commands read no positional at all, so allowing one everywhere would have left the same
-   * silence in place for them. `orca attach claude` reads as naming the agent and does not: the
+   * silence in place for them. `agenticreplay attach claude` reads as naming the agent and does not: the
    * flag that names it is `--for`.
    */
   it('rejects the first argument on a command that reads none', () => {
-    expect(check(['attach', 'claude'])).toThrow(/unexpected argument for "orca attach": claude/);
+    expect(check(['attach', 'claude'])).toThrow(
+      /unexpected argument for "agenticreplay attach": claude/,
+    );
     expect(check(['attach', 'claude'])).toThrow(
       /takes no arguments; everything it needs is a flag/,
     );
-    expect(check(['list', 'foo'])).toThrow(/unexpected argument for "orca list": foo/);
+    expect(check(['list', 'foo'])).toThrow(/unexpected argument for "agenticreplay list": foo/);
     expect(check(['doctor', 'foo'])).toThrow(/unexpected argument/);
   });
 

@@ -21,13 +21,13 @@ import { Output } from '../src/out.js';
 /**
  * Owner-only on Windows, where that is an ACL rather than a mode.
  *
- * Two shapes, because two things protect two different sets of paths. A path orca narrows itself
+ * Two shapes, because two things protect two different sets of paths. A path agenticreplay narrows itself
  * may carry nothing inherited — an inherited entry there is one the workspace handed down, which
  * is the whole defect. For everything written *beneath* it the opposite holds: inheritance is
  * exactly how they are protected, so `(I)` is expected and only the trustee count is the promise.
  *
  * Counted rather than named, because the names icacls prints are localized. Elsewhere there is
- * nothing to check: the modes are asserted by `restrictToOwner`'s own tests in @orcareplay/core.
+ * nothing to check: the modes are asserted by `restrictToOwner`'s own tests in @agenticreplay/core.
  */
 async function expectOwnerOnly(
   path: string,
@@ -57,7 +57,7 @@ function capture(): { out: Output; lines: () => string } {
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-qs-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-qs-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -124,15 +124,15 @@ describe('the shipped quickstart asset', () => {
   });
 });
 
-describe('orca quickstart', () => {
+describe('agenticreplay quickstart', () => {
   it('materialises the project and the run, then replays it offline', async () => {
     const { out, lines } = capture();
     const result = await quickstartCommand(parseArgs(['quickstart']), out, dir);
 
-    expect(result.dir).toBe(join(dir, 'orca-quickstart'));
+    expect(result.dir).toBe(join(dir, 'agenticreplay-quickstart'));
     // The trace is where every other command looks for it.
     await expect(
-      readFile(join(result.dir, '.orca', 'runs', result.runId, 'manifest.json'), 'utf8'),
+      readFile(join(result.dir, '.agenticreplay', 'runs', result.runId, 'manifest.json'), 'utf8'),
     ).resolves.toContain(result.runId);
     // And the project is there to be replayed against.
     await expect(readFile(join(result.dir, 'src', 'schedule.js'), 'utf8')).resolves.toContain(
@@ -162,8 +162,10 @@ describe('orca quickstart', () => {
     const { out } = capture();
     const result = await quickstartCommand(parseArgs(['quickstart']), out, dir);
 
-    await expect(readFile(join(result.dir, '.orca', '.gitignore'), 'utf8')).resolves.toContain('*');
-    await expectOwnerOnly(join(result.dir, '.orca', 'runs'));
+    await expect(
+      readFile(join(result.dir, '.agenticreplay', '.gitignore'), 'utf8'),
+    ).resolves.toContain('*');
+    await expectOwnerOnly(join(result.dir, '.agenticreplay', 'runs'));
 
     // And the run itself, which is *copied* in rather than written — so what protects it is not
     // the same thing on the two platforms, and both halves are checked here rather than one being
@@ -176,7 +178,7 @@ describe('orca quickstart', () => {
     // world-readable package into a narrowed directory comes out at three trustees. Checked on a
     // file inside the run, not only on the store root, so that stays a measurement rather than a
     // belief.
-    const runDir = join(result.dir, '.orca', 'runs', result.runId);
+    const runDir = join(result.dir, '.agenticreplay', 'runs', result.runId);
     await expectOwnerOnly(runDir, 'inherited');
     for (const name of ['events.jsonl', 'manifest.json']) {
       await expectOwnerOnly(join(runDir, name), 'inherited');
@@ -209,13 +211,13 @@ describe('orca quickstart', () => {
   });
 
   /**
-   * `orca` is on PATH only after a global install, and `npm i orcareplay` without `-g` is a
+   * `agenticreplay` is on PATH only after a global install, and `npm i agenticreplay` without `-g` is a
    * normal thing to do — it is what happened the first time this was tried by hand.
    */
   it('says how to run the follow-up commands after a local install', async () => {
     const { out, lines } = capture();
     await quickstartCommand(parseArgs(['quickstart']), out, dir);
-    expect(lines()).toContain('npx orca ui');
+    expect(lines()).toContain('npx agenticreplay ui');
   });
 
   /**
@@ -263,7 +265,7 @@ describe('orca quickstart', () => {
   /**
    * The denominator comes from the recording, not from the replay's own arithmetic.
    *
-   * It used to print `matchedExact / (matchedExact + unmatched)`, which is `0/0` when the agent
+   * It used to print `canonicalExact / (canonicalExact + unmatched)`, which is `0/0` when the agent
    * never started — and `0/0 turns from the trace · 0 divergences · 0 live calls` reads like a
    * pass. It was a pass, too: the verdict keyed on `unmatched === 0`, which is trivially true when
    * nothing was attempted, so the command printed "the fix came out of the recording" over a
@@ -293,14 +295,17 @@ describe('orca quickstart', () => {
    *
    * The shipped manifest names a neutral directory so publishing it publishes nobody's path. But
    * `replay` compares that against where it is running and declines to restore on a mismatch, so
-   * `orca replay last` — the command at the top of the README, and the obvious next thing to type
+   * `agenticreplay replay last` — the command at the top of the README, and the obvious next thing to type
    * — reported `exact=1` with two divergences and a warning, against a tree the quickstart's own
    * replay had already changed. Rewriting the path as the trace lands fixes both halves.
    */
   it('rewrites the trace to name the directory it was put in', async () => {
     const result = await quickstartCommand(parseArgs(['quickstart']), capture().out, dir);
     const manifest = JSON.parse(
-      await readFile(join(result.dir, '.orca', 'runs', result.runId, 'manifest.json'), 'utf8'),
+      await readFile(
+        join(result.dir, '.agenticreplay', 'runs', result.runId, 'manifest.json'),
+        'utf8',
+      ),
     ) as { cwd: string };
     expect(manifest.cwd).toBe(result.dir);
   });
@@ -311,7 +316,7 @@ describe('orca quickstart', () => {
       cwd: string;
     };
     expect(shipped.cwd).not.toContain('Users');
-    expect(shipped.cwd).toBe(String.raw`C:\qs`);
+    expect(shipped.cwd).toBe('/workspace/quickstart');
   });
 
   it('takes a directory, so it does not have to own the name', async () => {
@@ -404,8 +409,8 @@ describe('what the terminal sees', () => {
    * This is the whole chain and it was broken: the fetch hook reaches the agent through
    * `NODE_OPTIONS`, a path with a space has to be quoted to survive being split on whitespace, and
    * the quoting is where node's parser starts eating backslashes. So
-   * `C:\\My Projects\\orca-quickstart\\.orca\\...\\hook.cjs` arrived as
-   * `C:MyProjectsorca-quickstart.orca...hook.cjs`, the preload was not found, the agent died before
+   * `C:\\My Projects\\agenticreplay-quickstart\\.agenticreplay\\...\\hook.cjs` arrived as
+   * `C:MyProjectsorca-quickstart.agenticreplay...hook.cjs`, the preload was not found, the agent died before
    * it ran, and the replay served nothing — on Windows, where `My Documents`, `Google Drive` and
    * anything under `Program Files` all have one.
    *
@@ -434,10 +439,12 @@ describe('what the terminal sees', () => {
     await mkdir(broken, { recursive: true });
     // The agent the recording was made from, made unrunnable. Nothing else about the run changes.
     await run(process.execPath, [cliPath, 'quickstart'], { cwd: broken, env: bare });
-    const project = join(broken, 'orca-quickstart');
+    const project = join(broken, 'agenticreplay-quickstart');
     await rm(join(project, 'agent.mjs'));
-    await rm(join(project, '.orca'), { recursive: true });
-    await cp(join(ASSET, 'trace'), join(project, '.orca', 'runs', RUN), { recursive: true });
+    await rm(join(project, '.agenticreplay'), { recursive: true });
+    await cp(join(ASSET, 'trace'), join(project, '.agenticreplay', 'runs', RUN), {
+      recursive: true,
+    });
 
     await expect(
       run(process.execPath, [cliPath, 'replay', RUN, '--in-place', '--quiet'], { cwd: project }),

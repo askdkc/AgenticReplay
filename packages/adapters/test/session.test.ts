@@ -15,10 +15,10 @@ import {
   parseJsonl,
   snapshotDir,
 } from '../src/index.js';
-import { bunOptionsWithHook, nodeOptionsWithHook } from '@orcareplay/node-instrument';
+import { bunOptionsWithHook, nodeOptionsWithHook } from '@agenticreplay/node-instrument';
 
 /**
- * The half of a run orca cannot see from the wire.
+ * The half of a run agenticreplay cannot see from the wire.
  *
  * Every other capture layer records what the agent *did*. None record what it was *asked*, because
  * that was typed into a terminal — which is why an interactive recording replayed into a blank
@@ -29,7 +29,7 @@ import { bunOptionsWithHook, nodeOptionsWithHook } from '@orcareplay/node-instru
 let scratch: string;
 
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'orca-session-'));
+  scratch = mkdtempSync(join(tmpdir(), 'agenticreplay-session-'));
 });
 
 afterEach(() => {
@@ -90,7 +90,7 @@ describe('captureSession', () => {
     await expect(captureSession(support, '/work', {}, before)).resolves.toBeUndefined();
   });
 
-  // Bytes a human can still read are worth keeping even when orca cannot parse them.
+  // Bytes a human can still read are worth keeping even when agenticreplay cannot parse them.
   it('keeps the transcript when parsing throws, losing only the prompts', async () => {
     const before = await snapshotDir(join(scratch, 'sessions'));
     write('sessions/x.jsonl', 'body', 2_000_000);
@@ -304,7 +304,7 @@ describe('openCodeAdapter credentials', () => {
     runId: 'run_abc123',
     cwd: '/work',
     proxyUrl: 'http://127.0.0.1:51733',
-    runDir: join(scratch, '.orca/runs/run_abc123'),
+    runDir: join(scratch, '.agenticreplay/runs/run_abc123'),
     userArgs: [],
     env: {},
   });
@@ -320,8 +320,8 @@ describe('openCodeAdapter credentials', () => {
   it('still substitutes placeholders when there is no credential anywhere', async () => {
     isolateHome(false);
     const launch = await openCodeAdapter.prepare(ctx());
-    expect(launch.env.OPENAI_API_KEY).toBe('orca-recorded');
-    expect(launch.env.ANTHROPIC_API_KEY).toBe('orca-recorded');
+    expect(launch.env.OPENAI_API_KEY).toBe('agenticreplay-recorded');
+    expect(launch.env.ANTHROPIC_API_KEY).toBe('agenticreplay-recorded');
   });
 });
 

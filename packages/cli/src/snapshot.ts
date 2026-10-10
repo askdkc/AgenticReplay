@@ -1,4 +1,4 @@
-import type { FileChange } from '@orcareplay/fs-capture';
+import type { FileChange } from '@agenticreplay/fs-capture';
 
 export interface SnapshotResult {
   tree: string;

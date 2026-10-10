@@ -1,5 +1,5 @@
 /**
- * The origin-prefixed path an adapter can hand a client whose base URL orca rewrites.
+ * The origin-prefixed path an adapter can hand a client whose base URL agenticreplay rewrites.
  *
  * Base-URL variables cover the harnesses that read one, and `--tls-intercept` covers the ones
  * that read none. Between them sits a third shape: a harness that resolves each *provider's*

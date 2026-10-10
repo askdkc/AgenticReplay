@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
 import { passKey, passThrough, proxyBase, readEnv } from './env.js';
 
@@ -12,7 +12,7 @@ import { passKey, passThrough, proxyBase, readEnv } from './env.js';
  * 1. **`OPENAI_HOST` outranks `OPENAI_BASE_URL`.** `openai_def.rs` resolves the origin in priority
  *    order — `OPENAI_HOST` from the environment first, `OPENAI_BASE_URL` second — so a user who
  *    has `OPENAI_HOST` set for some other tool keeps it, and the run goes to their origin while
- *    orca reports a successful recording with an empty trace. Setting only `OPENAI_BASE_URL` is
+ *    agenticreplay reports a successful recording with an empty trace. Setting only `OPENAI_BASE_URL` is
  *    the `capture.empty` shape the adapter contract exists to prevent, so this adapter sets both.
  *    Pointed at the same proxy they agree, and neither a stale value nor the priority order can
  *    route around it.
@@ -30,9 +30,9 @@ import { passKey, passThrough, proxyBase, readEnv } from './env.js';
  *
  * `Config::get_param` reads the environment before the config file for every key it resolves
  * (`config/base.rs`), which is what makes per-process redirection possible at all — goose's
- * persisted `~/.config/goose/config.yaml` cannot win against the overlay orca sets.
+ * persisted `~/.config/goose/config.yaml` cannot win against the overlay agenticreplay sets.
  *
- * **What this adapter does not capture.** goose runs its shell without going through orca's PATH
+ * **What this adapter does not capture.** goose runs its shell without going through agenticreplay's PATH
  * shim, so a run full of `shell` tool calls still reports `shell.ineffective`: the commands appear
  * as tool calls with their output, but the real exit code, the real duration and the
  * stdout/stderr split are not in the trace. Record with `--no-shell` to claim nothing rather than
@@ -73,12 +73,12 @@ export const gooseAdapter: Adapter = {
 
     // Passed on, never invented: goose has no default provider or model for a custom endpoint, and
     // which one the recording is meant to exercise is the operator's to say. Inventing either
-    // would make `orca record goose` launch a different agent than `goose` does.
+    // would make `agenticreplay record goose` launch a different agent than `goose` does.
     passThrough(env, ctx.env, 'GOOSE_PROVIDER');
     passThrough(env, ctx.env, 'GOOSE_MODEL');
     // `OPENAI_BASE_PATH` is read from the environment ahead of the config file whenever the host
     // came from `OPENAI_BASE_URL`, so a value left over from a Docker Model Runner setup would
-    // move the path orca serves. Passing it through keeps the recording faithful to the command
+    // move the path agenticreplay serves. Passing it through keeps the recording faithful to the command
     // the user actually ran; the proxy matches `/chat/completions` with or without a `/v1`.
     passThrough(env, ctx.env, 'OPENAI_BASE_PATH');
 

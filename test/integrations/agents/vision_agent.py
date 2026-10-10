@@ -7,7 +7,7 @@ given. Together they made an agent with eyes unreplayable — the sweep shredded
 tens of thousands of placeholders, so the recorded bytes were not the sent bytes, and the matcher
 then compared a payload no replay could ever reproduce anyway.
 
-So this check drives the whole path with a real image, and `ORCA_CHECK_REPAINT` makes the replay
+So this check drives the whole path with a real image, and `AGENTICREPLAY_CHECK_REPAINT` makes the replay
 send a *different* one — which is not a contrived variation but the only thing a browser can do.
 Two paintings of one page are never the same bytes.
 
@@ -45,7 +45,7 @@ def png(seed: int, width: int = 16, height: int = 16) -> bytes:
 
 
 # Same size, different pixels — a repaint, not a different page.
-payload = base64.b64encode(png(2 if os.environ.get("ORCA_CHECK_REPAINT") else 1)).decode()
+payload = base64.b64encode(png(2 if os.environ.get("AGENTICREPLAY_CHECK_REPAINT") else 1)).decode()
 print("IMAGE:", payload)
 
 reply = OpenAI().chat.completions.create(

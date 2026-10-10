@@ -85,7 +85,7 @@ export async function restrictToOwner(path: string, mode: 0o600 | 0o700): Promis
   const written = await descriptorOf(icacls, path);
   if (!asWritten(ours).test(written)) {
     throw new Error(
-      `the ACL orca wrote to ${path} is not the one it asked for: ${JSON.stringify(written)}`,
+      `the ACL agenticreplay wrote to ${path} is not the one it asked for: ${JSON.stringify(written)}`,
     );
   }
   await assertPrivatePathIdentity(path, was);
@@ -110,7 +110,7 @@ export async function assertPrivatePathIdentity(
 ): Promise<void> {
   const now = await privatePathIdentity(path);
   if (now.dev !== was.dev || now.ino !== was.ino) {
-    throw new Error(`${path} was replaced while orca was securing it`);
+    throw new Error(`${path} was replaced while agenticreplay was securing it`);
   }
 }
 
@@ -135,9 +135,9 @@ export async function removePrivateDirectory(
 async function requireTrustedOwner(path: string, trusted: readonly string[]): Promise<Set<string>> {
   const script = `
 $ErrorActionPreference = 'Stop'
-$acl = [System.IO.File]::GetAccessControl($env:ORCA_PRIVATE_PATH, [System.Security.AccessControl.AccessControlSections]::Owner)
+$acl = [System.IO.File]::GetAccessControl($env:AGENTICREPLAY_PRIVATE_PATH, [System.Security.AccessControl.AccessControlSections]::Owner)
 $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new('D:(A;;FA;;;' + $env:ORCA_PRIVATE_SID + ')')
+$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new('D:(A;;FA;;;' + $env:AGENTICREPLAY_PRIVATE_SID + ')')
 $descriptor.GetSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
 `;
   const { stdout } = await run(
@@ -150,7 +150,11 @@ $descriptor.GetSddlForm([System.Security.AccessControl.AccessControlSections]::A
       Buffer.from(script, 'utf16le').toString('base64'),
     ],
     {
-      env: { ...process.env, ORCA_PRIVATE_PATH: path, ORCA_PRIVATE_SID: trusted[0] },
+      env: {
+        ...process.env,
+        AGENTICREPLAY_PRIVATE_PATH: path,
+        AGENTICREPLAY_PRIVATE_SID: trusted[0],
+      },
       windowsHide: true,
     },
   );
@@ -272,7 +276,7 @@ let scratch: Promise<string> | undefined;
 async function aclScratch(icacls: string): Promise<string> {
   scratch ??= (async () => {
     const keep = [await currentAccountSid(), SYSTEM, ADMINISTRATORS];
-    const dir = await mkdtemp(join(tmpdir(), 'orca-acl-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-acl-'));
     let was: PrivatePathIdentity | undefined;
     try {
       was = await privatePathIdentity(dir);
@@ -302,11 +306,13 @@ async function aclScratch(icacls: string): Promise<string> {
       const written = await readDescriptor(saved, dir);
       await rm(saved, { force: true }).catch(() => undefined);
       if (!asWritten(ours).test(written)) {
-        throw new Error(`the ACL orca wrote to ${dir} is not the one it asked for: ${written}`);
+        throw new Error(
+          `the ACL agenticreplay wrote to ${dir} is not the one it asked for: ${written}`,
+        );
       }
       await assertPrivatePathIdentity(dir, was);
 
-      // Nothing sweeps an `orca-acl-` directory the way `sweepStaleTransports` sweeps the two
+      // Nothing sweeps an `agenticreplay-acl-` directory the way `sweepStaleTransports` sweeps the two
       // named transports, so it takes itself with it rather than accumulating one per run.
       process.on('exit', () => {
         try {
@@ -368,19 +374,19 @@ async function readSid(): Promise<string> {
  * still be a guess, and wrong on a machine whose Windows is not on C:.
  *
  * `SystemRoot` is set by the OS in every normal process environment. Absent, something is wrong
- * with how orca was launched, and refusing is the only answer that cannot be silently incorrect.
+ * with how agenticreplay was launched, and refusing is the only answer that cannot be silently incorrect.
  */
 function system32(exe: string): string {
   const root = process.env['SystemRoot'];
   // Absolute, not merely present. `SystemRoot=C:Windows` — the same drive-relative shape the
   // comment above describes — would rebuild the workspace-relative lookup out of the environment
-  // instead of out of a literal, and a wrapper that sets the variable for orca's process is an
+  // instead of out of a literal, and a wrapper that sets the variable for agenticreplay's process is an
   // ordinary thing to run into. `isAbsolute('C:Windows')` is false and `isAbsolute('C:\Windows')`
   // is true, so this refuses exactly the values that would resolve against the current directory.
   if (root === undefined || root === '' || !isAbsolute(root)) {
     throw new Error(
       `cannot locate ${exe}: SystemRoot is ${root === undefined || root === '' ? 'not set' : `not an absolute path (${JSON.stringify(root)})`}, ` +
-        'so there is no trustworthy path to it. orca will not fall back to a guess here — this ' +
+        'so there is no trustworthy path to it. agenticreplay will not fall back to a guess here — this ' +
         'call is what keeps a private key private.',
     );
   }

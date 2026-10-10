@@ -1,11 +1,11 @@
-import { decodeForwardPath, forwardBasePath } from '@orcareplay/proxy';
+import { decodeForwardPath, forwardBasePath } from '@agenticreplay/proxy';
 
 /**
  * Placeholder key for runs where the user has no credential in the environment. The proxy is
  * holding the real one (or serving from a trace), but SDK clients refuse to start without
  * *something* — so an obviously-fake value beats an empty string that looks like a real key.
  */
-export const PLACEHOLDER_KEY = 'orca-recorded';
+export const PLACEHOLDER_KEY = 'agenticreplay-recorded';
 
 /** An env var set to the empty string is unset for our purposes: an empty key breaks clients. */
 export function readEnv(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -29,7 +29,7 @@ export function proxyBase(proxyUrl: string, path = ''): string {
  * upstream — or to `api.openai.com` — carrying the harness's credential for a *different* gateway,
  * which is the exact failure this rewrite exists to prevent. Worse, the undecodable segment is the
  * request path, so a base URL like `https://tenant:pw@gw.example/v1` wrote the gateway password
- * into the trace verbatim, where `orca show`, `orca export` and any attached bug report carry it.
+ * into the trace verbatim, where `agenticreplay show`, `agenticreplay export` and any attached bug report carry it.
  *
  * So: ask the decoder first, and where the answer is no, fall back to the plain proxy path. That
  * is what this did before origins could be carried at all — the call reaches the proxy and is
@@ -69,9 +69,9 @@ export function passThrough(
 }
 
 /**
- * Point base-URL variables orca does not know about at the proxy.
+ * Point base-URL variables agenticreplay does not know about at the proxy.
  *
- * Read from `ORCA_BASE_URL_VARS`: a comma-separated list of variable names, each optionally with
+ * Read from `AGENTICREPLAY_BASE_URL_VARS`: a comma-separated list of variable names, each optionally with
  * `=<path>` when the origin is not OpenAI-shaped. `/v1` is the default suffix because that is what
  * an OpenAI-compatible override wants, and it is what every example in the wild ends in.
  *
@@ -84,9 +84,9 @@ export function passThrough(
  * The variable is consumed, never forwarded: it names other variables and means nothing downstream.
  *
  * Where the variable already held an origin and the user did not spell out a path, the rewrite
- * goes through `/forward/` so the request arrives carrying the destination orca took it away
+ * goes through `/forward/` so the request arrives carrying the destination agenticreplay took it away
  * from. That matters as soon as a run has two of them. A retrieval stack is the ordinary case —
- * chat through a gateway, embeddings at a dedicated provider or a local Ollama — and orca's
+ * chat through a gateway, embeddings at a dedicated provider or a local Ollama — and agenticreplay's
  * upstream map is keyed by wire dialect, so "the same dialect at two origins" is a configuration
  * `--upstream-openai` cannot express. Without the original target the second origin's calls were
  * forwarded to the first one's, or, with no override configured at all, to `api.openai.com`
@@ -98,7 +98,7 @@ export function applyNamedBaseUrls(
   env: Record<string, string | undefined>,
   proxyUrl: string,
 ): void {
-  for (const entry of (readEnv(env, 'ORCA_BASE_URL_VARS') ?? '').split(',')) {
+  for (const entry of (readEnv(env, 'AGENTICREPLAY_BASE_URL_VARS') ?? '').split(',')) {
     const [rawName, rawPath] = entry.split('=');
     const name = (rawName ?? '').trim();
     if (name === '') continue;

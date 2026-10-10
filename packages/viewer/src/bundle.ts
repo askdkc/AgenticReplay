@@ -2,7 +2,7 @@
  * Minifies the client runtime for inlining.
  *
  * esbuild is a repo-root build tool, not a dependency of this package: a published
- * `@orcareplay/viewer` ships `dist` only and must render without it. So the import is dynamic
+ * `@agenticreplay/viewer` ships `dist` only and must render without it. So the import is dynamic
  * and guarded, and the readable source is a first-class fallback rather than an error path —
  * `renderTraceHtml` stays synchronous and correct either way.
  */
@@ -14,7 +14,11 @@ export async function bundleViewerScript(): Promise<string> {
   try {
     const esbuild = await import('esbuild');
     const result = await esbuild.build({
-      stdin: { contents: CLIENT_SOURCE, loader: 'js', sourcefile: 'orca-viewer-client.js' },
+      stdin: {
+        contents: CLIENT_SOURCE,
+        loader: 'js',
+        sourcefile: 'agenticreplay-viewer-client.js',
+      },
       bundle: true,
       format: 'iife',
       target: 'es2019',

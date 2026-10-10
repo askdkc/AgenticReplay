@@ -15,6 +15,17 @@ function fresh(): Redactor {
 }
 
 describe('placeholder stability', () => {
+  it('does not let a body-controlled binary marker disable secret detection', () => {
+    const secret = 'kR4s7Bq9nV2x6Dg8mP3w5Yh1';
+    expect(fresh().redactString(`agenticreplay-base64:AA== ${secret}`).value).not.toContain(secret);
+  });
+
+  it('preserves generated transport directory names without exempting adjacent tokens', () => {
+    const secret = 'kR4s7Bq9nV2x6Dg8mP3w5Yh1';
+    const result = fresh().redactString(`/tmp/agenticreplay-shell-A9b2Zq/frames ${secret}`).value;
+    expect(result).toContain('agenticreplay-shell-A9b2Zq');
+    expect(result).not.toContain(secret);
+  });
   it('emits exactly <secret:KIND:HASH8>', () => {
     const { value } = fresh().redactString('key sk-abcdefghijklmnop0123 end');
     const found = value.match(/<secret:[^>]*>/g) ?? [];
@@ -77,7 +88,7 @@ describe('pattern rules', () => {
   const cases: [string, string, string][] = [
     ['sk_api_key', 'sk-abcdefghijklmnop0123456789', 'openai'],
     // The same rule covers every vendor that copied the prefix, which is why it is not named for
-    // one of them: OrcaRouter is now the gateway `orca setup` suggests, so its keys are the ones
+    // one of them: OrcaRouter is one external gateway using that prefix, so its keys are among those
     // most likely to be sitting next to a trace.
     ['sk_api_key', 'sk-orca-abcdefghijklmnop0123456789', 'orcarouter'],
     ['sk_api_key', 'sk-ant-api03-abcdefghijklmnop0123456789', 'anthropic'],
@@ -168,8 +179,8 @@ describe('false positives', () => {
     'getUserAuthenticationTokenFromRequestHeaders(request, options)',
     'const setUnhandledRejectionHandlerForBackgroundTasks = () => undefined;',
     'aVeryLongCamelCaseVariableNameUsedInProductionCode = 1;',
-    '/home/user/OrcaReplay/packages/core/src/redaction.ts',
-    'node_modules/@orcareplay/schema/dist/index.js',
+    '/home/user/AgenticReplay/packages/core/src/redaction.ts',
+    'node_modules/@agenticreplay/schema/dist/index.js',
     'https://api.anthropic.com/v1/messages?beta=true',
     'sha256:9f2c14be7d1a0b3c5e6f8a9d2b4c6e8f0a1b3c5d7e9f1a3b5c7d9e1f3a5b7c9d',
     '550e8400-e29b-41d4-a716-446655440000',
@@ -345,7 +356,7 @@ describe('protocol identifiers', () => {
   /**
    * The bug this exists for: a fork replays recorded assistant turns, the agent echoes their
    * `tool_use` ids back, and the live API rejects the request because a placeholder is not a legal
-   * id. `orca compare` could not work against any real Anthropic recording.
+   * id. `agenticreplay compare` could not work against any real Anthropic recording.
    */
   it('leaves a tool_use id verbatim, so a fork can echo it back to the API', () => {
     const body = JSON.stringify({
@@ -431,7 +442,7 @@ describe('thinking signatures', () => {
  *
  * Every shape rule and the entropy sweep judge runs of `[A-Za-z0-9_-]`, so a zero-width space inside
  * a key split it: `sk-abc` + U+200B + 23 letters matched no rule, the tail was not random enough
- * for the sweep, and the key was written to the trace — the file `orca push` shares — verbatim.
+ * for the sweep, and the key was written to the trace — the file `agenticreplay push` shares — verbatim.
  * Interleaving one every few characters leaves no run long enough for the sweep to measure.
  */
 describe('write-path redaction sees through invisible characters', () => {

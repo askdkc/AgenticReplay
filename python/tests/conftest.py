@@ -13,13 +13,13 @@ EXAMPLE_RUN_ID = "run_9f2c14a03b71"
 
 
 def repo_root() -> Path | None:
-    """The OrcaReplay checkout containing this package, when it is present.
+    """The AgenticReplay checkout containing this package, when it is present.
 
     The SDK is publishable on its own, so tests that read repo fixtures must be able to tell
     that they are running outside the repo rather than fail confusingly.
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / "spec" / "orca-trace-v0.md").is_file():
+        if (parent / "spec" / "agenticreplay-trace-v0.md").is_file():
             return parent
     return None
 
@@ -28,7 +28,7 @@ def repo_root() -> Path | None:
 def example_run() -> Path:
     root = repo_root()
     if root is None:
-        pytest.skip("not running inside an OrcaReplay checkout")
+        pytest.skip("not running inside an AgenticReplay checkout")
     run = root / "examples" / "traces" / EXAMPLE_RUN_ID
     if not run.is_dir():
         pytest.skip(f"missing example trace {run}")
@@ -63,10 +63,10 @@ def write_trace(
         (shard / digest).write_bytes(payload)
 
     doc: dict[str, Any] = {
-        "schema_version": "0.1.0",
+        "schema_version": "0.4.0",
         "run_id": "run_abc123",
         "created_at": "2026-08-29T10:00:00.000Z",
-        "orca_version": "0.1.0",
+        "agenticreplay_version": "0.1.0",
         "adapter": {"id": "test-adapter"},
         "argv": ["agent"],
         "cwd": "/work",
@@ -90,7 +90,7 @@ def event(seq: int, type_: str = "note", **over: Any) -> dict[str, Any]:
         "mono_us": seq * 1000,
         "turn": 0,
         "type": type_,
-        "actor": "orca",
+        "actor": "agenticreplay",
     }
     base.update(over)
     return base

@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openCodeAdapter } from '@orcareplay/adapters';
-import { TraceWriter } from '@orcareplay/core';
-import { createProxy, type NetExchange } from '@orcareplay/proxy';
+import { openCodeAdapter } from '@agenticreplay/adapters';
+import { TraceWriter } from '@agenticreplay/core';
+import { createProxy, type NetExchange } from '@agenticreplay/proxy';
 import { appendDerivedEvents, ExchangeEventDeriver } from '../src/exchange-events.js';
 import { persistNetExchange } from '../src/tls-capture.js';
 
@@ -31,13 +31,13 @@ const endpoints = [
 
 describe('OpenCode catalog capture through emitted plugin and real proxy', () => {
   it('refreshes new APIs, records catalog calls, and replays supported dialects offline', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'orca-catalog-e2e-'));
+    const root = await mkdtemp(join(tmpdir(), 'agenticreplay-catalog-e2e-'));
     closers.push(() => rm(root, { recursive: true, force: true }));
     const writer = await TraceWriter.create(join(root, 'runs'), {
       adapter: { id: 'opencode' },
       argv: [],
       cwd: root,
-      orcaVersion: 'test',
+      agenticreplayVersion: 'test',
     });
     closers.push(() => writer.close());
     const calls: Array<{ url: string; headers: Headers; body: string }> = [];
@@ -124,7 +124,7 @@ describe('OpenCode catalog capture through emitted plugin and real proxy', () =>
       'openai',
       'openai',
     ]);
-    expect(opaque).toHaveLength(2);
+    expect(opaque.filter((e) => !e.modelDialect)).toHaveLength(2);
     const deriver = new ExchangeEventDeriver();
     for (const [i, exchange] of proxy.exchanges().entries())
       await appendDerivedEvents(writer, deriver, exchange, i + 1);
@@ -136,8 +136,8 @@ describe('OpenCode catalog capture through emitted plugin and real proxy', () =>
       .map((line) => JSON.parse(line));
     expect(events.filter((e) => e.type === 'model.request')).toHaveLength(6);
     expect(events.filter((e) => e.type === 'model.response')).toHaveLength(6);
-    expect(events.filter((e) => e.type === 'net.request')).toHaveLength(2);
-    expect(events.filter((e) => e.type === 'net.response')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'net.request')).toHaveLength(8);
+    expect(events.filter((e) => e.type === 'net.response')).toHaveLength(8);
     expect(text + JSON.stringify(proxy.exchanges()) + JSON.stringify(opaque)).not.toMatch(
       /provider-fixture|wrong-gateway-fixture/,
     );

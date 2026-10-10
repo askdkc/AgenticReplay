@@ -1,18 +1,19 @@
 /**
- * Serves the same rendered document over loopback, for `orca view`.
+ * Serves the same rendered document over loopback, for `agenticreplay view`.
  *
  * A trace is sensitive material (spec §5), so this binds 127.0.0.1 and refuses anything else —
  * there is no flag to open it to the network, on purpose.
  */
 
 import { createServer } from 'node:http';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { renderTraceHtml, type RenderOptions } from './html.js';
-import { readTraceDir, type ReadTraceOptions } from './trace-dir.js';
+import { bodyText, readTraceDir, type ReadTraceOptions } from './trace-dir.js';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const LIVE_PREVIEW_BYTES = 256 * 1024;
 
 /** Blocks every fetch the page could attempt. It should never need one. */
 const CSP = [
@@ -60,8 +61,16 @@ export async function serveViewer(options: ServeOptions): Promise<ViewerServer> 
   async function document(): Promise<string> {
     const key = await stamp();
     if (cache && cache.key === key) return cache.html;
-    const { manifest, events, blobs } = await readTraceDir(options.runDir, options);
-    const html = renderTraceHtml({ manifest, events, blobs }, options);
+    // The live page must not aggregate arbitrarily large bodies in memory. It renders previews
+    // from no blob bytes and serves the complete redacted file on demand below.
+    const readOptions = { ...options, maxBlobBytes: options.maxBlobBytes ?? LIVE_PREVIEW_BYTES };
+    const { manifest, events, blobs } = await readTraceDir(options.runDir, readOptions);
+    const address = server.address() as AddressInfo;
+    const shown = address.address.includes(':') ? `[${address.address}]` : address.address;
+    const html = renderTraceHtml(
+      { manifest, events, blobs },
+      { ...options, blobDownloadBaseUrl: `http://${shown}:${address.port}/blobs` },
+    );
     cache = { key, html };
     return html;
   }
@@ -74,7 +83,28 @@ export async function serveViewer(options: ServeOptions): Promise<ViewerServer> 
         res.end('method not allowed\n');
         return;
       }
-      const path = (req.url ?? '/').split('?')[0];
+      const path = (req.url ?? '/').split('?').at(0) ?? '/';
+      const blob = /^\/blobs\/([0-9a-f]{2,})$/i.exec(path);
+      if (blob) {
+        try {
+          const stored = await readFile(
+            join(options.runDir, 'blobs', blob[1]!.slice(0, 2), blob[1]!),
+          );
+          const body = Buffer.from(bodyText(stored.toString('utf8')));
+          res.writeHead(200, {
+            'content-type': 'text/plain; charset=utf-8',
+            'content-disposition': `attachment; filename="${blob[1]}.txt"`,
+            'content-length': String(body.byteLength),
+            'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff',
+          });
+          res.end(method === 'HEAD' ? undefined : body);
+        } catch {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('blob not found\n');
+        }
+        return;
+      }
       if (path !== '/' && path !== '/index.html') {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('not found\n');

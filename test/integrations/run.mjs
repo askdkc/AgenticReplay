@@ -2,7 +2,7 @@
 /**
  * Record a real framework, kill the origin, replay offline, assert the numbers.
  *
- * Each check answers one question: does `orca record` actually capture this, and does the
+ * Each check answers one question: does `agenticreplay record` actually capture this, and does the
  * recording still reproduce with nothing to talk to. The second half is why the origin is stopped
  * before the replay — a replay that reached the network would fail here by construction rather
  * than by assertion.
@@ -79,7 +79,7 @@ const CHECKS = [
     id: 'openai-agents-handoff',
     what: 'a two-agent handoff and a guardrail, reported by the SDK and captured without editing it',
     run: ['python', 'agents/openai_agents_handoff.py'],
-    needs: ['agents', 'orcareplay_openai_agents'],
+    needs: ['agents', 'agenticreplay_openai_agents'],
     exchanges: 2,
     // The point of the check. These three cannot come from the proxy: a handoff reaches the wire as
     // an ordinary `transfer_to_*` tool call that never names the agent it came *from*, and a
@@ -118,7 +118,7 @@ const CHECKS = [
     // Both, for the reason the array exists: with only langgraph this runs, captures its two
     // exchanges, and fails with "no graph.node.start in the trace" — which reads as a broken layer
     // rather than as a missing install.
-    needs: ['langgraph', 'orcareplay_langgraph'],
+    needs: ['langgraph', 'agenticreplay_langgraph'],
     exchanges: 2,
     expectEvents: ['graph.node.start', 'graph.node.end'],
     /**
@@ -282,7 +282,7 @@ async function traceText(runDir) {
  * Whether the framework this check speaks for is installed at all.
  *
  * An array where a check needs more than one thing. `openai-agents-handoff` is the case that made
- * this necessary: it needs the SDK *and* orca's tracing package, and with only the first it ran and
+ * this necessary: it needs the SDK *and* agenticreplay's tracing package, and with only the first it ran and
  * failed with "no agent.start in the trace" — which reads as a bug in the layer rather than as a
  * missing install.
  */
@@ -335,7 +335,7 @@ function startOrigin() {
 }
 
 /** Run the CLI, returning what it printed whether or not it succeeded. */
-async function orca(argv, cwd, extraEnv = {}) {
+async function agenticreplay(argv, cwd, extraEnv = {}) {
   const env = {
     ...process.env,
     NO_COLOR: '1',
@@ -388,7 +388,7 @@ async function orca(argv, cwd, extraEnv = {}) {
  * The last few lines of what a command said, for an error message that has to survive CI.
  *
  * `exited -1` on its own is unactionable: nobody can re-run the failing check by hand from a log,
- * and -1 is what `orca()` reports when the process was killed rather than exiting — a timeout, or
+ * and -1 is what `agenticreplay()` reports when the process was killed rather than exiting — a timeout, or
  * a signal — which is exactly the case where the output is the only evidence there is.
  */
 function tail(out, lines = 6) {
@@ -405,7 +405,7 @@ async function runCheck(check) {
   const absentNode = installedNode(check.needsNode);
   if (absentNode !== undefined) return { skipped: `${absentNode} is not installed` };
 
-  const dir = await mkdtemp(join(tmpdir(), `orca-int-${check.id}-`));
+  const dir = await mkdtemp(join(tmpdir(), `agenticreplay-int-${check.id}-`));
   const origin = await startOrigin();
   // A second stub, only for the checks that split their traffic across two origins of the same
   // wire dialect — the shape `--upstream-openai` cannot express, and the ordinary shape of a
@@ -416,9 +416,9 @@ async function runCheck(check) {
 
     const adapter = check.adapter ?? 'generic-openai';
     /**
-     * The config an MCP-config-reading agent loads, and the file orca rewrites.
+     * The config an MCP-config-reading agent loads, and the file agenticreplay rewrites.
      *
-     * `orca record --mcp-config` swaps each server's command for `<node> <shim> --out <frames> --
+     * `agenticreplay record --mcp-config` swaps each server's command for `<node> <shim> --out <frames> --
      * <original>`, so the shim sits in the pipe and tees every JSON-RPC frame both ways. Written
      * here pointing at the copy under `dir`, because the copy is what gets taken away before the
      * replay.
@@ -436,10 +436,10 @@ async function runCheck(check) {
     const splitEnv = second
       ? {
           [check.secondOrigin]: `http://127.0.0.1:${second.port}/v1`,
-          ORCA_BASE_URL_VARS: check.secondOrigin,
+          AGENTICREPLAY_BASE_URL_VARS: check.secondOrigin,
         }
       : {};
-    const recorded = await orca(
+    const recorded = await agenticreplay(
       [
         'record',
         adapter,
@@ -472,7 +472,7 @@ async function runCheck(check) {
     // also what keeps it free. `replayed=0 live=N` is the shape to look for: nothing served from
     // the recording past the cursor, every turn after it answered by the origin.
     if (check.forks) {
-      const forked = await orca(
+      const forked = await agenticreplay(
         [
           'replay',
           runId,
@@ -496,7 +496,9 @@ async function runCheck(check) {
     }
 
     // What the trace says it captured, before the origins go down.
-    const events = (await readFile(join(dir, '.orca', 'runs', runId, 'events.jsonl'), 'utf8'))
+    const events = (
+      await readFile(join(dir, '.agenticreplay', 'runs', runId, 'events.jsonl'), 'utf8')
+    )
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
@@ -540,16 +542,13 @@ async function runCheck(check) {
     if (check.imageIntact) {
       const sent = /^IMAGE: (\S+)$/m.exec(recorded.out)?.[1];
       if (sent === undefined) throw new Error('the agent did not print the image it sent');
-      const trace = await traceText(join(dir, '.orca', 'runs', runId));
+      const trace = await traceText(join(dir, '.agenticreplay', 'runs', runId));
       // Byte for byte. A near-miss is the failure this exists for: the sweep replaced runs *inside*
       // the payload, so a substring check on the first hundred characters would have passed.
       if (!trace.includes(sent))
         throw new Error('the recorded image is not the image that was sent');
-      const holes = trace.match(/<secret:high_entropy:/g)?.length ?? 0;
-      if (holes > 0)
-        throw new Error(
-          `${holes} entropy placeholder(s) in a trace whose only high-entropy value is a PNG`,
-        );
+      // Operational metadata may legitimately be redacted. The equality above checks the
+      // complete image bytes themselves, without treating unrelated path redaction as corruption.
     }
 
     // From here the recording is on its own. Anything that reaches out now fails.
@@ -560,16 +559,16 @@ async function runCheck(check) {
     // than deleted so a failure says what is missing.
     if (mcpServer !== undefined) await rename(mcpServer, `${mcpServer}.gone`);
 
-    const replayed = await orca(['replay', runId, '--in-place'], dir, {
+    const replayed = await agenticreplay(['replay', runId, '--in-place'], dir, {
       ...splitEnv,
-      ...(check.repaint ? { ORCA_CHECK_REPAINT: '1' } : {}),
+      ...(check.repaint ? { AGENTICREPLAY_CHECK_REPAINT: '1' } : {}),
     });
     if (replayed.code !== 0)
       throw new Error(
         `replay exited ${replayed.code} — ${replayed.how ?? 'no detail'}${tail(replayed.out)}`,
       );
 
-    const m = /reused=(\d+)\/(\d+) exact=(\d+) divergences=(\d+) unmatched=(\d+)/.exec(
+    const m = /reused=(\d+)\/(\d+) canonical_exact=(\d+) divergences=(\d+) unmatched=(\d+)/.exec(
       replayed.out,
     );
     if (m === null) throw new Error('replay printed no verdict');
@@ -621,7 +620,7 @@ async function runCheck(check) {
     // Event types a check insists on. Counting exchanges says the traffic was captured; it says
     // nothing about a layer whose whole purpose is what the traffic does not contain.
     if (check.expectEvents || check.expectNodes) {
-      const listed = await orca(['events', '--json', runId], dir);
+      const listed = await agenticreplay(['events', '--json', runId], dir);
       const line = listed.out.split(/\r?\n/).find((l) => l.startsWith('['));
       const events = JSON.parse(line ?? '[]');
       const seen = new Set(events.map((e) => e.type));

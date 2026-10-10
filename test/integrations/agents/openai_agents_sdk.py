@@ -15,7 +15,7 @@ import asyncio
 from agents import Agent, Runner, set_tracing_disabled
 
 # The SDK ships its own traces to OpenAI, on a second connection that is not model traffic and that
-# orca does not capture. Off here so the run talks to nothing but the proxy — which is also what
+# agenticreplay does not capture. Off here so the run talks to nothing but the proxy — which is also what
 # makes this check deterministic, and what the docs tell a reader to decide about before a long run.
 set_tracing_disabled(True)
 

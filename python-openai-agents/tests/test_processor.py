@@ -1,6 +1,6 @@
 """The processor's two obligations: be inert when it should be, and never break the run.
 
-Both are load-bearing rather than defensive. This package is installed by `orca record` into *every*
+Both are load-bearing rather than defensive. This package is installed by `agenticreplay record` into *every*
 Python process a recording starts — including `python --version` — so "does nothing" is the common
 case and has to be the reliable one.
 """
@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from orcareplay_openai_agents import KEEP_ENV, SPANS_ENV, OrcaTracingProcessor, install
+from agenticreplay_openai_agents import KEEP_ENV, SPANS_ENV, AgenticReplayTracingProcessor, install
 
 
 class FakeSpanData:
@@ -63,7 +63,7 @@ def read(path):
 
 def test_inert_without_the_environment_variable(monkeypatch, tmp_path):
     monkeypatch.delenv(SPANS_ENV, raising=False)
-    processor = OrcaTracingProcessor()
+    processor = AgenticReplayTracingProcessor()
     assert processor.active is False
     # And writing must be a no-op rather than an error: the SDK calls these unconditionally.
     processor.on_span_end(FakeSpan(HandoffSpanData({"from_agent": "A", "to_agent": "B"})))
@@ -77,7 +77,7 @@ def test_install_is_false_and_quiet_when_not_recording(monkeypatch):
 
 def test_writes_a_handoff(tmp_path):
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     processor.on_span_end(FakeSpan(HandoffSpanData({"from_agent": "Triage", "to_agent": "Billing"})))
     records = read(out)
     assert len(records) == 1
@@ -89,7 +89,7 @@ def test_drops_what_the_proxy_already_has(tmp_path):
     # Not an optimisation: the proxy holds these exchanges byte for byte, and a second, lossier copy
     # in the same trace is worse than none.
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     processor.on_span_end(FakeSpan(ResponseSpanData({"response": "..."})))
     assert not out.exists() or read(out) == []
 
@@ -100,19 +100,19 @@ def test_a_span_that_will_not_serialise_does_not_raise(tmp_path):
             raise RuntimeError("even repr fails")
 
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     # Must not propagate. The SDK calls this from inside the run; an exception here would surface as
     # the agent failing, which is the one thing a debugging aid must never cause.
     processor.on_span_end(FakeSpan(HandoffSpanData({"bad": Hostile()})))
 
 
 def test_an_unwritable_path_does_not_raise(tmp_path):
-    processor = OrcaTracingProcessor(str(tmp_path / "no-such-dir" / "spans.jsonl"))
+    processor = AgenticReplayTracingProcessor(str(tmp_path / "no-such-dir" / "spans.jsonl"))
     processor.on_span_end(FakeSpan(HandoffSpanData({"from_agent": "A", "to_agent": "B"})))
 
 
 @pytest.mark.skipif(
-    os.environ.get("ORCA_SKIP_SDK_TESTS") == "1", reason="asked to skip SDK-dependent tests"
+    os.environ.get("AGENTICREPLAY_SKIP_SDK_TESTS") == "1", reason="asked to skip SDK-dependent tests"
 )
 def test_install_replaces_the_default_exporter(monkeypatch, tmp_path):
     """The reason `install` replaces rather than appends.
@@ -133,7 +133,7 @@ def test_install_replaces_the_default_exporter(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(
-    os.environ.get("ORCA_SKIP_SDK_TESTS") == "1", reason="asked to skip SDK-dependent tests"
+    os.environ.get("AGENTICREPLAY_SKIP_SDK_TESTS") == "1", reason="asked to skip SDK-dependent tests"
 )
 def test_keep_export_appends_instead(monkeypatch, tmp_path):
     agents = pytest.importorskip("agents")
@@ -149,7 +149,7 @@ def test_keep_export_appends_instead(monkeypatch, tmp_path):
 
 # ── what reaches the file, and what does not ──────────────────────────────────────────────────────
 #
-# The file is written by the agent's own interpreter, so nothing orca owns can redact it on the way
+# The file is written by the agent's own interpreter, so nothing agenticreplay owns can redact it on the way
 # in. That leaves one control: do not write it. These pin the allow-list in both directions, because
 # a list that let everything through and a list that let nothing through would both have passed the
 # suite this replaced.
@@ -157,7 +157,7 @@ def test_keep_export_appends_instead(monkeypatch, tmp_path):
 
 def _one_record(tmp_path, span, monkeypatch=None):
     path = tmp_path / "spans.jsonl"
-    p = OrcaTracingProcessor(str(path))
+    p = AgenticReplayTracingProcessor(str(path))
     p.on_span_end(span)
     if not path.exists():
         return None
@@ -298,7 +298,7 @@ def test_a_datetime_timestamp_is_written_as_iso(tmp_path):
     the value for its own ISO form rather than leaving it to `default=str`.
     """
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     span = FakeSpan(HandoffSpanData({"from_agent": "Triage", "to_agent": "Billing"}))
     span.started_at = datetime.datetime(
         2026, 9, 10, 3, 46, 3, 483810, tzinfo=datetime.timezone.utc
@@ -322,7 +322,7 @@ def test_a_value_json_cannot_take_costs_that_field_and_nothing_else(tmp_path):
             return "<unserialisable>"
 
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     span = FakeSpan(HandoffSpanData({"from_agent": "Triage", "to_agent": "Billing"}))
     span.started_at = Unserialisable()
 
@@ -344,7 +344,7 @@ def test_every_record_begins_with_kind(tmp_path):
     here is built with `kind` first; this is the half of that agreement that lives on this side.
     """
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     processor.on_trace_start(object())
     processor.on_span_end(FakeSpan(HandoffSpanData({"from_agent": "A", "to_agent": "B"})))
     processor.on_trace_end(object())
@@ -376,7 +376,7 @@ def _wedge(processor):
 def test_nothing_lost_says_nothing(tmp_path):
     """The common case, and the one a spurious line would be most annoying in."""
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     processor.on_span_end(FakeSpan(HandoffSpanData({"from_agent": "Triage", "to_agent": "Billing"})))
 
     processor.shutdown()
@@ -387,7 +387,7 @@ def test_nothing_lost_says_nothing(tmp_path):
 
 def test_a_record_that_could_not_be_written_is_reported_at_shutdown(tmp_path):
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
 
     _wedge(processor)
     assert processor._dropped == 1
@@ -402,7 +402,7 @@ def test_a_record_that_could_not_be_written_is_reported_at_shutdown(tmp_path):
 
 def test_every_loss_is_counted_not_just_the_first(tmp_path):
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     for _ in range(3):
         _wedge(processor)
 
@@ -414,7 +414,7 @@ def test_every_loss_is_counted_not_just_the_first(tmp_path):
 def test_shutdown_twice_reports_once(tmp_path):
     """The SDK may call `shutdown` more than once; a second line reads as a second, separate loss."""
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     _wedge(processor)
 
     processor.shutdown()
@@ -426,7 +426,7 @@ def test_shutdown_twice_reports_once(tmp_path):
 def test_reporting_a_loss_cannot_itself_end_the_run(tmp_path):
     """The likeliest reason a record was dropped is that this file cannot be written to."""
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     _wedge(processor)
     # A directory where the file should be: every append fails, including shutdown's own.
     (tmp_path / "wedged").mkdir()
@@ -438,7 +438,7 @@ def test_reporting_a_loss_cannot_itself_end_the_run(tmp_path):
 def test_an_inert_processor_writes_no_dropped_line(tmp_path, monkeypatch):
     """Nothing is being recorded, so there is no file to report a loss into."""
     monkeypatch.delenv(SPANS_ENV, raising=False)
-    processor = OrcaTracingProcessor()
+    processor = AgenticReplayTracingProcessor()
     assert not processor.active
 
     processor.shutdown()  # must return, not raise
@@ -449,7 +449,7 @@ def test_an_inert_processor_writes_no_dropped_line(tmp_path, monkeypatch):
 def test_the_dropped_record_begins_with_kind_like_every_other(tmp_path):
     """The CLI anchors its recovery of a torn line on these bytes. This record is not exempt."""
     out = tmp_path / "spans.jsonl"
-    processor = OrcaTracingProcessor(str(out))
+    processor = AgenticReplayTracingProcessor(str(out))
     _wedge(processor)
     processor.shutdown()
 

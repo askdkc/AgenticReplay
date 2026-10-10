@@ -11,9 +11,9 @@
  * on three counts the replay already reports —
  *
  *   unmatched   turns the recording could not serve at all. The budget for this is zero. A turn
- *               orca cannot answer from the trace is the failure the whole feature exists to
+ *               agenticreplay cannot answer from the trace is the failure the whole feature exists to
  *               prevent, and there is no honest way to spend a budget on it.
- *   exact       turns matched byte for byte. Below `minExact` is a regression even when nothing
+ *   canonical_exact turns matched after canonical normalization. Below `minExact` is a regression even when nothing
  *               is unmatched, because a run that only matches loosely is a run whose fidelity is
  *               being carried by the match ladder rather than by the capture.
  *   divergences reported differences. Allowed a budget, because some are inherent: a harness that
@@ -50,18 +50,20 @@ const CORPUS = [
     harness: 'a Node agent over chat completions',
     trace: join(root, 'packages', 'cli', 'quickstart', 'trace'),
     project: join(root, 'packages', 'cli', 'quickstart', 'project'),
-    note: 'the run `orca quickstart` ships and replays on every invocation',
+    note: 'the run `agenticreplay quickstart` ships and replays on every invocation',
     budget: { minExact: 3, maxDivergences: 0 },
   },
 ];
 
 /** Replay one entry in a scratch copy and read the numbers back out of the JSON. */
 async function replay(entry) {
-  const dir = await mkdtemp(join(tmpdir(), 'orca-fidelity-'));
+  const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-fidelity-'));
   try {
     const manifest = JSON.parse(await readFile(join(entry.trace, 'manifest.json'), 'utf8'));
     await cp(entry.project, dir, { recursive: true });
-    await cp(entry.trace, join(dir, '.orca', 'runs', manifest.run_id), { recursive: true });
+    await cp(entry.trace, join(dir, '.agenticreplay', 'runs', manifest.run_id), {
+      recursive: true,
+    });
 
     // `--in-place` because the project is copied in at the state the run started from; restoring
     // would mean writing over a directory the recording never saw.
@@ -101,11 +103,18 @@ for (const entry of CORPUS) {
   }
 
   // Field names come from `replay --json`, read off a real run rather than assumed.
-  const { unmatched = 0, matchedExact: exact = 0, divergences = 0, liveCalls = 0 } = result;
+  const {
+    unmatched = 0,
+    canonicalExact,
+    canonical_exact: legacyExact = 0,
+    divergences = 0,
+    liveCalls = 0,
+  } = result;
+  const exact = canonicalExact ?? legacyExact;
   const problems = [];
   if (unmatched > 0) problems.push(`${unmatched} unmatched (budget 0)`);
   if (exact < entry.budget.minExact) {
-    problems.push(`${exact} exact, expected at least ${entry.budget.minExact}`);
+    problems.push(`${exact} canonical_exact, expected at least ${entry.budget.minExact}`);
   }
   if (divergences > entry.budget.maxDivergences) {
     problems.push(`${divergences} divergences, budget ${entry.budget.maxDivergences}`);
@@ -120,7 +129,7 @@ for (const entry of CORPUS) {
     console.log('regressed');
     for (const p of problems) console.error(`     ${p}`);
   } else {
-    console.log(`exact ${exact}, unmatched ${unmatched}, divergences ${divergences}`);
+    console.log(`canonical_exact ${exact}, unmatched ${unmatched}, divergences ${divergences}`);
   }
   rows.push({ entry, unmatched, exact, divergences, liveCalls, problems });
 }
@@ -133,11 +142,11 @@ if (!process.argv.includes('--check')) {
     '',
     'Every recording below is replayed with the network off and the numbers asserted. A turn the',
     'recording cannot serve — `unmatched` — has a budget of zero, because a replay that has to go',
-    'and ask a model is not a replay. `exact` counts the turns matched byte for byte; a floor is',
+    'and ask a model is not a replay. `canonical_exact` counts turns matched after canonical normalization; a floor is',
     'set per entry so fidelity carried by the match ladder rather than by the capture shows up as',
     'a regression rather than as a pass.',
     '',
-    '| Harness | Exact | Unmatched | Divergences | Live calls | Budget |',
+    '| Harness | Canonical exact | Unmatched | Divergences | Live calls | Budget |',
     '|---|---|---|---|---|---|',
   ];
   for (const r of rows) {
@@ -147,7 +156,7 @@ if (!process.argv.includes('--check')) {
     }
     lines.push(
       `| ${r.entry.harness} | ${r.exact} | ${r.unmatched} | ${r.divergences} | ${r.liveCalls} | ` +
-        `exact ≥ ${r.entry.budget.minExact}, divergences ≤ ${r.entry.budget.maxDivergences} |`,
+        `canonical exact ≥ ${r.entry.budget.minExact}, divergences ≤ ${r.entry.budget.maxDivergences} |`,
     );
   }
   lines.push('');

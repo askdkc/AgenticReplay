@@ -14,7 +14,7 @@ afterEach(async () => {
  * the Vercel AI SDK and every wrapper like it do — and the proxy copied `transfer-encoding:
  * chunked` onto an outbound call that had already buffered the body. undici rejects that, so the
  * agent got `500 {"error":{"message":"TypeError: fetch failed"}}` on any turn with a streamed
- * body. Nothing in the message points at a header, or at orca, or at the agent.
+ * body. Nothing in the message points at a header, or at agenticreplay, or at the agent.
  */
 const BODY = {
   model: 'gpt-5.2',

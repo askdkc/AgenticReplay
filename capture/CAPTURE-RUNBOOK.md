@@ -1,6 +1,6 @@
 # Capturing an agent's system prompt
 
-How to read the system prompt a coding agent assembled on your own machine, using OrcaReplay's
+How to read the system prompt a coding agent assembled on your own machine, using AgenticReplay's
 proxy as the vantage point. Nothing here talks to a service about anything but the agent's own
 model call: the prompt is captured from the request the harness sent, on the way out.
 
@@ -9,7 +9,7 @@ is the manual procedure behind it, for porting the approach to a harness the scr
 or to a platform it does not run on.
 
 Measured against Claude Code 2.1.258, Codex 0.149.0 and OpenCode 1.18.26 on Windows 10, node
-22.23.2, OrcaReplay 0.1.2.
+22.23.2, AgenticReplay 0.1.2.
 
 ## What you get
 
@@ -20,7 +20,7 @@ Measured against Claude Code 2.1.258, Codex 0.149.0 and OpenCode 1.18.26 on Wind
 | the whole request body | `capture/<name>/<name>-request.json` |
 | tool definitions | `capture/<name>/<name>-tools.json` |
 | run id, sizes, token counts | `capture/<name>/<name>-meta.json` |
-| the raw orca run | `capture/<name>/trace/` |
+| the raw agenticreplay run | `capture/<name>/trace/` |
 
 Everything but `trace/` is scrubbed.
 
@@ -29,28 +29,28 @@ Everything but `trace/` is scrubbed.
 | | |
 |---|---|
 | node | 20.19+ or 22.12+ |
-| orcareplay | `npm i -g orcareplay` |
+| agenticreplay | `npm i -g agenticreplay` |
 | the agent | installed, signed in, and able to reach the model it names |
 | terminal | PowerShell is needed for step 4 on Windows |
 
-On Linux and macOS steps 3 to 5 collapse into a single `orca record`: a pipe there still sits
+On Linux and macOS steps 3 to 5 collapse into a single `agenticreplay record`: a pipe there still sits
 behind a pty, so the harness assembles its interactive prompt anyway. Windows is the case that
 needs the extra work, for the reason in the pitfalls below.
 
 ## Steps
 
-### 1. Find out where orca will forward
+### 1. Find out where agenticreplay will forward
 
-If `orca setup` has configured a gateway, `resolveUpstream()` (`packages/cli/src/config.ts:132`)
+If `agenticreplay setup` has configured a gateway, `resolveUpstream()` (`packages/cli/src/config.ts:132`)
 sends every Anthropic call there, and a third-party router usually does not serve the model.
 
 ```console
-$ cat ~/.config/orca/config.json
+$ cat ~/.config/agenticreplay/config.json
 { "gateway": { "url": "http://<your-gateway>:8317", "api_key": "<key>" },
   "models": [ "gpt-5.6-sol" ] }
 ```
 
-If that file names a gateway, add `--upstream-anthropic https://api.anthropic.com` to every orca
+If that file names a gateway, add `--upstream-anthropic https://api.anthropic.com` to every agenticreplay
 command below. Codex is the opposite case: its own `config.toml` already points at that gateway, so
 leaving the upstream alone is what makes its model resolve.
 
@@ -59,7 +59,7 @@ leaving the upstream alone is what makes its model resolve.
 Optional, but cheap, and it confirms the proxy, the credential and the model id in one go.
 
 ```console
-$ orca record claude --no-fs --no-shell \
+$ agenticreplay record claude --no-fs --no-shell \
     --upstream-anthropic https://api.anthropic.com \
     -- -p "reply with just: ok" --model claude-fable-5-1
 info recording run=run_8e6d567d4ca4 adapter=claude-code proxy=:58642
@@ -72,17 +72,17 @@ interactive one.
 
 ### 3. Hold a proxy open
 
-`orca attach` does not launch the agent. It holds the proxy and prints the variable to export.
+`agenticreplay attach` does not launch the agent. It holds the proxy and prints the variable to export.
 `--port` is not in `--help` but it exists, and a fixed port saves parsing the output.
 
 ```console
-$ orca attach --for claude --port 46001 \
+$ agenticreplay attach --for claude --port 46001 \
     --upstream-anthropic https://api.anthropic.com
 info attached run=run_bc749535e248 proxy=http://127.0.0.1:46001 for=claude-code
 
   # in the sandbox, before starting your agent:
   export ANTHROPIC_BASE_URL='http://127.0.0.1:46001'
-  # your agent's own credential is unchanged - orca forwards it upstream
+  # your agent's own credential is unchanged - agenticreplay forwards it upstream
 
   Recording. Press ctrl-C when the agent is done.
 ```
@@ -116,14 +116,14 @@ The first `model.request` is the title generator, `tools=0`, and it is not the o
 for the one where `tools` is greater than zero.
 
 ```console
-$ until grep -q '"tools":3' .orca/runs/*/events.jsonl; do sleep 2; done
+$ until grep -q '"tools":3' .agenticreplay/runs/*/events.jsonl; do sleep 2; done
 seq 4  model.request   claude-fable-5-1  tools=35  blob=175255
 seq 5  model.response  200  end_turn  cache_read=59811
 ```
 
 ### 6. Clean up
 
-Both processes have to stop. Killing the shell that started `orca attach` does not reach the node
+Both processes have to stop. Killing the shell that started `agenticreplay attach` does not reach the node
 process behind it, and the port stays bound.
 
 ```powershell
@@ -176,7 +176,7 @@ array.
 
 Then replace the machine-specific values with placeholders. Derive them from the machine rather
 than hard-coding them: home directory, username, git name and email, the gateway host from
-`~/.config/orca/config.json`, the Claude Code project slug, the OS build, plus generic rules for
+`~/.config/agenticreplay/config.json`, the Claude Code project slug, the OS build, plus generic rules for
 emails, uuids and hex runs of 32 or more. Order matters, because the memory directory sits inside
 the home directory. Re-scan afterwards and refuse to write the file if anything survives.
 
@@ -210,7 +210,7 @@ agent is installed. The agent works on its own because it talks to the official 
 the upstream pointed at a third-party gateway that sends an OAuth token there along with the whole
 prompt, and over plain HTTP if that is what the gateway speaks.
 
-**`orca record claude` cannot reach the interactive prompt.** It launches through a pipe, `isTTY` is
+**`agenticreplay record claude` cannot reach the interactive prompt.** It launches through a pipe, `isTTY` is
 false, and the harness takes the non-interactive path. The adapter also hard-codes `command:
 'claude'`, so there is no room to slip a pty shim in front of it.
 
@@ -238,7 +238,7 @@ the capture, or a typo creates a folder for a model that does not exist.
 `OPENAI_BASE_URL` alone leaves the run talking straight past the proxy. A project-level
 `opencode.json` carrying the proxy origin does redirect it when the command is typed in a shell,
 and did not when the same file and command were launched from a script. `--tls-intercept
---tls-hosts '+opencode.ai,+*.opencode.ai'` sidesteps the question: orca terminates the TLS OpenCode
+--tls-hosts '+opencode.ai,+*.opencode.ai'` sidesteps the question: agenticreplay terminates the TLS OpenCode
 established itself and the config is left alone. Expect a few `tls.handshake_failed` warnings for
 connections that are not the model call; the model call still records.
 

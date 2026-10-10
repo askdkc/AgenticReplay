@@ -75,7 +75,7 @@ describe('a path written into generated ESM is a file:// URL', () => {
     // The guard is only worth having if it would have caught the original. Both real occurrences
     // looked like one of these.
     const bad = [
-      "`import { Orca } from '${join(here, 'dist', 'api.js')}';`",
+      "`import { AgenticReplay } from '${join(here, 'dist', 'api.js')}';`",
       'const s = `import { x } from ${JSON.stringify(SOME_PATH)};`',
     ];
     for (const sample of bad) {

@@ -1,4 +1,4 @@
-import type { TraceEvent } from '@orcareplay/schema';
+import type { TraceEvent } from '@agenticreplay/schema';
 
 /** A forkable point in a run. Derived from the log, never recorded (spec §3). */
 export interface Checkpoint {
@@ -163,7 +163,7 @@ export interface RunGraph {
 }
 
 /**
- * What a recorded pair means, when the pair is one orca itself writes.
+ * What a recorded pair means, when the pair is one agenticreplay itself writes.
  *
  * `causes` says *that* one event caused another and never *why*, so this is a post-hoc reading of
  * the type pair rather than anything the trace claims. An unrecognised pair says `causes` and
@@ -246,9 +246,9 @@ function soleMatchingCall(
 /**
  * The longest string a graph node carries. A graph is about structure, not payloads.
  *
- * `orca_graph` answers an agent, and the answer lands in its context — so a `tool.call` whose
+ * `agenticreplay_graph` answers an agent, and the answer lands in its context — so a `tool.call` whose
  * `input` holds a whole file body would spend that context on something the graph never uses. The
- * shape survives so a label can still read `input.path`; the bulk does not. `orca events` is one
+ * shape survives so a label can still read `input.path`; the bulk does not. `agenticreplay events` is one
  * command away when the full value is what you want.
  */
 const ATTR_MAX = 200;
@@ -281,7 +281,7 @@ function clampAttrs(attrs: Record<string, unknown>): Record<string, unknown> {
  *
  * Inferred edges are therefore never written back to the trace. That is the same discipline spec
  * §3 applies to checkpoints, which are derived and never recorded, and it exists so that a field
- * a third-party reader trusts never contains something orca made up.
+ * a third-party reader trusts never contains something agenticreplay made up.
  */
 export function runGraph(events: TraceEvent[]): RunGraph {
   const ordered = bySeq(events);
@@ -380,7 +380,7 @@ export function chainTo(graph: RunGraph, seq: number): RunGraph {
  * nothing notable returns undefined and the caller refuses rather than drawing something.
  *
  * The order is failure first, then the largest visible effect: a command that exited non-zero, a
- * tool that reported an error, an error orca itself recorded, a replay divergence, and only then
+ * tool that reported an error, an error agenticreplay itself recorded, a replay divergence, and only then
  * the last file the run changed. Within a kind the last one wins, since that is where the run
  * ended up.
  */

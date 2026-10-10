@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { advertisedUrl, attachExports, attachInstructions } from '../src/attach.js';
 
 /**
- * Recording an agent orca does not launch.
+ * Recording an agent agenticreplay does not launch.
  *
  * Every capture mechanism here so far ends in a child process: the adapter builds an environment
- * and orca spawns the agent inside it. That is the whole design, and it has one boundary it cannot
+ * and agenticreplay spawns the agent inside it. That is the whole design, and it has one boundary it cannot
  * cross — an agent that is not on this machine. A bot on a VPS, an agent inside a dev container or
- * a cloud sandbox, a harness someone else's CI runs: orca has no process to spawn, so it has no
+ * a cloud sandbox, a harness someone else's CI runs: agenticreplay has no process to spawn, so it has no
  * environment to build.
  *
  * What it can still do is be *reachable*, and say exactly what to set. The proxy already accepts a
@@ -22,7 +22,7 @@ describe('the address a remote agent is told to use', () => {
   /**
    * `0.0.0.0` means "every interface I have", which is a statement about listening. As an address
    * to connect *to* it is meaningless, and an agent handed `http://0.0.0.0:8080` fails in a way
-   * that looks like orca is broken rather than like the flag was incomplete.
+   * that looks like agenticreplay is broken rather than like the flag was incomplete.
    */
   it('refuses to advertise a wildcard, which is not an address anything can reach', () => {
     expect(() => advertisedUrl({ bind: '0.0.0.0', port: 8080 })).toThrow(/--advertise/);
@@ -30,13 +30,13 @@ describe('the address a remote agent is told to use', () => {
   });
 
   it('takes an explicit advertised host over the bind address', () => {
-    expect(advertisedUrl({ bind: '0.0.0.0', port: 8080, advertise: 'orca.internal' })).toBe(
-      'http://orca.internal:8080',
-    );
+    expect(
+      advertisedUrl({ bind: '0.0.0.0', port: 8080, advertise: 'agenticreplay.internal' }),
+    ).toBe('http://agenticreplay.internal:8080');
   });
 
   it('keeps a port the operator wrote into the advertised host', () => {
-    // Behind a port-mapped container the outside port is not the one orca bound.
+    // Behind a port-mapped container the outside port is not the one agenticreplay bound.
     expect(advertisedUrl({ bind: '0.0.0.0', port: 8080, advertise: 'localhost:19000' })).toBe(
       'http://localhost:19000',
     );
@@ -80,16 +80,16 @@ describe('what a remote agent has to be told', () => {
       proxyUrl,
       adapterEnv: {},
       ca: { certPath: '/runs/r1/tls/ca.crt', bundlePath: '/runs/r1/tls/ca-bundle.crt' },
-      remoteCaPath: '/tmp/orca-ca.crt',
+      remoteCaPath: '/tmp/agenticreplay-ca.crt',
     });
     expect(env.HTTPS_PROXY).toBe(proxyUrl);
     expect(env.https_proxy).toBe(proxyUrl);
     // Every path is the one the file will have *there*, never the one it has here. Printing this
     // machine's path would produce a block that runs cleanly and trusts nothing.
-    expect(env.NODE_EXTRA_CA_CERTS).toBe('/tmp/orca-ca.crt');
-    expect(env.SSL_CERT_FILE).toBe('/tmp/orca-ca.crt');
-    expect(env.REQUESTS_CA_BUNDLE).toBe('/tmp/orca-ca.crt');
-    expect(env.CURL_CA_BUNDLE).toBe('/tmp/orca-ca.crt');
+    expect(env.NODE_EXTRA_CA_CERTS).toBe('/tmp/agenticreplay-ca.crt');
+    expect(env.SSL_CERT_FILE).toBe('/tmp/agenticreplay-ca.crt');
+    expect(env.REQUESTS_CA_BUNDLE).toBe('/tmp/agenticreplay-ca.crt');
+    expect(env.CURL_CA_BUNDLE).toBe('/tmp/agenticreplay-ca.crt');
   });
 
   it('sets no CA variable when nothing is being intercepted', () => {
@@ -102,10 +102,10 @@ describe('what a remote agent has to be told', () => {
    * The block is printed to a terminal, and a terminal is scrollback, a screen share, a pasted
    * ticket and a CI log. The operator's own credential must never appear in it.
    *
-   * Nor should a placeholder: adapters substitute `orca-recorded` for a key the local environment
+   * Nor should a placeholder: adapters substitute `agenticreplay-recorded` for a key the local environment
    * does not have, and exporting that in a sandbox would *overwrite* a real key the agent already
    * had, turning a working setup into a 401. The agent over there keeps whatever credential it
-   * has, and orca forwards it upstream — so the right number of credential lines is none.
+   * has, and agenticreplay forwards it upstream — so the right number of credential lines is none.
    */
   it('exports no credential, neither a real one nor a placeholder', () => {
     const env = attachExports({
@@ -113,7 +113,7 @@ describe('what a remote agent has to be told', () => {
       adapterEnv: {
         ANTHROPIC_BASE_URL: proxyUrl,
         ANTHROPIC_API_KEY: 'sk-ant-REAL-SECRET',
-        OPENAI_API_KEY: 'orca-recorded',
+        OPENAI_API_KEY: 'agenticreplay-recorded',
         GITHUB_TOKEN: 'ghp_secret',
       },
     });
@@ -170,7 +170,7 @@ describe('the block the operator pastes', () => {
    *
    * `SSL_CERT_FILE` and its siblings *replace* an OpenSSL client's trust store rather than adding
    * to it. A sandbox handed only `ca.crt` would trust the run CA and nothing else, so every host
-   * orca deliberately does not intercept — the package index, the git remote — would stop
+   * agenticreplay deliberately does not intercept — the package index, the git remote — would stop
    * verifying. The bundle is the run CA plus the public roots, which is why one file is safe to
    * ship and safe to point all of them at.
    */
@@ -179,12 +179,12 @@ describe('the block the operator pastes', () => {
       proxyUrl: 'http://10.0.0.5:8080',
       adapterEnv: {},
       ca: { certPath: '/runs/r1/tls/ca.crt', bundlePath: '/runs/r1/tls/ca-bundle.crt' },
-      remoteCaPath: '/tmp/orca-ca.crt',
+      remoteCaPath: '/tmp/agenticreplay-ca.crt',
     });
     const text = lines.join('\n');
     expect(text).toContain('/runs/r1/tls/ca-bundle.crt');
     expect(text).not.toContain('/runs/r1/tls/ca.crt ');
-    expect(text).toContain('/tmp/orca-ca.crt');
+    expect(text).toContain('/tmp/agenticreplay-ca.crt');
     expect(text).toMatch(/copy/i);
   });
 

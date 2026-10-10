@@ -8,10 +8,10 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { defaultAdapters } from '@orcareplay/adapters';
-import { listRuns, orcaDir } from '@orcareplay/core';
-import { runGit } from '@orcareplay/fs-capture';
-import { installShellShim, readShellFrames } from '@orcareplay/shell-shim';
+import { defaultAdapters } from '@agenticreplay/adapters';
+import { listRuns, agenticreplayDir } from '@agenticreplay/core';
+import { runGit } from '@agenticreplay/fs-capture';
+import { installShellShim, readShellFrames } from '@agenticreplay/shell-shim';
 import type { ParsedArgs } from '../args.js';
 import { RENDER_DEPS, missingRenderDeps } from '../rasterize.js';
 import type { Output } from '../out.js';
@@ -33,14 +33,14 @@ export interface DoctorResult {
   ok: boolean;
 }
 
-const MIN_NODE_MAJOR = 20;
+const MIN_NODE_MAJOR = 24;
 const LOW_DISK_BYTES = 512 * 1024 * 1024;
 const BIG_STORE_BYTES = 1024 * 1024 * 1024;
 
 /**
- * `orca doctor` — will recording actually work here?
+ * `agenticreplay doctor` — will recording actually work here?
  *
- * Orca instruments an agent by putting environment variables in front of someone else's process
+ * AgenticReplay instruments an agent by putting environment variables in front of someone else's process
  * and shelling out to git. When that goes wrong the symptom appears inside the agent, minutes
  * later, as something that looks like the agent's fault. Every check here is one of those failure
  * modes, answered before the user spends an hour on it — so each is exercised for real (a port is
@@ -80,7 +80,7 @@ export async function doctorCommand(
   const trouble = [...failed, ...warned];
   out.plain('');
   if (trouble.length === 0) {
-    out.plain('  all clear — orca record <agent> should work here');
+    out.plain('  all clear — agenticreplay record <agent> should work here');
   } else {
     for (const check of trouble) {
       out.plain(`  ${check.status} ${check.name}: ${check.fix ?? check.detail}`);
@@ -101,15 +101,15 @@ function checkNode(): DoctorCheck {
       name,
       status: 'warn',
       detail: `cannot read a major version from ${version}`,
-      fix: `run orca on node ${MIN_NODE_MAJOR} or newer`,
+      fix: `run agenticreplay on node ${MIN_NODE_MAJOR} or newer`,
     };
   }
   if (major < MIN_NODE_MAJOR) {
     return {
       name,
       status: 'fail',
-      detail: `${version} — orca needs node ${MIN_NODE_MAJOR} or newer`,
-      fix: `install node ${MIN_NODE_MAJOR}+ (nvm install ${MIN_NODE_MAJOR}) and run orca doctor again`,
+      detail: `${version} — agenticreplay needs node ${MIN_NODE_MAJOR} or newer`,
+      fix: `install node ${MIN_NODE_MAJOR}+ (nvm install ${MIN_NODE_MAJOR}) and run agenticreplay doctor again`,
     };
   }
   return { name, status: 'ok', detail: version };
@@ -127,7 +127,7 @@ function checkNode(): DoctorCheck {
  */
 async function checkShellShim(): Promise<DoctorCheck> {
   const name = 'shell shim';
-  const dir = await mkdtemp(join(tmpdir(), 'orca-doctor-shim-'));
+  const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-doctor-shim-'));
   try {
     // `framesPath` explicitly, so the frames land inside the directory this function already
     // removes in its `finally`. Left to the default they would go to a transport of their own, which
@@ -178,7 +178,7 @@ async function checkShellShim(): Promise<DoctorCheck> {
     // The probe above goes through cmd.exe because nothing else resolves PATHEXT, which makes it
     // the one launch path certain to find `sh.cmd` — a probe that could only ever say yes. An agent
     // that spawns `sh` or `bash` by name goes to CreateProcess, finds the real `sh.exe`, and is
-    // never seen: driven through `orca record`, `child_process.spawn('bash')` ran its commands and
+    // never seen: driven through `agenticreplay record`, `child_process.spawn('bash')` ran its commands and
     // the trace held none of them, while this line said "captured a test command". record.ts
     // already says as much of Claude Code, as `shell.ineffective`; this check did not.
     //
@@ -195,7 +195,7 @@ async function checkShellShim(): Promise<DoctorCheck> {
           detail: `${shim.shimmed.join(', ')} — captures a shell started through cmd.exe or PowerShell, not one an agent starts itself`,
           fix:
             'Windows runs a .cmd only through a shell, so an agent that spawns sh or bash directly ' +
-            '(Claude Code does) is not captured; orca record flags each such run as ' +
+            '(Claude Code does) is not captured; agenticreplay record flags each such run as ' +
             'shell.ineffective — record those with --no-shell',
         };
       }
@@ -286,12 +286,12 @@ async function checkWorkspace(cwd: string, gitAvailable: boolean): Promise<Docto
 }
 
 /**
- * Writes a real file and removes it. `.orca` is created lazily by `record`, so when it does not
+ * Writes a real file and removes it. `.agenticreplay` is created lazily by `record`, so when it does not
  * exist yet the directory that will have to hold it is what gets probed — and nothing is created.
  */
 async function checkWritable(cwd: string): Promise<{ check: DoctorCheck; probeDir: string }> {
-  const name = '.orca writable';
-  const target = orcaDir(cwd);
+  const name = '.agenticreplay writable';
+  const target = agenticreplayDir(cwd);
   const info = await stat(target).catch(() => null);
 
   if (info !== null && !info.isDirectory()) {
@@ -300,16 +300,16 @@ async function checkWritable(cwd: string): Promise<{ check: DoctorCheck; probeDi
         name,
         status: 'fail',
         detail: `${target} exists but is not a directory`,
-        fix: `move or remove ${target}; orca keeps every recorded run in it`,
+        fix: `move or remove ${target}; agenticreplay keeps every recorded run in it`,
       },
       probeDir: cwd,
     };
   }
 
   const probeDir = info === null ? cwd : target;
-  const probe = join(probeDir, `.orca-doctor-${randomBytes(4).toString('hex')}.tmp`);
+  const probe = join(probeDir, `.agenticreplay-doctor-${randomBytes(4).toString('hex')}.tmp`);
   try {
-    await writeFile(probe, 'orca doctor', { mode: 0o600 });
+    await writeFile(probe, 'agenticreplay doctor', { mode: 0o600 });
     await unlink(probe);
   } catch (err) {
     return {
@@ -317,7 +317,7 @@ async function checkWritable(cwd: string): Promise<{ check: DoctorCheck; probeDi
         name,
         status: 'fail',
         detail: `cannot write and clean up a file in ${probeDir}: ${messageOf(err)}`,
-        fix: `make ${probeDir} writable, or run orca from a directory you own`,
+        fix: `make ${probeDir} writable, or run agenticreplay from a directory you own`,
       },
       probeDir,
     };
@@ -327,7 +327,9 @@ async function checkWritable(cwd: string): Promise<{ check: DoctorCheck; probeDi
       name,
       status: 'ok',
       detail:
-        info === null ? `${probeDir} is writable (.orca not created yet)` : `${target} is writable`,
+        info === null
+          ? `${probeDir} is writable (.agenticreplay not created yet)`
+          : `${target} is writable`,
     },
     probeDir,
   };
@@ -349,7 +351,7 @@ async function checkAgents(cwd: string): Promise<DoctorCheck> {
       name,
       status: 'warn',
       detail: 'none of the known agents were found on PATH or in this workspace',
-      fix: 'name the agent explicitly, or record any OpenAI-compatible one: orca record generic-openai -- <command>',
+      fix: 'name the agent explicitly, or record any OpenAI-compatible one: agenticreplay record generic-openai -- <command>',
     };
   }
   return { name, status: 'ok', detail: found.join(', ') };
@@ -365,7 +367,7 @@ async function checkPort(): Promise<DoctorCheck> {
       name,
       status: 'fail',
       detail: `cannot bind a loopback port: ${messageOf(err)}`,
-      fix: 'orca records by proxying model traffic through 127.0.0.1 — allow loopback listeners (sandbox or firewall policy) before recording',
+      fix: 'agenticreplay records by proxying model traffic through 127.0.0.1 — allow loopback listeners (sandbox or firewall policy) before recording',
     };
   }
 }
@@ -397,8 +399,8 @@ async function checkDisk(probeDir: string): Promise<DoctorCheck> {
       return {
         name,
         status: 'warn',
-        detail: `${formatBytes(free)} free where .orca lives`,
-        fix: 'free some space — one recorded run can reach tens of megabytes: orca gc --older-than 7d',
+        detail: `${formatBytes(free)} free where .agenticreplay lives`,
+        fix: 'free some space — one recorded run can reach tens of megabytes: agenticreplay gc --older-than 7d',
       };
     }
     return { name, status: 'ok', detail: `${formatBytes(free)} free` };
@@ -420,7 +422,7 @@ async function checkRuns(cwd: string): Promise<DoctorCheck> {
       name,
       status: 'warn',
       detail,
-      fix: 'orca gc --keep 20 --dry-run shows what could be reclaimed',
+      fix: 'agenticreplay gc --keep 20 --dry-run shows what could be reclaimed',
     };
   }
   return { name, status: 'ok', detail };

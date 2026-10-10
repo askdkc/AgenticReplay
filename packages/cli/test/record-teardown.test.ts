@@ -13,7 +13,7 @@ const cli = join(here, '..', 'dist', 'cli.js');
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-teardown-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-teardown-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -22,20 +22,20 @@ afterEach(async () => {
 /**
  * A run that dies before the agent starts still has to let go of the terminal.
  *
- * `orca record` opens a listening proxy before it does anything else, and a listening server keeps
+ * `agenticreplay record` opens a listening proxy before it does anything else, and a listening server keeps
  * Node's event loop alive on its own. So every throw between opening the proxy and the child's exit
  * printed its error and then hung — the process never returned, and the only way out was Ctrl-C.
  *
  * The teardown existed, but it started at the spawn. It covered the failure it was written for, an
  * agent that is not on PATH, and missed the one that comes first: an adapter validates the
- * invocation in `prepare`, before anything is spawned. `orca record node agent.mjs`, with the `--`
+ * invocation in `prepare`, before anything is spawned. `agenticreplay record node agent.mjs`, with the `--`
  * left out, printed exactly the right message about the missing `--` and then hung forever, which
  * is the first thing a new user does with the first command they run.
  *
  * Asserted by running the built CLI, because the thing under test is whether the process exits.
  * A test that called the command in-process would return, pass, and prove nothing.
  */
-describe('orca record, when the run dies before the agent starts', () => {
+describe('agenticreplay record, when the run dies before the agent starts', () => {
   const timeout = 60_000;
   const bare = { ...process.env, NO_COLOR: '1' };
 
@@ -65,7 +65,7 @@ describe('orca record, when the run dies before the agent starts', () => {
       // `--` with nothing after it: the adapter has no command to run and says so in `prepare`,
       // which is where the proxy is already listening and the hang used to happen.
       //
-      // `orca record node agent.mjs` — the `--` left out entirely — was the original way in, and
+      // `agenticreplay record node agent.mjs` — the `--` left out entirely — was the original way in, and
       // `assertNoStrayPositionals` now refuses that before the proxy is ever opened. Better for the
       // user and useless here: the point is to throw *inside* the guarded window, so the case has
       // to be one that reaches `prepare` rather than one that is turned away before it.
@@ -78,8 +78,8 @@ describe('orca record, when the run dies before the agent starts', () => {
     'exits when the agent is not on PATH',
     async () => {
       await failsWith(
-        ['record', 'node', '--', 'orca-no-such-binary'],
-        /could not launch "orca-no-such-binary"/,
+        ['record', 'node', '--', 'agenticreplay-no-such-binary'],
+        /could not launch "agenticreplay-no-such-binary"/,
       );
     },
     timeout,
@@ -98,18 +98,18 @@ describe('orca record, when the run dies before the agent starts', () => {
    * that it died.
    *
    * The trace is sealed with its exit code deliberately absent, because a run whose agent never
-   * started has no exit code rather than a zero one. `orca show` rendered that absence as
+   * started has no exit code rather than a zero one. `agenticreplay show` rendered that absence as
    * `exit 0`, so the one run you would open precisely because something went wrong presented
    * itself as a clean success. `--json` had it right as `null` the whole time.
    */
   it('seals a died run so it can be read, and does not call it a success', async () => {
-    await run(process.execPath, [cli, 'record', 'node', '--', 'orca-no-such-binary'], {
+    await run(process.execPath, [cli, 'record', 'node', '--', 'agenticreplay-no-such-binary'], {
       cwd: dir,
       env: bare,
       timeout: 60_000,
     }).catch(() => undefined);
 
-    const runs = join(dir, '.orca', 'runs');
+    const runs = join(dir, '.agenticreplay', 'runs');
     const [id] = await readdir(runs);
     expect(id, 'the failed run left no trace at all').toBeDefined();
 
@@ -132,8 +132,8 @@ describe('orca record, when the run dies before the agent starts', () => {
    * The transports go with it, like the CA.
    *
    * Neither `agent-spans.jsonl` nor `shell-frames.jsonl` goes through the write path's redactor —
-   * both are written by a process orca does not own, the agent's interpreter and the shell shim —
-   * and `orca scrub` does not rewrite either. So neither may outlive the run. The success path
+   * both are written by a process agenticreplay does not own, the agent's interpreter and the shell shim —
+   * and `agenticreplay scrub` does not rewrite either. So neither may outlive the run. The success path
    * removes them after the drain, but that is inside the region this teardown is the short-circuit
    * for, so every throw after they are minted used to leave one behind. This run reaches both
    * installs — they happen before the spawn, and it is the spawn that fails.
@@ -151,11 +151,15 @@ describe('orca record, when the run dies before the agent starts', () => {
   it('takes the transports with it, like the CA', async () => {
     const temp = tmpdir();
     const started = Date.now();
-    const attempt = run(process.execPath, [cli, 'record', 'node', '--', 'orca-no-such-binary'], {
-      cwd: dir,
-      env: bare,
-      timeout: 60_000,
-    });
+    const attempt = run(
+      process.execPath,
+      [cli, 'record', 'node', '--', 'agenticreplay-no-such-binary'],
+      {
+        cwd: dir,
+        env: bare,
+        timeout: 60_000,
+      },
+    );
     const pid = attempt.child.pid;
     expect(pid, 'could not identify the recording process').toBeGreaterThan(0);
     await attempt.catch(() => undefined);
@@ -185,7 +189,7 @@ describe('orca record, when the run dies before the agent starts', () => {
     }
 
     // And nothing of theirs reached the trace either.
-    const runs = join(dir, '.orca', 'runs');
+    const runs = join(dir, '.agenticreplay', 'runs');
     const [id] = await readdir(runs);
     expect(id, 'the failed run left no trace at all').toBeDefined();
     const entries = await readdir(join(runs, id!), { recursive: true, withFileTypes: true });

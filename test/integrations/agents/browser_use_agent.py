@@ -5,7 +5,7 @@ declares `base_url: str | httpx.URL | None = None` and passes it through, so an 
 to the official SDK's own `OPENAI_BASE_URL` — which is the whole reason browser-use needs no adapter
 and is worth a check rather than a claim.
 
-Driving an actual browser would need Chromium and would test Playwright, not orca.
+Driving an actual browser would need Chromium and would test Playwright, not agenticreplay.
 """
 
 import asyncio

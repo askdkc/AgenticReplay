@@ -1,13 +1,13 @@
 /**
  * Pure derivation from a trace to the shapes the UI renders. No DOM, no I/O.
  *
- * Everything here is a third-party read of the format described in `spec/orca-trace-v0.md`:
+ * Everything here is a third-party read of the format described in `spec/agenticreplay-trace-v0.md`:
  * attrs are advisory (§2.1 calls them "type-specific scalar data"), so every reader is written
  * to be liberal — a missing or oddly-shaped attr degrades the row, it never throws.
  */
 
-import type { Manifest, TraceEvent } from '@orcareplay/schema';
-import { isDelegation } from '@orcareplay/core';
+import type { Manifest, TraceEvent } from '@agenticreplay/schema';
+import { isDelegation } from '@agenticreplay/core';
 
 export type Tone = 'attention' | 'normal' | 'quiet';
 
@@ -189,15 +189,26 @@ function parts(event: TraceEvent): RowParts {
     }
     case 'model.response': {
       const usage = usageOf(a);
+      const incomplete = a['truncated'] === true || a['capture_incomplete'] === true;
+      const status = num(a['status']);
+      const statusDetail =
+        status !== undefined && status >= 400 ? `upstream failed (${status})` : undefined;
       return {
         label: pick(a, 'model'),
-        detail: pick(a, 'stop_reason', 'finish_reason')
-          ? `stop: ${pick(a, 'stop_reason', 'finish_reason')}`
-          : '',
+        detail: [
+          statusDetail,
+          incomplete ? 'capture incomplete' : undefined,
+          pick(a, 'stop_reason', 'finish_reason')
+            ? `stop: ${pick(a, 'stop_reason', 'finish_reason')}`
+            : undefined,
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join(' · '),
         meta:
           usage.input || usage.output
             ? `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`
             : '',
+        tone: statusDetail || incomplete ? 'attention' : 'normal',
       };
     }
     case 'tool.call':
@@ -242,7 +253,7 @@ function parts(event: TraceEvent): RowParts {
       };
     }
     case 'fs.change': {
-      // `insertions`/`deletions` are what `orca record` writes; `added`/`removed` are accepted so
+      // `insertions`/`deletions` are what `agenticreplay record` writes; `added`/`removed` are accepted so
       // a trace from an older build still renders rather than silently losing its counts.
       const files = num(a['files']) ?? num(a['changes']);
       const added = num(a['insertions']) ?? num(a['added']);
@@ -286,14 +297,23 @@ function parts(event: TraceEvent): RowParts {
       const decodedFrom = a['decoded_from'];
       const parts = [
         status === undefined ? undefined : `status ${status}`,
+        status !== undefined && status >= 400 ? 'upstream failed' : undefined,
+        a['truncated'] === true || a['capture_incomplete'] === true
+          ? 'capture incomplete'
+          : undefined,
         a['abandoned'] === true ? 'client left' : undefined,
         typeof decodedFrom === 'string' ? `${decodedFrom} decoded` : undefined,
       ].filter((part): part is string => part !== undefined);
       return {
         label: pick(a, 'url', 'host'),
         detail: parts.join(' · '),
-        // Still not attention: the agent leaving early is its own behaviour, not orca's problem.
-        tone: status !== undefined && status >= 400 ? 'attention' : 'normal',
+        // Still not attention: the agent leaving early is its own behaviour, not agenticreplay's problem.
+        tone:
+          (status !== undefined && status >= 400) ||
+          a['truncated'] === true ||
+          a['capture_incomplete'] === true
+            ? 'attention'
+            : 'normal',
       };
     }
     case 'retrieval.context': {

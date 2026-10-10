@@ -19,7 +19,7 @@ import textwrap
 
 import pytest
 
-from orcareplay_langgraph import PACKAGE
+from agenticreplay_langgraph import PACKAGE
 
 langgraph = pytest.importorskip("langgraph", reason="the adapter is inert without it")
 
@@ -42,9 +42,9 @@ def run(body, tmp_path, *, spans=True, env=None, expect_rc=0):
 
     child = dict(os.environ)
     child["PYTHONPATH"] = ROOT + os.pathsep + child.get("PYTHONPATH", "")
-    child.pop("ORCA_AGENT_SPANS", None)
+    child.pop("AGENTICREPLAY_AGENT_SPANS", None)
     if spans:
-        child["ORCA_AGENT_SPANS"] = str(path)
+        child["AGENTICREPLAY_AGENT_SPANS"] = str(path)
     child.update(env or {})
 
     done = subprocess.run(
@@ -110,10 +110,10 @@ def test_the_ignore_set_matches_langchain_core():
     """
     from langchain_core.callbacks.base import BaseCallbackHandler
 
-    from orcareplay_langgraph import OrcaCallbackHandler
+    from agenticreplay_langgraph import AgenticReplayCallbackHandler
 
     theirs = {n for n in dir(BaseCallbackHandler) if n.startswith("ignore_")}
-    ours = {n for n in dir(OrcaCallbackHandler) if n.startswith("ignore_")}
+    ours = {n for n in dir(AgenticReplayCallbackHandler) if n.startswith("ignore_")}
     assert theirs <= ours, f"langchain-core reads these and we do not define them: {theirs - ours}"
 
 
@@ -124,9 +124,9 @@ def test_the_duck_typed_surface_is_complete():
     behind `isinstance(handler, LangChainTracer)`, so they are not ours to supply. What is left is
     this.
     """
-    from orcareplay_langgraph import OrcaCallbackHandler
+    from agenticreplay_langgraph import AgenticReplayCallbackHandler
 
-    handler = OrcaCallbackHandler()
+    handler = AgenticReplayCallbackHandler()
     assert handler.raise_error is False
     assert handler.run_inline is True
 
@@ -134,13 +134,13 @@ def test_the_duck_typed_surface_is_complete():
 def test_a_graph_nobody_edited_is_recorded(tmp_path):
     """The headline claim: `install()` first, the user's own graph after, no edit anywhere.
 
-    This is the order `orca record` produces — the bootstrap runs before the agent's first
+    This is the order `agenticreplay record` produces — the bootstrap runs before the agent's first
     statement — and it is the order the lazy finder exists for.
     """
     out, records = run(
         [
             """
-            from orcareplay_langgraph import install
+            from agenticreplay_langgraph import install
             assert install() is True
             """,
             GRAPH,
@@ -162,7 +162,7 @@ def test_a_graph_nobody_edited_is_recorded(tmp_path):
 def test_the_node_that_calls_no_model_is_the_point(tmp_path):
     """`validate_only` makes no request. A proxy cannot know it ran; this is where it comes from."""
     _, records = run(
-        ["from orcareplay_langgraph import install\ninstall()", GRAPH, "app.invoke({'seen': []})"],
+        ["from agenticreplay_langgraph import install\ninstall()", GRAPH, "app.invoke({'seen': []})"],
         tmp_path,
     )
     assert "validate_only" in nodes(records, "LangGraphNodeStart")
@@ -178,7 +178,7 @@ def test_installing_after_langgraph_is_imported_still_works(tmp_path):
         [
             GRAPH,
             """
-            from orcareplay_langgraph import install
+            from agenticreplay_langgraph import install
             assert install() is True
             app.invoke({"seen": []})
             """,
@@ -192,13 +192,13 @@ def test_a_second_install_does_not_double_report(tmp_path):
     _, records = run(
         [
             """
-            from orcareplay_langgraph import install
+            from agenticreplay_langgraph import install
             assert install() is True
             assert install() is False
             """,
             GRAPH,
             """
-            from orcareplay_langgraph import install as again
+            from agenticreplay_langgraph import install as again
             assert again() is False
             app.invoke({"seen": []})
             """,
@@ -213,8 +213,8 @@ def test_without_the_variable_nothing_is_written_and_the_graph_still_runs(tmp_pa
         [
             """
             import sys
-            from orcareplay_langgraph import install
-            assert install() is False, "orca is not recording; nothing should be armed"
+            from agenticreplay_langgraph import install
+            assert install() is False, "agenticreplay is not recording; nothing should be armed"
             before = len(sys.meta_path)
             """,
             GRAPH,
@@ -235,7 +235,7 @@ def test_a_failing_node_is_named(tmp_path):
     _, records = run(
         """
         from typing import TypedDict
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         from langgraph.graph import END, START, StateGraph
 
@@ -273,7 +273,7 @@ def test_parallel_workers_share_a_superstep(tmp_path):
     _, records = run(
         """
         from typing import Annotated, TypedDict
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         from langgraph.graph import END, START, StateGraph
         from langgraph.types import Send
@@ -303,10 +303,10 @@ def test_ainvoke_records_on_the_calling_thread(tmp_path):
         """
         import asyncio, threading
         from typing import TypedDict
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         from langgraph.graph import END, START, StateGraph
-        import orcareplay_langgraph.handler as H
+        import agenticreplay_langgraph.handler as H
 
         seen = set()
         real = H.TRANSPORT.write
@@ -330,7 +330,7 @@ def test_ainvoke_records_on_the_calling_thread(tmp_path):
 def test_a_python_process_that_never_touches_langgraph_pays_nothing(tmp_path):
     """The justification for the whole lazy design, as a test.
 
-    `orca record` puts the bootstrap in front of every Python process a recording starts. Importing
+    `agenticreplay record` puts the bootstrap in front of every Python process a recording starts. Importing
     the module that holds the hook registry costs 617 ms on this machine, so a process that only
     prints its version must not import it — and must not import langchain_core or langgraph either.
     """
@@ -338,7 +338,7 @@ def test_a_python_process_that_never_touches_langgraph_pays_nothing(tmp_path):
         """
         import sys, time
         t = time.perf_counter()
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         cost = (time.perf_counter() - t) * 1000
         leaked = sorted(m for m in sys.modules if m.split(".")[0] in ("langchain_core", "langgraph", "langchain"))
@@ -357,7 +357,7 @@ def test_the_finder_removes_itself(tmp_path):
     out, _ = run(
         """
         import sys
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         armed = sum(1 for f in sys.meta_path if type(f).__name__ == "_LazyInstaller")
         import langgraph.graph  # noqa: F401
@@ -389,7 +389,7 @@ def test_langchain_core_is_executed_once(tmp_path):
             return original(self, module)
         M.SourceFileLoader.exec_module = counting
 
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         import langgraph.graph  # noqa: F401
         import langchain_core
@@ -420,7 +420,7 @@ def test_langchain_core_alone_is_executed_once(tmp_path):
             return original(self, module)
         M.SourceFileLoader.exec_module = counting
 
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         import langchain_core   # first, and langgraph never
         print("stale objects:", len(seen) - 1)
@@ -435,10 +435,10 @@ def test_losses_are_reported_at_exit(tmp_path):
     _, records = run(
         """
         from typing import TypedDict
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         from langgraph.graph import END, START, StateGraph
-        import orcareplay_langgraph.handler as H
+        import agenticreplay_langgraph.handler as H
 
         class S(TypedDict):
             n: int
@@ -446,7 +446,7 @@ def test_losses_are_reported_at_exit(tmp_path):
         g.add_node("a", lambda s: {"n": 1})
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        H.OrcaCallbackHandler.on_chain_end = lambda *a, **k: None   # the end never arrives
+        H.AgenticReplayCallbackHandler.on_chain_end = lambda *a, **k: None   # the end never arrives
         g.compile().invoke({"n": 0})
         """,
         tmp_path,
@@ -459,7 +459,7 @@ def test_the_user_keeps_their_own_callbacks(tmp_path):
     out, records = run(
         """
         from typing import TypedDict
-        from orcareplay_langgraph import install
+        from agenticreplay_langgraph import install
         install()
         from langchain_core.callbacks.base import BaseCallbackHandler
         from langgraph.graph import END, START, StateGraph

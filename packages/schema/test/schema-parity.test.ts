@@ -37,7 +37,13 @@ describe('schema parity', () => {
 });
 
 describe('validateEvent', () => {
-  const base = { seq: 0, ts: '2026-08-29T10:00:00.000Z', mono_us: 0, turn: 0, actor: 'orca' };
+  const base = {
+    seq: 0,
+    ts: '2026-08-29T10:00:00.000Z',
+    mono_us: 0,
+    turn: 0,
+    actor: 'agenticreplay',
+  };
 
   it('accepts a minimal well-formed event', () => {
     expect(validateEvent({ ...base, type: 'run.start' })).toEqual({ valid: true, errors: [] });
@@ -80,10 +86,10 @@ describe('validateEvent', () => {
 
 describe('validateManifest', () => {
   const manifest = {
-    schema_version: '0.1.0',
+    schema_version: '0.4.0',
     run_id: 'run_9f2c14',
     created_at: '2026-08-29T10:00:00.000Z',
-    orca_version: '0.1.0',
+    agenticreplay_version: '0.1.0',
     adapter: { id: 'claude-code' },
     argv: ['claude'],
     cwd: '/w',
@@ -103,7 +109,7 @@ describe('validateManifest', () => {
   });
 
   it('reports every error, not just the first', () => {
-    const r = validateManifest({ schema_version: '0.1.0' });
+    const r = validateManifest({ schema_version: '0.4.0' });
     expect(r.valid).toBe(false);
     expect(r.errors.length).toBeGreaterThan(1);
   });

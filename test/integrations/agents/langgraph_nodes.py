@@ -8,7 +8,7 @@ does not contain, so every node here is chosen for that:
   - `route` is a conditional edge, which arrives at the callback looking exactly like a node
   - `answer` calls the model again, in a later superstep
 
-Nothing here imports orcareplay_langgraph. The point of the check is that `orca record` attaches it
+Nothing here imports agenticreplay_langgraph. The point of the check is that `agenticreplay record` attaches it
 to a graph nobody edited.
 """
 

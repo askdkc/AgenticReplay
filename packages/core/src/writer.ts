@@ -1,8 +1,9 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type {
   Actor,
   AdapterInfo,
@@ -10,19 +11,72 @@ import type {
   Manifest,
   Payload,
   TraceEvent,
-} from '@orcareplay/schema';
+  CaptureSummary,
+  CaptureTransformation,
+} from '@agenticreplay/schema';
 import {
   INLINE_PAYLOAD_LIMIT,
   RUN_ID_PATTERN,
   SCHEMA_VERSION,
   assertEvent,
   assertManifest,
-} from '@orcareplay/schema';
+} from '@agenticreplay/schema';
 import { BlobStore, sha256File } from './blobs.js';
 import { REDACTION_POLICY_VERSION, Redactor } from './redaction.js';
 
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
+
+/** Remove credential URL components while preserving the other serialized query bytes. */
+function scrubTransportUrl(value: string): { value: string; count: number } {
+  let count = 0;
+  const safe = value
+    .replace(/^(https?:\/\/)[^/?#]*@/i, (_match, scheme: string) => {
+      count += 1;
+      return scheme;
+    })
+    .replace(/([?&])([^=&#]+)=([^&#]*)/g, (match, separator: string, key: string) => {
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(key.replace(/\+/g, ' '));
+      } catch {
+        return match;
+      }
+      if (
+        !/^(?:api[-_]?key|key|access[-_]?token|token|authorization|password|secret|signature)$/i.test(
+          decoded,
+        )
+      )
+        return match;
+      count += 1;
+      return `${separator}${key}=%3Credacted%3E`;
+    });
+  return { value: safe, count };
+}
+
+/** Paths are operational metadata, not opaque credentials. Named secret rules still apply. */
+export function redactManifest(redactor: Redactor, manifest: Manifest): Manifest {
+  // `run_id` is a schema-controlled identifier, not user content. Preserve it
+  // outside the whole-manifest entropy pass: random valid IDs otherwise look
+  // like credentials and can make the manifest invalid before it is written.
+  const { cwd, argv, env_allowlisted, run_id, ...metadata } = manifest;
+  const scrubbed = JSON.parse(
+    redactor.redactString(JSON.stringify(metadata), 'manifest').value,
+  ) as Manifest;
+  scrubbed.run_id = run_id;
+  scrubbed.cwd = redactor.redactString(cwd, 'manifest.cwd', { entropy: false }).value;
+  scrubbed.argv = argv.map(
+    (arg, index) =>
+      redactor.redactString(arg, `manifest.argv.${index}`, {
+        entropy: !(isAbsolute(arg) && existsSync(arg)),
+      }).value,
+  );
+  if (env_allowlisted)
+    scrubbed.env_allowlisted = JSON.parse(
+      redactor.redactString(JSON.stringify(env_allowlisted), 'manifest.env').value,
+    ) as Record<string, string>;
+  return scrubbed;
+}
 
 export interface TraceWriterInit {
   /** Defaults to a fresh `run_<12 hex>`. */
@@ -30,11 +84,11 @@ export interface TraceWriterInit {
   adapter: AdapterInfo;
   argv: string[];
   cwd: string;
-  orcaVersion: string;
+  agenticreplayVersion: string;
   envAllowlist?: string[];
   /**
    * Fork provenance (spec §1). Set on a run produced by forking another. The manifest is what
-   * every out-of-process reader sees first — `orca gc` deciding whether a run may be deleted, a
+   * every out-of-process reader sees first — `agenticreplay gc` deciding whether a run may be deleted, a
    * third-party tool, the Python SDK — so recording this only as an event leaves those readers
    * looking at an orphan.
    */
@@ -50,6 +104,8 @@ export interface EventInit {
   turn?: number;
   causes?: number[];
   attrs?: Record<string, unknown>;
+  /** Trusted operational path fields in attrs. Named secret rules still apply. Never use for API bodies. */
+  operationalPathAttrs?: string[];
   payload?: Payload;
   /**
    * When the event actually happened, for anything captured out of band.
@@ -60,6 +116,7 @@ export interface EventInit {
    * moment is what lets them interleave with the model turns they happened between.
    */
   occurredAt?: Date;
+  transformations?: CaptureTransformation[];
 }
 
 /**
@@ -88,6 +145,8 @@ export class TraceWriter {
   #git: Manifest['git'];
   #tail: Promise<unknown> = Promise.resolve();
   #sealed: Manifest | undefined;
+  #capture: CaptureSummary | undefined;
+  readonly #captureIssues = new Set<string>();
 
   private constructor(
     runId: string,
@@ -117,11 +176,11 @@ export class TraceWriter {
     const redactor = new Redactor(
       init.envAllowlist === undefined ? {} : { envAllowlist: init.envAllowlist },
     );
-    const base: Manifest = {
+    const unredactedBase: Manifest = {
       schema_version: SCHEMA_VERSION,
       run_id: runId,
       created_at: new Date().toISOString(),
-      orca_version: init.orcaVersion,
+      agenticreplay_version: init.agenticreplayVersion,
       adapter: init.adapter,
       argv: init.argv,
       cwd: init.cwd,
@@ -132,7 +191,9 @@ export class TraceWriter {
       ...(init.parentRun === undefined ? {} : { parent_run: init.parentRun }),
       ...(init.forkPoint === undefined ? {} : { fork_point: init.forkPoint }),
       ...(init.forkModel === undefined ? {} : { fork_model: init.forkModel }),
+      capture: { status: 'unverified', issues: [] },
     };
+    const base = redactManifest(redactor, unredactedBase);
     assertManifest(base);
     await writeFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`, {
       mode: FILE_MODE,
@@ -146,7 +207,7 @@ export class TraceWriter {
    * Record the repository state the run started from (spec §1).
    *
    * A setter rather than a constructor argument because the honest answer needs the run directory
-   * to exist: the dirty check has to exclude orca's own files, or every run in a clean checkout
+   * to exist: the dirty check has to exclude agenticreplay's own files, or every run in a clean checkout
    * reports dirty. So the caller reads it once the capture layer is up and hands it back, and it
    * lands in the manifest at close alongside the counts.
    */
@@ -167,19 +228,30 @@ export class TraceWriter {
     return this.#seq;
   }
 
+  /** Capture state is independent of the recorded child's exit status. Failures are sticky. */
+  setCaptureSummary(summary: CaptureSummary): void {
+    for (const issue of summary.issues) this.#captureIssues.add(issue);
+    this.#capture = { ...summary, issues: [...this.#captureIssues] };
+  }
+
+  markCaptureIncomplete(reason: string): void {
+    this.#captureIssues.add(reason);
+    this.#capture = { ...this.#capture, status: 'incomplete', issues: [...this.#captureIssues] };
+  }
+
   async append(init: EventInit): Promise<TraceEvent> {
     if (this.#sealed) throw new Error(`run ${this.#runId} is closed`);
     // SPEC §2.3: `run.start` AND `run.end` BRACKET THE RUN, EXACTLY ONE OF EACH.
     //
     // Nothing enforced that here, and three commands got it wrong in three different ways —
     // `record --mcp-config` put a note at seq 0, `attach` wrote neither event, and a fork opened
-    // on `fork`. All three produced traces that look fine to `orca show`, `orca replay` and the
+    // on `fork`. All three produced traces that look fine to `agenticreplay show`, `agenticreplay replay` and the
     // viewer, and that no gateway will take:
     //
     //   invalid trace: run.start at seq 1, must be seq 0
     //   invalid trace: 0 run.start and 1 run.end events (exactly one of each)
     //
-    // The cost of finding out late is the whole recording: the user learns at `orca push`, after
+    // The cost of finding out late is the whole recording: the user learns at `agenticreplay push`, after
     // the agent session is over, that there is nothing to push. Refusing the write is the only
     // point where the mistake is still cheap — it fails in the developer's own test run, at the
     // line that wrote the wrong event, rather than in someone else's terminal a week later.
@@ -217,7 +289,9 @@ export class TraceWriter {
     const turn = init.turn ?? this.#turn;
     this.#turn = turn;
     const written = this.#tail.then(() => this.#write(ts, mono_us, turn, init));
-    this.#tail = written.catch(() => undefined);
+    this.#tail = written.catch(() => {
+      this.markCaptureIncomplete('event_write_failed');
+    });
     return written;
   }
 
@@ -228,7 +302,7 @@ export class TraceWriter {
     await this.#handle.close();
 
     const blobs = await this.#blobs.count();
-    const manifest: Manifest = {
+    const rawManifest: Manifest = {
       ...this.#base,
       ended_at: new Date().toISOString(),
       counts: { events: this.#seq, blobs },
@@ -240,8 +314,18 @@ export class TraceWriter {
       // Conditional for the same reason the fork keys are: the schema forbids unknown keys, and a
       // run outside a repository should carry no git block rather than three empty fields.
       ...(this.#git === undefined || Object.keys(this.#git).length === 0 ? {} : { git: this.#git }),
+      ...(this.#capture === undefined
+        ? {}
+        : {
+            capture: {
+              ...this.#capture,
+              ...(this.#captureIssues.size > 0 ? { status: 'incomplete' as const } : {}),
+              issues: [...this.#captureIssues],
+            },
+          }),
     };
-    if (exitCode !== undefined) manifest.exit_code = exitCode;
+    if (exitCode !== undefined) rawManifest.exit_code = exitCode;
+    const manifest = redactManifest(this.#redactor, rawManifest);
     assertManifest(manifest);
 
     const redactions = {
@@ -265,27 +349,112 @@ export class TraceWriter {
   async #write(ts: string, mono_us: number, turn: number, init: EventInit): Promise<TraceEvent> {
     const seq = this.#seq;
     const removed: string[] = [];
+    const transformations: CaptureTransformation[] = [...(init.transformations ?? [])];
     let payload = init.payload;
+    let bodyEvidence: { body_bytes: number; body_sha256: string } | undefined;
     if (payload !== undefined) {
       const json = JSON.stringify(payload);
-      if (Buffer.byteLength(json) > INLINE_PAYLOAD_LIMIT) {
-        const scrubbed = this.#redactor.redactString(json, `event:${seq}:payload`);
-        removed.push(...scrubbed.hits.map((h) => h.identifier));
-        payload = await this.#blobs.put(scrubbed.value, 'application/json');
+      const scrubbed = this.#redactor.redactString(json, `event:${seq}:payload`);
+      removed.push(...scrubbed.hits.map((h) => h.identifier));
+      transformations.push(
+        ...scrubbed.hits.map((h) => ({
+          kind: 'redaction' as const,
+          location: 'payload',
+          rule: h.rule,
+          count: h.count,
+          reason: 'secret redaction policy',
+        })),
+      );
+      if (
+        (init.type === 'net.request' || init.type === 'net.response') &&
+        typeof payload === 'string'
+      ) {
+        const body = JSON.parse(scrubbed.value) as string;
+        bodyEvidence = {
+          body_bytes: Buffer.byteLength(body),
+          body_sha256: createHash('sha256').update(body).digest('hex'),
+        };
+        transformations.push({
+          kind: 'encoding',
+          location: 'storage',
+          rule: 'json_string',
+          count: 1,
+          reason:
+            'UTF-8 body stored as a JSON string; decode the JSON wrapper to download body bytes',
+        });
       }
+      if (Buffer.byteLength(scrubbed.value) > INLINE_PAYLOAD_LIMIT) {
+        payload = await this.#blobs.put(scrubbed.value, 'application/json');
+      } else payload = JSON.parse(scrubbed.value) as Payload;
     }
 
     const event: TraceEvent = { seq, ts, mono_us, turn, type: init.type, actor: init.actor };
     if (init.causes !== undefined) event.causes = init.causes;
-    if (init.attrs !== undefined) event.attrs = init.attrs;
-    if (payload !== undefined) event.payload = payload;
+    if (init.attrs !== undefined) event.attrs = { ...init.attrs };
+    if (event.type === 'net.request' || event.type === 'net.response') {
+      for (const key of ['url', 'path', 'upstream', 'destination']) {
+        const value = event.attrs?.[key];
+        if (typeof value !== 'string') continue;
+        const scrubbed = scrubTransportUrl(value);
+        if (scrubbed.count === 0) continue;
+        event.attrs![key] = scrubbed.value;
+        transformations.push({
+          kind: 'url_scrubbed',
+          location: `attrs.${key}`,
+          rule: 'url_credentials',
+          count: scrubbed.count,
+          reason: 'URL userinfo and sensitive query values excluded',
+        });
+      }
+    }
+    const operationalPaths: Record<string, string> = {};
+    for (const key of init.operationalPathAttrs ?? []) {
+      const value = event.attrs?.[key];
+      if (typeof value !== 'string' || !isAbsolute(value)) continue;
+      const path = this.#redactor.redactString(value, `event:${seq}:attrs.${key}`, {
+        entropy: false,
+      });
+      operationalPaths[key] = path.value;
+      delete event.attrs![key];
+      removed.push(...path.hits.map((h) => h.identifier));
+      transformations.push(
+        ...path.hits.map((h) => ({
+          kind: 'redaction' as const,
+          location: `attrs.${key}`,
+          rule: h.rule,
+          count: h.count,
+          reason: 'secret redaction policy for operational paths',
+        })),
+      );
+    }
 
     // Placeholders contain no quote or backslash, so scrubbing the serialized line cannot make it
     // unparseable — and if it ever did, the parse throws and the event is never written.
     const scrubbed = this.#redactor.redactString(JSON.stringify(event), `event:${seq}`);
     removed.push(...scrubbed.hits.map((h) => h.identifier));
+    transformations.push(
+      ...scrubbed.hits.map((h) => ({
+        kind: 'redaction' as const,
+        location: 'envelope',
+        rule: h.rule,
+        count: h.count,
+        reason: 'secret redaction policy',
+      })),
+    );
     const out = JSON.parse(scrubbed.value) as TraceEvent;
+    if (Object.keys(operationalPaths).length) out.attrs = { ...out.attrs, ...operationalPaths };
+    // The complete payload was already scanned above. Scanning it again as part of the envelope
+    // doubles work and can apply a different policy to inline and spilled bodies.
+    if (payload !== undefined) out.payload = payload;
+    if (bodyEvidence) out.attrs = { ...out.attrs, ...bodyEvidence };
     if (removed.length > 0) out.redacted = [...new Set(removed)];
+    if (transformations.length > 0) {
+      // A caller may supply transport annotations; scrub those too before persistence.
+      out.transformations = JSON.parse(
+        this.#redactor.redactString(JSON.stringify(transformations), `event:${seq}:transformations`)
+          .value,
+      ) as CaptureTransformation[];
+    }
 
     assertEvent(out);
     await this.#handle.write(`${JSON.stringify(out)}\n`);

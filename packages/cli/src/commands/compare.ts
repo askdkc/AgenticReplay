@@ -1,5 +1,5 @@
-import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@orcareplay/core';
-import { priceFor } from '@orcareplay/providers';
+import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@agenticreplay/core';
+import { priceFor } from '@agenticreplay/providers';
 import { parseArgs, type ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 import { writeFile } from 'node:fs/promises';
@@ -46,7 +46,7 @@ export interface CompareRow {
 }
 
 /**
- * `orca compare <run> --models a,b,c`
+ * `agenticreplay compare <run> --models a,b,c`
  *
  * N forks from one checkpoint. The comparison only means anything because every branch starts
  * from an identical filesystem tree and conversation prefix — the model is the only variable, so
@@ -57,7 +57,7 @@ export async function compareCommand(
   out: Output,
   cwd = process.cwd(),
 ): Promise<CompareRow[]> {
-  // Fall back to what `orca setup` recorded, so the common case needs no flags at all. An explicit
+  // Fall back to what `agenticreplay setup` recorded, so the common case needs no flags at all. An explicit
   // --models still wins: the config is a default, not a policy.
   const models =
     args.list('models').length > 0 ? args.list('models') : ((await readConfig()).models ?? []);
@@ -66,8 +66,8 @@ export async function compareCommand(
       'compare needs models to compare\n' +
         // Not two example ids: they are gateway-specific — OrcaRouter namespaces by provider,
         // a direct provider does not — so a copyable pair here fails against half of them.
-        '  orca models to see what your gateway serves, then: orca compare last --models a,b\n' +
-        '  or run orca setup once — it stores a gateway (OrcaRouter by default) and a model list',
+        '  agenticreplay models to see what your gateway serves, then: agenticreplay compare last --models a,b\n' +
+        '  or run agenticreplay setup once — it stores your explicit gateway and a model list',
     );
   }
 
@@ -103,7 +103,7 @@ export async function compareCommand(
         model,
         ...(args.bool('loose') ? ['--loose'] : []),
         // The same silent-no-op this list already warns about twice. `--no-fs` is what a run
-        // fetched with `orca pull` needs — it has no snapshots to restore from — and dropping it
+        // fetched with `agenticreplay pull` needs — it has no snapshots to restore from — and dropping it
         // here would accept the flag and then fork with the restore still on, which is the one
         // thing it was passed to prevent.
         ...(args.bool('fs', true) ? [] : ['--no-fs']),
@@ -112,7 +112,7 @@ export async function compareCommand(
         // fixed for one layer up.
         ...(args.bool('tls-intercept') ? ['--tls-intercept'] : []),
         // Same reasoning, and the same silent-no-op if dropped: every fork launches a live agent,
-        // and under --json orca's stdout is the result document. A fork that inherits it prints
+        // and under --json agenticreplay's stdout is the result document. A fork that inherits it prints
         // the agent's output into the middle of the JSON.
         ...(args.bool('json') ? ['--json'] : []),
         ...(args.list('tls-hosts').flatMap((h) => ['--tls-hosts', h]) as string[]),

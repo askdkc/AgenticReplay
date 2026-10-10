@@ -6,7 +6,7 @@
  * origin, `POST /v1/responses` for every turn, the whole conversation resent each time as `input`
  * items — which is what lets a proxy in front of it see the entire loop, tool results included.
  *
- * Before the Responses dialect existed, running this under `orca record` did not produce an empty
+ * Before the Responses dialect existed, running this under `agenticreplay record` did not produce an empty
  * trace. It produced a dead agent: the proxy answered 404 on turn one.
  */
 import { writeFileSync } from 'node:fs';

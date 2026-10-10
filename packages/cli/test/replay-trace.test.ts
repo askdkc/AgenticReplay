@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns, resolveRunSelector } from '@orcareplay/core';
-import { validateEvent, validateManifest, type TraceEvent } from '@orcareplay/schema';
+import { TraceReader, listRuns, resolveRunSelector } from '@agenticreplay/core';
+import { validateEvent, validateManifest, type TraceEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -30,7 +30,7 @@ describe('exact replay writes a trace of itself', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-rtrace-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-rtrace-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -88,7 +88,7 @@ describe('exact replay writes a trace of itself', () => {
     const manifest = await manifestOf(result.traceRunId!);
     expect(manifest.parent_run).toBe(recorded.runId);
     // An exact replay has no checkpoint it forked at, so inventing one would be a lie that
-    // `orca list` and `orca show` would both print.
+    // `agenticreplay list` and `agenticreplay show` would both print.
     expect(manifest.fork_point).toBeUndefined();
     expect(validateManifest(manifest).valid).toBe(true);
   });

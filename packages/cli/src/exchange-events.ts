@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { CanonicalContent, CanonicalRequest, CanonicalResponse } from '@orcareplay/plugin-api';
-import type { RecordedExchange } from '@orcareplay/proxy';
-import type { TraceWriter } from '@orcareplay/core';
+import type {
+  CanonicalContent,
+  CanonicalRequest,
+  CanonicalResponse,
+} from '@agenticreplay/plugin-api';
+import type { RecordedExchange } from '@agenticreplay/proxy';
+import type { TraceWriter } from '@agenticreplay/core';
 
 /**
  * Turning intercepted model exchanges into trace events.
@@ -88,7 +92,7 @@ export class ExchangeEventDeriver {
       this.#seenContext.add(retrieved.fingerprint);
       events.push({
         type: 'retrieval.context',
-        // The harness retrieved these; orca only read them out of what it sent.
+        // The harness retrieved these; agenticreplay only read them out of what it sent.
         actor: 'harness',
         attrs: {
           query: retrieved.query,
@@ -134,12 +138,13 @@ export class ExchangeEventDeriver {
       type: 'model.request',
       actor: 'agent',
       attrs: {
+        ...(exchange.requestId ? { request_id: exchange.requestId } : {}),
         model: exchange.canonicalRequest.model,
         dialect: exchange.dialect,
         path: exchange.path,
         messages: exchange.canonicalRequest.messages.length,
         tools: exchange.canonicalRequest.tools?.length ?? 0,
-        // Only where orca established the connection and therefore knows. Absent reads as "not
+        // Only where agenticreplay established the connection and therefore knows. Absent reads as "not
         // recorded" rather than as HTTP/1.1, which is why it is left off instead of defaulted.
         ...(exchange.alpn === undefined ? {} : { alpn: exchange.alpn }),
       },
@@ -152,7 +157,7 @@ export class ExchangeEventDeriver {
 
     const response = exchange.canonicalResponse;
     events.push({
-      // The edge every other request/response pair already had. Without it `orca graph --to` on a
+      // The edge every other request/response pair already had. Without it `agenticreplay graph --to` on a
       // model.response walks backwards, finds no incoming edge, and reports that the run has no
       // causal edges at all -- on a run whose graph is otherwise full of them. `net.response`,
       // `tool.result` and `shell.result` all name what they answered; this is the same fact about
@@ -161,6 +166,7 @@ export class ExchangeEventDeriver {
       type: 'model.response',
       actor: 'model',
       attrs: {
+        ...(exchange.requestId ? { request_id: exchange.requestId } : {}),
         model: response?.model ?? exchange.canonicalRequest.model,
         stop_reason: response?.stop_reason ?? 'unknown',
         input_tokens: response?.usage.input_tokens ?? 0,
@@ -175,10 +181,10 @@ export class ExchangeEventDeriver {
           : { decoded_from: exchange.responseDecodedFrom }),
         // Who answered. The trace said what was sent and what came back and never this, which is
         // the first question asked of a recording that looks wrong — a gateway left behind in
-        // `~/.orca/config.json` redirects every run on the machine, and nothing in the run said so.
+        // `~/.agenticreplay/config.json` redirects every run on the machine, and nothing in the run said so.
         // On the response because it is a fact about the answer, and per exchange rather than in
         // the manifest because the origin is chosen per request: a fork that changes provider
-        // changes it again mid-run. Absent means an older orca did not record it, never "the
+        // changes it again mid-run. Absent means an older agenticreplay did not record it, never "the
         // vendor's own API".
         ...(exchange.upstream === undefined ? {} : { upstream: exchange.upstream }),
       },
@@ -314,7 +320,7 @@ function collectToolUses(
 /**
  * Derive one exchange's events, resolve their causal references, and write them.
  *
- * Shared because it has two callers — `orca record` and the live half of a fork — and they drifted:
+ * Shared because it has two callers — `agenticreplay record` and the live half of a fork — and they drifted:
  * the fork wrote every model exchange with no `causes` at all, so a forked run could be replayed
  * and forked again but not explained. The seq resolution is the part that is easy to leave out,
  * since it cannot happen until the writer has appended, so it lives here rather than in either

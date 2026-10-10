@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
  *
  * This was a hardcoded constant, and `npm version --workspaces` does not touch source, so 0.2.0
  * shipped reporting 0.1.2 — from `--version`, from the MCP server's `serverInfo`, and into
- * `manifest.orca_version` on every trace it wrote. A recording that misreports the version that
+ * `manifest.agenticreplay_version` on every trace it wrote. A recording that misreports the version that
  * produced it is a provenance bug, not a cosmetic one.
  *
  * `../package.json` resolves the same way in all three places this is loaded from:
@@ -16,6 +16,6 @@ import { fileURLToPath } from 'node:url';
  */
 const manifest = fileURLToPath(new URL('../package.json', import.meta.url));
 
-export const ORCA_VERSION: string = (
+export const AGENTICREPLAY_VERSION: string = (
   JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }
 ).version;

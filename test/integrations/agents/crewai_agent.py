@@ -19,7 +19,7 @@ Two things this pins that the LiteLLM route cannot:
 import os
 
 # Before importing crewai: telemetry is wired up at import time, and a run that phones home is doing
-# something this check did not ask for. Not orca's business to capture — it is not model traffic —
+# something this check did not ask for. Not agenticreplay's business to capture — it is not model traffic —
 # but a reader deciding whether a recording is complete should know the connection exists.
 os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"

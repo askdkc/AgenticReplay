@@ -1,8 +1,8 @@
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { TraceEvent } from '@orcareplay/schema';
-import { INLINE_PAYLOAD_LIMIT, isBlobRef } from '@orcareplay/schema';
+import type { TraceEvent } from '@agenticreplay/schema';
+import { INLINE_PAYLOAD_LIMIT, isBlobRef } from '@agenticreplay/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { deriveCheckpoints, snapToCheckpoint, turnsOf } from '../src/graph.js';
 import { listRuns, resolveRunSelector, runsDir } from '../src/paths.js';
@@ -12,7 +12,7 @@ import { TraceWriter } from '../src/writer.js';
 let cwd: string;
 
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), 'orca-e2e-'));
+  cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-'));
 });
 
 afterEach(async () => {
@@ -27,10 +27,10 @@ async function record(): Promise<string> {
     adapter: { id: 'claude-code' },
     argv: ['claude'],
     cwd,
-    orcaVersion: '0.1.0',
+    agenticreplayVersion: '0.1.0',
   });
-  await w.append({ type: 'run.start', actor: 'orca' });
-  await w.append({ type: 'fs.snapshot', actor: 'orca', attrs: { tree: 'tree-0' } });
+  await w.append({ type: 'run.start', actor: 'agenticreplay' });
+  await w.append({ type: 'fs.snapshot', actor: 'agenticreplay', attrs: { tree: 'tree-0' } });
   const req = await w.append({
     type: 'model.request',
     actor: 'gateway',
@@ -44,9 +44,14 @@ async function record(): Promise<string> {
     },
   });
   await w.append({ type: 'model.response', actor: 'model', causes: [req.seq] });
-  await w.append({ type: 'fs.snapshot', actor: 'orca', turn: 1, attrs: { tree: 'tree-1' } });
+  await w.append({
+    type: 'fs.snapshot',
+    actor: 'agenticreplay',
+    turn: 1,
+    attrs: { tree: 'tree-1' },
+  });
   await w.append({ type: 'shell.exec', actor: 'tool', turn: 1, attrs: { cmd: `echo ${SECRET}` } });
-  await w.append({ type: 'run.end', actor: 'orca', turn: 1 });
+  await w.append({ type: 'run.end', actor: 'agenticreplay', turn: 1 });
   await w.close(0);
   return w.runId;
 }

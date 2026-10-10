@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Orca } from '../src/api.js';
+import { AgenticReplay } from '../src/api.js';
 import { main } from '../src/main.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
@@ -18,12 +18,12 @@ const AGENT = join(here, 'fixtures', 'responses-agent.mjs');
  *
  * Without it the only way to read a result is to scrape prose — `info replay.done reused=2/2
  * exact=2 divergences=0` — which is a format nobody promised to keep. One document rather than a
- * stream of log objects because a caller wants the answer, and `orca show last --json | jq` should
+ * stream of log objects because a caller wants the answer, and `agenticreplay show last --json | jq` should
  * work without a `select(.type=="result")` in front of it.
  *
  * Diagnostics move to stderr so stdout stays parseable even when a run warns.
  */
-describe('orca --json', () => {
+describe('agenticreplay --json', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startResponsesModel>>;
   let stdout: string[];
@@ -32,7 +32,7 @@ describe('orca --json', () => {
   let realErr: typeof process.stderr.write;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-json-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-json-'));
     model = await startResponsesModel();
     await run('git', ['init', '-q'], { cwd: workspace });
     await run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
@@ -59,8 +59,8 @@ describe('orca --json', () => {
   const err = () => stderr.join('');
 
   async function seed(agent = AGENT) {
-    const orca = new Orca({ cwd: workspace });
-    return orca.record({
+    const agenticreplay = new AgenticReplay({ cwd: workspace });
+    return agenticreplay.record({
       adapter: 'generic-openai',
       command: [process.execPath, agent],
       upstream: { openai: model.url },
@@ -106,7 +106,7 @@ describe('orca --json', () => {
     expect(JSON.parse(out())).toMatchObject({
       runId: recorded.runId,
       mode: 'exact',
-      matchedExact: 2,
+      canonicalExact: 2,
       divergences: 0,
       unmatched: 0,
       exitCode: 0,
@@ -170,9 +170,9 @@ describe('orca --json', () => {
   /**
    * As a real subprocess, which is the only way to see this.
    *
-   * The recorded agent is spawned with `stdio: 'inherit'`, so its stdout is orca's stdout — the
+   * The recorded agent is spawned with `stdio: 'inherit'`, so its stdout is agenticreplay's stdout — the
    * file descriptor, not the `process.stdout.write` an in-process test can replace. Every
-   * assertion above passed while `orca record --json` was in fact emitting the agent's own chatter
+   * assertion above passed while `agenticreplay record --json` was in fact emitting the agent's own chatter
    * ahead of the document, which is exactly what a caller piping into `jq` would choke on.
    */
   it('keeps stdout parseable when the recorded agent prints, as a real process', async () => {
@@ -214,7 +214,7 @@ describe('orca --json', () => {
     expect(diagnostics).toContain('responses-agent: completed');
     expect(JSON.parse(piped)).toMatchObject({
       runId: recorded.runId,
-      matchedExact: 2,
+      canonicalExact: 2,
       unmatched: 0,
     });
   });

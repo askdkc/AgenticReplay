@@ -3,13 +3,13 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orca-trace"
+name = "agenticreplay-trace"
 version = "0.1.0"
-description = "Read-only reader for the Orca trace format v0 — record/replay/fork traces for AI agents."
+description = "Read-only reader for the AgenticReplay trace format v0 — record/replay/fork traces for AI agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-keywords = ["agents", "tracing", "observability", "evaluation", "orcareplay"]
+keywords = ["agents", "tracing", "observability", "evaluation", "agenticreplay"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -23,7 +23,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 
-# Deliberately empty, and meant to stay that way: this package is what makes an Orca trace
+# Deliberately empty, and meant to stay that way: this package is what makes an AgenticReplay trace
 # readable from a notebook that already has its own pinned scientific stack, so it must never
 # force a resolver conflict on the way in.
 dependencies = []
@@ -32,14 +32,14 @@ dependencies = []
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/Continuum-AI-Corp/OrcaReplay"
-Specification = "https://github.com/Continuum-AI-Corp/OrcaReplay/blob/main/spec/orca-trace-v0.md"
+Homepage = "https://github.com/askdkc/AgenticReplay"
+Specification = "https://github.com/askdkc/AgenticReplay/blob/main/spec/agenticreplay-trace-v0.md"
 
 [tool.setuptools]
-packages = ["orca_trace"]
+packages = ["agenticreplay_trace"]
 
 [tool.setuptools.package-data]
-orca_trace = ["py.typed"]
+agenticreplay_trace = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

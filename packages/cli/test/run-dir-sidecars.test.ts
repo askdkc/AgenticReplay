@@ -17,14 +17,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
-import { installShellShim, discardShellFrames } from '@orcareplay/shell-shim';
+import { TraceWriter } from '@agenticreplay/core';
+import { installShellShim, discardShellFrames } from '@agenticreplay/shell-shim';
 import { installAgentSpans, sweepStaleTransports, touchTransports } from '../src/agent-spans.js';
 
 /**
  * Watching the transport rather than looking for it.
  *
- * The obvious test — "no `orca-shell-*` directory is left in the temp dir" — is not deterministic:
+ * The obvious test — "no `agenticreplay-shell-*` directory is left in the temp dir" — is not deterministic:
  * vitest runs test files in parallel and several of them record, so another file's transport can
  * appear in the window between the snapshots. And the path cannot be fixed from here either:
  * `record` passes it to the shim through the generated script's argv, not through the environment
@@ -33,8 +33,8 @@ import { installAgentSpans, sweepStaleTransports, touchTransports } from '../src
  * asserted.
  */
 const shimSpy = vi.hoisted(() => ({ minted: [] as string[], discarded: [] as string[] }));
-vi.mock('@orcareplay/shell-shim', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@orcareplay/shell-shim')>();
+vi.mock('@agenticreplay/shell-shim', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agenticreplay/shell-shim')>();
   return {
     ...actual,
     installShellShim: async (options: Parameters<typeof actual.installShellShim>[0]) => {
@@ -82,7 +82,7 @@ import { Output } from '../src/out.js';
  * the redactor: the agent-spans transport, the shell shim's frames, and the MCP frames. The first
  * two are transports — read once, during the run that made them — and they are gone from the run
  * directory. The third is not: a replay answers the agent's MCP calls out of it, so it stays, and
- * what has to change is that `orca scrub` stops claiming it looked.
+ * what has to change is that `agenticreplay scrub` stops claiming it looked.
  */
 describe('what a run directory is left holding', () => {
   const exec = promisify(execFile);
@@ -93,7 +93,7 @@ describe('what a run directory is left holding', () => {
     shimSpy.discarded.length = 0;
     spansSpy.held.length = 0;
     spansSpy.stopped = 0;
-    workspace = await mkdtemp(join(tmpdir(), 'orca-sidecar-'));
+    workspace = await mkdtemp(join(tmpdir(), 'ar-sidecar-'));
     await exec('git', ['init', '-q'], { cwd: workspace });
     await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
     await exec('git', ['config', 'user.name', 'Test'], { cwd: workspace });
@@ -112,10 +112,10 @@ describe('what a run directory is left holding', () => {
       new Output({ write: () => {}, isTTY: false }),
       workspace,
     );
-    return { runDir: join(workspace, '.orca', 'runs', result.runId), runId: result.runId };
+    return { runDir: join(workspace, '.agenticreplay', 'runs', result.runId), runId: result.runId };
   }
 
-  /** Everything `orca scrub` said, as one string. */
+  /** Everything `agenticreplay scrub` said, as one string. */
   async function scrub(runId: string, match: string): Promise<string> {
     const lines: string[] = [];
     await scrubCommand(
@@ -128,20 +128,22 @@ describe('what a run directory is left holding', () => {
 
   describe('the shell frames transport', () => {
     it('is not in the run directory, and the bootstrap still is', async () => {
-      const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+      const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
       const shim = await installShellShim({ runDir });
       expect(shim.framesPath.startsWith(runDir), 'the frames are in the run directory').toBe(false);
       expect(shim.transportDir.startsWith(runDir)).toBe(false);
       expect(shim.dir.startsWith(runDir), 'the shims belong with the run').toBe(true);
       // Existence, not mode: NTFS has no mode bits, so the 0600 assertion can only run on POSIX and
       // without this a pre-create that stopped happening would be caught on Linux and nowhere else.
-      expect(existsSync(shim.framesPath), 'orca did not create the transport itself').toBe(true);
+      expect(existsSync(shim.framesPath), 'agenticreplay did not create the transport itself').toBe(
+        true,
+      );
       await rm(runDir, { recursive: true, force: true });
       await rm(shim.transportDir, { recursive: true, force: true });
     });
 
     /**
-     * A caller who names the path owns the directory, and orca does not get to delete it.
+     * A caller who names the path owns the directory, and agenticreplay does not get to delete it.
      *
      * This asserted the opposite — `transportDir === runDir` — with a comment calling it fine
      * because "their cleanup covers it". It does not: `discardShellFrames` is `rm -rf`, and
@@ -150,16 +152,19 @@ describe('what a run directory is left holding', () => {
      * which is where the next person would have read it.
      */
     it('claims no transport when the caller named the path', async () => {
-      const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+      const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
       const framesPath = join(runDir, 'shell-frames.jsonl');
       const shim = await installShellShim({ runDir, framesPath });
       expect(shim.framesPath).toBe(framesPath);
-      expect(shim.transportDir, 'orca claimed a directory it did not mint').toBeUndefined();
+      expect(
+        shim.transportDir,
+        'agenticreplay claimed a directory it did not mint',
+      ).toBeUndefined();
       await rm(runDir, { recursive: true, force: true });
     });
 
     it('records the process that minted it, which is how a sweep tells it apart', async () => {
-      const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+      const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
       const shim = await installShellShim({ runDir });
       const spans = await installAgentSpans(runDir);
       for (const dir of [shim.transportDir!, spans.transportDir]) {
@@ -171,7 +176,7 @@ describe('what a run directory is left holding', () => {
     });
 
     it('discardShellFrames takes the directory, and forgives one that is already gone', async () => {
-      const runDir = await mkdtemp(join(tmpdir(), 'orca-run-'));
+      const runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-run-'));
       const shim = await installShellShim({ runDir });
       await writeFile(`${shim.framesPath}.late`, '{}\n');
       const transportDir = shim.transportDir!;
@@ -196,7 +201,7 @@ describe('what a run directory is left holding', () => {
         out,
         workspace,
       );
-      const runDir = join(workspace, '.orca', 'runs', result.runId);
+      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
 
       expect(
         (await readdir(runDir)).filter((f) => f.startsWith('shell-frames')),
@@ -270,14 +275,14 @@ describe('what a run directory is left holding', () => {
   }, 60_000);
 
   /**
-   * A transport outlives its run when orca is killed — `SIGKILL`, `taskkill`, a power cut — because
-   * the drain and the failure path both need orca's own process to still be running. Nothing at
+   * A transport outlives its run when agenticreplay is killed — `SIGKILL`, `taskkill`, a power cut — because
+   * the drain and the failure path both need agenticreplay's own process to still be running. Nothing at
    * exit can help, so the only thing that ever comes across an orphan is the next run.
    *
    * Whose it is, not how old it is. Age was the first answer and it was wrong: a transport
    * directory's mtime never moves after `mkdtemp` creates it, because every frame afterwards is an
    * append to the file inside, and appending does not touch the containing directory. "Older than
-   * a day" therefore meant "this recording started more than a day ago", so a second `orca record`
+   * a day" therefore meant "this recording started more than a day ago", so a second `agenticreplay record`
    * would collect a live transport and that run would capture nothing more — silently, because
    * both writers swallow their errors by design.
    */
@@ -336,14 +341,14 @@ describe('what a run directory is left holding', () => {
 
     /** A directory of this test's own, so a sweep here cannot reach anything else running. */
     async function sweepRoot(): Promise<string> {
-      return mkdtemp(join(tmpdir(), 'orca-sweep-root-'));
+      return mkdtemp(join(tmpdir(), 'agenticreplay-sweep-root-'));
     }
     // In a directory of its own, because sweeping the machine's temp directory from a test takes
     // whatever else is running with it.
     it('takes one whose owner has gone and leaves one whose owner has not', async () => {
       const root = await sweepRoot();
-      const gone = await transport(root, 'orca-shell-gone', await deadPid(), 48);
-      const live = await transport(root, 'orca-spans-live', livePid());
+      const gone = await transport(root, 'agenticreplay-shell-gone', await deadPid(), 48);
+      const live = await transport(root, 'agenticreplay-spans-live', livePid());
 
       expect(await sweepStaleTransports(root)).toBe(1);
       expect(existsSync(gone), 'an abandoned transport was left behind').toBe(false);
@@ -359,7 +364,7 @@ describe('what a run directory is left holding', () => {
       const root = await sweepRoot();
       // Owner alive, directory ancient, contents idle: the owner alone decides, and none of the
       // rest is consulted.
-      const live = await transport(root, 'orca-shell-ancient', livePid(), 48);
+      const live = await transport(root, 'agenticreplay-shell-ancient', livePid(), 48);
       const ancient = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       await utimes(live, ancient, ancient);
 
@@ -377,7 +382,7 @@ describe('what a run directory is left holding', () => {
       ['an owner of -1', '-1'],
     ])('leaves a directory with %s alone', async (_what, owner) => {
       const root = await sweepRoot();
-      const dir = join(root, 'orca-shell-odd');
+      const dir = join(root, 'agenticreplay-shell-odd');
       await mkdir(dir);
       await writeFile(join(dir, 'shell-frames.jsonl'), '{}\n');
       if (owner !== undefined) await writeFile(join(dir, 'owner.pid'), owner);
@@ -403,7 +408,7 @@ describe('what a run directory is left holding', () => {
     it('leaves a transport whose owner is unresolvable but whose frames are fresh', async () => {
       const root = await sweepRoot();
       // Not in this pid table, and not a process that ever will be.
-      const elsewhere = await transport(root, 'orca-shell-elsewhere', 987_654);
+      const elsewhere = await transport(root, 'agenticreplay-shell-elsewhere', 987_654);
 
       expect(await sweepStaleTransports(root)).toBe(0);
       expect(existsSync(elsewhere), 'a live run in a shared temp directory was collected').toBe(
@@ -421,7 +426,7 @@ describe('what a run directory is left holding', () => {
       'leaves a transport it cannot look inside alone',
       async () => {
         const root = await sweepRoot();
-        const dir = await transport(root, 'orca-shell-sealed', 987_654, 48);
+        const dir = await transport(root, 'agenticreplay-shell-sealed', 987_654, 48);
         await chmod(dir, 0o000);
         try {
           expect(await sweepStaleTransports(root)).toBe(0);
@@ -435,7 +440,7 @@ describe('what a run directory is left holding', () => {
 
     it('takes one whose owner is unresolvable and whose frames have not moved in a day', async () => {
       const root = await sweepRoot();
-      const abandoned = await transport(root, 'orca-shell-abandoned', 987_654, 48);
+      const abandoned = await transport(root, 'agenticreplay-shell-abandoned', 987_654, 48);
 
       expect(await sweepStaleTransports(root)).toBe(1);
       expect(existsSync(abandoned), 'a genuine orphan was left behind').toBe(false);
@@ -456,11 +461,11 @@ describe('what a run directory is left holding', () => {
 
       // The control first: this is exactly what a live quiet recording looks like to the sweep, and
       // it is taken. Without it the half below could pass while reaching nothing.
-      const unheld = await transport(root, 'orca-spans-quiet', 987_654, 48);
+      const unheld = await transport(root, 'agenticreplay-spans-quiet', 987_654, 48);
       expect(await sweepStaleTransports(root), 'the setup never reached the deletion').toBe(1);
       expect(existsSync(unheld)).toBe(false);
 
-      const held = await transport(root, 'orca-spans-thinking', 987_654, 48);
+      const held = await transport(root, 'agenticreplay-spans-thinking', 987_654, 48);
       const stop = touchTransports([held], 5);
       try {
         await vi.waitFor(async () => {
@@ -484,7 +489,7 @@ describe('what a run directory is left holding', () => {
       try {
         // Pushed after the heartbeat started, which is the order record installs them in: the shim
         // first, the spans transport some way after it, and neither at the moment the run begins.
-        const late = await transport(root, 'orca-shell-late', 987_654, 48);
+        const late = await transport(root, 'agenticreplay-shell-late', 987_654, 48);
         held.push(late);
         const owner = join(late, 'owner.pid');
         await vi.waitFor(async () => {
@@ -508,7 +513,7 @@ describe('what a run directory is left holding', () => {
 
     it('does not fail a run over a transport that has already been taken', async () => {
       const root = await sweepRoot();
-      const gone = await transport(root, 'orca-spans-vanished', 987_654);
+      const gone = await transport(root, 'agenticreplay-spans-vanished', 987_654);
       const stop = touchTransports([gone], 5);
       try {
         await rm(gone, { recursive: true, force: true });
@@ -548,7 +553,7 @@ describe('what a run directory is left holding', () => {
       // A process that is certainly there and certainly not ours.
       const systemPid = process.platform === 'win32' ? 4 : 1;
       // Silent for two days, so `EPERM counts as running` is the only thing keeping it.
-      const dir = await transport(root, 'orca-spans-elsewhere', systemPid, 48);
+      const dir = await transport(root, 'agenticreplay-spans-elsewhere', systemPid, 48);
 
       expect(await sweepStaleTransports(root)).toBe(0);
       expect(existsSync(dir), 'another user’s live transport was deleted').toBe(true);
@@ -561,7 +566,7 @@ describe('what a run directory is left holding', () => {
      * calls it.
      */
     it('is what a recording does before anything else', async () => {
-      const orphan = await mkdtemp(join(tmpdir(), 'orca-shell-'));
+      const orphan = await mkdtemp(join(tmpdir(), 'agenticreplay-shell-'));
       await writeFile(join(orphan, 'shell-frames.jsonl'), '{"argv":["sh","-c","echo hi"]}\n');
       await writeFile(join(orphan, 'owner.pid'), String(await deadPid()));
       const long = new Date(Date.now() - 48 * 60 * 60 * 1000);
@@ -576,17 +581,19 @@ describe('what a run directory is left holding', () => {
 
     it('is silent about a temp directory it has no business in', async () => {
       const root = await sweepRoot();
-      const other = join(root, 'not-orca-at-all');
+      const other = join(root, 'not-agenticreplay-at-all');
       await mkdir(other);
       // Owned by a process that is gone, so only the name is keeping it alive.
       await writeFile(join(other, 'owner.pid'), String(await deadPid()));
       expect(await sweepStaleTransports(root)).toBe(0);
-      expect(existsSync(other), 'the sweep took a directory that was not orca’s').toBe(true);
+      expect(existsSync(other), 'the sweep took a directory that was not agenticreplay’s').toBe(
+        true,
+      );
       await rm(root, { recursive: true, force: true });
     });
   });
 
-  describe('orca scrub over what it does not rewrite', () => {
+  describe('agenticreplay scrub over what it does not rewrite', () => {
     /**
      * `mcp-frames.jsonl` cannot be deleted — a replay answers from it — and must not be rewritten:
      * the frames are keyed on the request, so an edited one is not missed, it is *mismatched*, and
@@ -603,7 +610,7 @@ describe('what a run directory is left holding', () => {
         out,
         workspace,
       );
-      const runDir = join(workspace, '.orca', 'runs', result.runId);
+      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
       // As a replay would have left it.
       await writeFile(
         join(runDir, 'mcp-frames.jsonl'),
@@ -653,7 +660,7 @@ describe('what a run directory is left holding', () => {
         new Output({ write: () => {}, isTTY: false }),
         workspace,
       );
-      const runDir = join(workspace, '.orca', 'runs', result.runId);
+      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
       expect(
         await readFile(join(runDir, 'manifest.json'), 'utf8'),
         'the fixture never got the literal into a covered file',

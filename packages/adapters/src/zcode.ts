@@ -1,14 +1,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { Redactor, withoutInvisible } from '@orcareplay/core';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
-import { decodeForwardPath, forwardBasePath } from '@orcareplay/proxy';
+import { Redactor, withoutInvisible } from '@agenticreplay/core';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
+import { decodeForwardPath, forwardBasePath } from '@agenticreplay/proxy';
 import { detectAgent } from './detect.js';
 import { forwardOrProxyBase, PLACEHOLDER_KEY, readEnv } from './env.js';
 
 /**
- * ZCode — Z.ai's coding agent, captured by handing it a provider file of orca's own.
+ * ZCode — Z.ai's coding agent, captured by handing it a provider file of agenticreplay's own.
  *
  * The second adapter to take the config route. ZCode's provider file is JSON, where MiniMax Code's
  * is YAML that this project rewrote as text — a decision that cost eight rounds of review, every
@@ -32,7 +32,7 @@ import { forwardOrProxyBase, PLACEHOLDER_KEY, readEnv } from './env.js';
  * Code's relocatable data directory: one variable, one file, and the operator's own
  * `~/.zcode/v2/provider_config.json` is never touched.
  *
- * It is always set, even when there is nothing to carry into it. That is what keeps `orca replay`
+ * It is always set, even when there is nothing to carry into it. That is what keeps `agenticreplay replay`
  * honest: replay calls this same `prepare` with the operator's current environment, and an
  * adapter that redirected nothing would let a replay run live on their real providers, spend
  * money, and still report success because nothing reached the proxy.
@@ -67,10 +67,10 @@ export const zcodeAdapter: Adapter = {
     const source = await readFile(providerConfigPath(ctx.env), 'utf8').catch(() => undefined);
     const carried = source === undefined ? undefined : redirectedConfig(source, ctx.proxyUrl);
 
-    // A config orca could not read, could not parse, or could not redirect completely becomes the
+    // A config agenticreplay could not read, could not parse, or could not redirect completely becomes the
     // bare one below rather than the operator's. Writing a partial redirect would leave whichever
     // provider it missed talking to its real host, with nothing in the trace to say so.
-    await writeFile(config, carried ?? onlyOrca(ctx.proxyUrl), 'utf8');
+    await writeFile(config, carried ?? onlyAgenticReplay(ctx.proxyUrl), 'utf8');
 
     return {
       command: 'zcode',
@@ -142,7 +142,7 @@ function providerConfigPath(env: Record<string, string | undefined>): string {
  *
  * `undefined` rather than a partial rewrite, for anything this cannot account for: a file that is
  * not JSON, or an origin `/forward/` will not carry. The caller then writes its own file, so the
- * run is captured against a provider orca controls instead of half-redirected against theirs.
+ * run is captured against a provider agenticreplay controls instead of half-redirected against theirs.
  *
  * The walk is over the parsed tree, so it reaches a value wherever it is nested and does not care
  * how the file was formatted. Origins are recognised by their *value* — anything that reads as an
@@ -193,7 +193,7 @@ export function redirectedConfig(source: string, proxyUrl: string): string | und
  *
  * Three questions, because each of the first two has a measured hole:
  *
- * 1. Orca's own redactor, asked whether anything still looks like a secret. It catches an `sk-`
+ * 1. AgenticReplay's own redactor, asked whether anything still looks like a secret. It catches an `sk-`
  *    token, a real JWT, a forty-character random string and an AWS key id, and changes nothing in
  *    a rewritten config, forwarded URLs included. It does not catch thirty-two hex characters:
  *    that string's maximum Shannon entropy is exactly the threshold, so a hex key never trips it.
@@ -295,7 +295,7 @@ const OPAQUE_TOKEN = /[A-Za-z0-9+_=-]{24,}/;
  *
  * What this does not cover is a model id, because model ids are not a closed set. A config naming
  * one of twenty-four characters or more — `anthropic/claude-3-5-sonnet-20241022` is twenty-six
- * after the `/` that ends the run — is refused, and the run falls back to orca's own provider.
+ * after the `/` that ends the run — is refused, and the run falls back to agenticreplay's own provider.
  * That is a capture that still gets the prompt and no longer reaches the operator's gateway, which
  * is the direction to fail in, and the end-of-run warning is what says so.
  */
@@ -309,7 +309,7 @@ const SECRET_UPPER = SECRET_TITLE.toUpperCase();
  * The same words minus the two that mean something else on their own.
  *
  * `key` is as often a map entry or an asset name as it is a credential — ZCode's own shipped
- * example config has `logo: { "key": "zai" }`, and replacing that writes `orca-recorded` into a
+ * example config has `logo: { "key": "zai" }`, and replacing that writes `agenticreplay-recorded` into a
  * field naming an image. `auth` is as often a mode as a token. Measured on that file: the first
  * version of this list corrupted it.
  *
@@ -376,7 +376,7 @@ function originOf(value: string): string | undefined {
 /**
  * Whether `/forward/` can carry this origin, asked of the decoder rather than restated here.
  *
- * `forwardOrProxyBase` answers an origin the decoder will not take with orca's own default
+ * `forwardOrProxyBase` answers an origin the decoder will not take with agenticreplay's own default
  * upstream, which would send the run to a host the operator never named. A config carrying one of
  * those — userinfo, a query, a scheme that is not HTTP — is a config this adapter leaves alone.
  */
@@ -391,8 +391,8 @@ function carries(origin: string): boolean {
  * id is deliberately generic: ZCode resolves it against this provider alone, and a run that wants
  * a particular model passes `--model`.
  */
-function onlyOrca(proxyUrl: string): string {
-  // A real catalogue id, not a label orca made up. ZCode builds the model from its catalogue,
+function onlyAgenticReplay(proxyUrl: string): string {
+  // A real catalogue id, not a label agenticreplay made up. ZCode builds the model from its catalogue,
   // so an invented id ends the run at `Model creation failed` before a request exists — measured.
   // Which model it is barely matters here: the id travels in the request and the prompt travels
   // with it, and `--model` overrides this for a run that wants another.
@@ -404,9 +404,9 @@ function onlyOrca(proxyUrl: string): string {
         providerConfigRules: {
           providerRules: [
             {
-              providerId: 'orca',
+              providerId: 'agenticreplay',
               templateId: null,
-              providerName: 'orca',
+              providerName: 'agenticreplay',
               enabled: true,
               config: {
                 group: 'standard-personal',
@@ -425,11 +425,13 @@ function onlyOrca(proxyUrl: string): string {
           ],
         },
         modelConfigRules: {
-          providerModelRules: [{ providerId: 'orca', modelId: model, config: { enabled: true } }],
+          providerModelRules: [
+            { providerId: 'agenticreplay', modelId: model, config: { enabled: true } },
+          ],
           manualProviderModelRules: [],
         },
-        providerOrder: ['orca'],
-        defaultModelSelection: { providerId: 'orca', modelId: model },
+        providerOrder: ['agenticreplay'],
+        defaultModelSelection: { providerId: 'agenticreplay', modelId: model },
       },
     },
     null,

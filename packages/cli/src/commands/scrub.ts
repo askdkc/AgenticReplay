@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
-import { Redactor, resolveRunSelector } from '@orcareplay/core';
-import { runGit, runGitRaw } from '@orcareplay/fs-capture';
-import { validateEvent, validateManifest } from '@orcareplay/schema';
+import { Redactor, redactManifest, resolveRunSelector } from '@agenticreplay/core';
+import { runGit, runGitRaw } from '@agenticreplay/fs-capture';
+import { validateEvent, validateManifest, type Manifest } from '@agenticreplay/schema';
 import type { ParsedArgs } from '../args.js';
 import { removeDirCommand, type Output } from '../out.js';
 
@@ -53,7 +53,7 @@ interface Scrubbed {
 }
 
 /**
- * `orca scrub` — remove material from a trace after the fact.
+ * `agenticreplay scrub` — remove material from a trace after the fact.
  *
  * Write-path redaction (§7) is the first line of defence; this is the second, for the thing it
  * missed and for the internal hostname that is only sensitive in your organisation. It rewrites
@@ -78,7 +78,7 @@ export async function scrubCommand(
 
   const literals = collectLiterals(args);
   const redactor = new Redactor();
-  // `orca gc` has had this since it shipped and scrub needed it more: gc removes runs you can
+  // `agenticreplay gc` has had this since it shipped and scrub needed it more: gc removes runs you can
   // re-record, scrub removes material you cannot get back, and it fires the standard detectors as
   // well as your literal — so what it takes out is not fully knowable before it runs.
   const dryRun = args.bool('dry-run');
@@ -88,7 +88,7 @@ export async function scrubCommand(
   let reverted = 0;
 
   /** Literal matches first, then the standard detectors over whatever is left. */
-  const scrubText = (text: string): Scrubbed => {
+  const scrubText = (text: string, detectors = true): Scrubbed => {
     let next = text;
     let count = 0;
     for (const literal of literals) {
@@ -99,6 +99,7 @@ export async function scrubCommand(
         next = parts.join(placeholderFor(literal));
       }
     }
+    if (!detectors) return { value: next, removals: count };
     const { value, hits } = redactor.redactString(next, 'scrub');
     return { value, removals: count + hits.length };
   };
@@ -109,9 +110,17 @@ export async function scrubCommand(
   // before the trace is half-rewritten rather than after.
   const manifestPath = join(runDir, 'manifest.json');
   const manifestBefore = await readFile(manifestPath, 'utf8');
-  const scrubbedManifest = scrubText(manifestBefore);
-  const manifest = parseScrubbedManifest(scrubbedManifest.value, runDir);
+  const scrubbedManifest = scrubText(manifestBefore, false);
+  let manifest = parseScrubbedManifest(scrubbedManifest.value, runDir);
   removals += scrubbedManifest.removals;
+  if (validateManifest(manifest).valid) {
+    const before = redactor.records().reduce((sum, r) => sum + r.count, 0);
+    manifest = redactManifest(redactor, manifest as unknown as Manifest) as unknown as Record<
+      string,
+      unknown
+    >;
+    removals += redactor.records().reduce((sum, r) => sum + r.count, 0) - before;
+  }
 
   const pending: PendingWrite[] = [];
   /** The redaction ledger, which is appended to rather than scrubbed — reported, never counted. */
@@ -126,7 +135,7 @@ export async function scrubCommand(
    * that is what keeps a trace linear in new content rather than quadratic in turns. Rewriting a
    * blob under its old name left a store where the name no longer described the contents, so a
    * later `put` of the original material would conclude it was already stored and hand back a
-   * reference to scrubbed content instead. `orca scrub` says this out loud already, about the
+   * reference to scrubbed content instead. `agenticreplay scrub` says this out loud already, about the
    * workspace snapshots it declines to rewrite: git objects are addressed by their own contents.
    * These are too.
    */
@@ -380,7 +389,7 @@ function collectLiterals(args: ParsedArgs): string[] {
       throw new Error(
         `--${name} was given with nothing to match\n` +
           'Scrubbing would then report a clean trace it never searched, which is worse than not ' +
-          `scrubbing at all — try: orca scrub last --${name} my-hostname`,
+          `scrubbing at all — try: agenticreplay scrub last --${name} my-hostname`,
       );
     }
     literals.push(...values);
@@ -499,7 +508,7 @@ function parseScrubbedManifest(text: string, runDir: string): Record<string, unk
 
 /**
  * A `--match` that lands on `run_`, on a timestamp or on the integrity digest removes a field the
- * schema pins, and every reader — `orca gc`, the viewer, the Python SDK — opens the manifest
+ * schema pins, and every reader — `agenticreplay gc`, the viewer, the Python SDK — opens the manifest
  * first. Refusing loudly leaves a readable trace; writing it would leave an unopenable one.
  */
 function assertManifestSurvived(manifest: Record<string, unknown>, runDir: string): void {
@@ -725,14 +734,16 @@ function reportShadowStore(out: Output, runDir: string, status: ShadowStoreStatu
   if (status.unreadable !== undefined) {
     out.warn('fs_store_unverified', { path: join(runDir, 'fs'), reason: status.unreadable });
     out.plain('  the shadow filesystem store could not be read, so it was NOT checked');
-    out.plain('  next: orca scrub --drop-fs to remove it, or delete the run');
+    out.plain('  next: agenticreplay scrub --drop-fs to remove it, or delete the run');
     return;
   }
   if (status.matches === 0) return;
   out.warn('fs_store_not_scrubbed', { path: join(runDir, 'fs'), objects: status.matches });
   out.plain('  the workspace snapshots still contain what you asked to remove: git objects are');
   out.plain('  addressed by their own contents, so they cannot be rewritten in place');
-  out.plain(`  next: orca scrub --drop-fs to delete the snapshots, or ${removeDirCommand(runDir)}`);
+  out.plain(
+    `  next: agenticreplay scrub --drop-fs to delete the snapshots, or ${removeDirCommand(runDir)}`,
+  );
 }
 
 function gitFailure(stderr: string, code: number): string {
@@ -808,7 +819,7 @@ function placeholderFor(literal: string): string {
  * A directory it could not list answered `[]`. Scrub's only caller is the blob pass, so a blob
  * directory this user cannot read made scrub scrub fewer blobs and *say a smaller number*, with no
  * warning and no error: on a run with one unreadable prefix directory,
- * `orca scrub --match … --dry-run` reported `would_remove=5 would_change=2` where it had reported
+ * `agenticreplay scrub --match … --dry-run` reported `would_remove=5 would_change=2` where it had reported
  * `would_remove=6 would_change=3` a moment earlier. Under-reporting is the failure SECURITY.md
  * names — "a scrubber that under-reports is disappointing; one that hands you a false all-clear is
  * worse than no scrubber" — and this one did it silently, which is the half that makes it a lie

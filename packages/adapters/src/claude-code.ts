@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Adapter, Launch, RecordContext, SessionSupport } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext, SessionSupport } from '@agenticreplay/plugin-api';
 import { detectAgent, homeDir } from './detect.js';
 import { passThrough, proxyBase, readEnv } from './env.js';
 import { contentText, parseJsonl } from './session.js';
@@ -24,7 +24,7 @@ export function claudeProjectSlug(cwd: string): string {
 /**
  * Claude Code's transcript.
  *
- * `user` entries carry what the person typed, which is the half of a run orca cannot see from the
+ * `user` entries carry what the person typed, which is the half of a run agenticreplay cannot see from the
  * wire. Entries the harness generates for itself — tool results, the attachments it splices in —
  * arrive with the same `user` role, so they are filtered out: a replay driven by a tool result
  * would ask the model something the recording never asked.

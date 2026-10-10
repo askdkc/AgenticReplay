@@ -1,11 +1,11 @@
 {
-  "name": "@orcareplay/mcp-shim",
+  "name": "@agenticreplay/mcp-shim",
   "version": "0.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay.git",
+    "url": "https://github.com/askdkc/AgenticReplay.git",
     "directory": "packages/mcp-shim"
   },
   "main": "./dist/index.js",
@@ -15,9 +15,12 @@
     "./cli": "./dist/cli.js"
   },
   "bin": {
-    "orca-mcp-shim": "./dist/cli.js"
+    "agenticreplay-mcp-shim": "./dist/cli.js"
   },
   "files": [
     "dist"
-  ]
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  }
 }

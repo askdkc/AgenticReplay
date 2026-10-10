@@ -1,15 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://orcareplay.dev/schema/v0/event.schema.json",
-  "title": "Orca Trace Event",
+  "$id": "https://agenticreplay.dev/schema/v0/event.schema.json",
+  "title": "AgenticReplay Trace Event",
   "type": "object",
   "required": ["seq", "ts", "mono_us", "turn", "type", "actor"],
   "additionalProperties": false,
   "properties": {
-    "seq": { "type": "integer", "minimum": 0 },
-    "ts": { "type": "string", "format": "date-time" },
-    "mono_us": { "type": "integer", "minimum": 0 },
-    "turn": { "type": "integer", "minimum": 0 },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mono_us": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "turn": {
+      "type": "integer",
+      "minimum": 0
+    },
     "type": {
       "type": "string",
       "enum": [
@@ -44,17 +56,70 @@
     },
     "actor": {
       "type": "string",
-      "enum": ["agent", "harness", "model", "orca", "gateway", "tool", "user"]
+      "enum": ["agent", "harness", "model", "agenticreplay", "gateway", "tool", "user"]
     },
-    "causes": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
-    "attrs": { "type": "object" },
+    "causes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "attrs": {
+      "type": "object"
+    },
     "payload": {
       "oneOf": [
-        { "$ref": "#/$defs/blobRef" },
-        { "not": { "type": "object", "required": ["$blob"] } }
+        {
+          "$ref": "#/$defs/blobRef"
+        },
+        {
+          "not": {
+            "type": "object",
+            "required": ["$blob"]
+          }
+        }
       ]
     },
-    "redacted": { "type": "array", "items": { "type": "string" } }
+    "redacted": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "transformations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "location", "rule", "count", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "redaction",
+              "header_excluded",
+              "url_scrubbed",
+              "decompression",
+              "encoding",
+              "omission"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    }
   },
   "$defs": {
     "blobRef": {
@@ -62,9 +127,17 @@
       "required": ["$blob", "bytes"],
       "additionalProperties": false,
       "properties": {
-        "$blob": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-        "bytes": { "type": "integer", "minimum": 0 },
-        "media_type": { "type": "string" }
+        "$blob": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_type": {
+          "type": "string"
+        }
       }
     }
   }

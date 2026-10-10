@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import nodePath from 'node:path';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { PLACEHOLDER_KEY, readEnv } from './env.js';
 
 /**
@@ -66,7 +66,7 @@ export const MODEL_BASE_URL_VARS = [
  * `_HOST` is in the set because goose reads `OPENAI_HOST` and `ANTHROPIC_HOST` and neither of the
  * `_BASE_URL` spellings for the second — an origin is an origin whatever a harness calls it, and a
  * pattern that only knew two spellings would have let an adapter point one at the provider while
- * the checks reported it redirected. `ORCA_INSTRUMENT_HOSTS` names hostnames rather than an origin
+ * the checks reported it redirected. `AGENTICREPLAY_INSTRUMENT_HOSTS` names hostnames rather than an origin
  * and ends `HOSTS`, so it is not caught by this.
  */
 const BASE_URL_LIKE = /(?:_BASE_URL|_API_BASE|_HOST)$/;
@@ -79,7 +79,7 @@ const ID_FORMAT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** A port no adapter would plausibly hardcode: the checks must follow `ctx.proxyUrl`. */
 const CONTRACT_PROXY = 'http://127.0.0.1:49831';
 
-const PROBE_KEY = 'orca-contract-probe';
+const PROBE_KEY = 'agenticreplay-contract-probe';
 
 /** Returned by a check that does not apply to this adapter, so it is neither passed nor failed. */
 const SKIP = Symbol('skip');
@@ -94,7 +94,7 @@ export async function checkAdapterContract(
   adapter: Adapter,
   opts: ContractOptions = {},
 ): Promise<ContractResult> {
-  const root = await mkdtemp(join(tmpdir(), 'orca-contract-'));
+  const root = await mkdtemp(join(tmpdir(), 'agenticreplay-contract-'));
   const passed: string[] = [];
   const failed: ContractFailure[] = [];
   try {
@@ -161,7 +161,7 @@ async function baseContext(root: string, over: Partial<RecordContext>): Promise<
     runId: 'run_contract',
     proxyUrl: CONTRACT_PROXY,
     // An adapter that takes its command from argv (generic-openai) gets one without special-casing.
-    userArgs: ['orca-contract-agent', '--task', 'contract check'],
+    userArgs: ['agenticreplay-contract-agent', '--task', 'contract check'],
     env: {},
     ...over,
     cwd,
@@ -190,7 +190,7 @@ function idFormat(adapter: Adapter): CheckOutcome {
     );
   }
   if (!ID_FORMAT.test(id)) {
-    return `id '${id}' is not lowercase kebab-case; ids appear in 'orca record <id>', in run manifests and in URLs, so mixed case and underscores turn into support questions`;
+    return `id '${id}' is not lowercase kebab-case; ids appear in 'agenticreplay record <id>', in run manifests and in URLs, so mixed case and underscores turn into support questions`;
   }
   return undefined;
 }
@@ -273,7 +273,7 @@ function redirectsModelTraffic(
     return SKIP;
   }
 
-  // Any base-URL-shaped variable counts, not only the three orca happens to know: a harness with
+  // Any base-URL-shaped variable counts, not only the three agenticreplay happens to know: a harness with
   // its own spelling — grok-cli reads `GROK_BASE_URL` — is redirected just as effectively. So is
   // an adapter that installs the fetch hook instead, for a harness that reads no variable at all.
   // Narrowing this to three names would have failed both of those for setting the wrong thing,
@@ -285,7 +285,7 @@ function redirectsModelTraffic(
   const redirected = Object.entries(env).filter(
     ([name, value]) => BASE_URL_LIKE.test(name) && value !== '',
   );
-  const hooked = readEnv(env, 'ORCA_PROXY_URL') !== undefined;
+  const hooked = readEnv(env, 'AGENTICREPLAY_PROXY_URL') !== undefined;
   if (redirected.length === 0 && !hooked) {
     return `prepare() set no base-url variable (none of ${MODEL_BASE_URL_VARS.join(', ')}, nor anything else ending _BASE_URL or _API_BASE) and installed no fetch hook, so nothing points the harness at the proxy and the run records no model traffic at all`;
   }
@@ -346,7 +346,7 @@ async function noInventedKeys(adapter: Adapter, base: RecordContext): Promise<Ch
 }
 
 /**
- * `orca record` hands the adapter `process.env` itself as `ctx.env` and the parsed argv as
+ * `agenticreplay record` hands the adapter `process.env` itself as `ctx.env` and the parsed argv as
  * `ctx.userArgs`, so a mutation edits the recorder's own environment and the argv it writes into
  * the manifest — which is then replayed.
  */
@@ -408,8 +408,8 @@ function harnessVersions(adapter: Adapter): CheckOutcome {
 /**
  * A path a replay resets has to be one the recording captured.
  *
- * `orca replay` clears `artifacts.resetBeforeReplay` and restores the recording's initial tree over
- * the top, which is what puts those paths back to where the run began. But `orca record` forces
+ * `agenticreplay replay` clears `artifacts.resetBeforeReplay` and restores the recording's initial tree over
+ * the top, which is what puts those paths back to where the run began. But `agenticreplay record` forces
  * only `artifacts.capture`, so a reset path outside it is a path the recording never held: the
  * clear happens, the restore writes nothing there, and the harness starts from an empty directory
  * rather than from the state the recording can answer for. The declaration reads as though it

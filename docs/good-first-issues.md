@@ -72,7 +72,7 @@ access, the model to copy.
 
 Read [CONTRIBUTING.md](../CONTRIBUTING.md). The short version: write the failing test first and
 watch it fail for the reason you expect, no new runtime dependencies without discussion, and if
-you change the trace format, change `spec/orca-trace-v0.md` in the same PR.
+you change the trace format, change `spec/agenticreplay-trace-v0.md` in the same PR.
 
 Say hello on the issue before starting something large — we would rather have the conversation
 early than have you guess.

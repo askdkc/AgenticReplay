@@ -1,5 +1,5 @@
 /**
- * @orcareplay/viewer — renders an Orca trace into one self-contained HTML file.
+ * @agenticreplay/viewer — renders an AgenticReplay trace into one self-contained HTML file.
  *
  * The whole package exists to satisfy one constraint: the output opens from file://, offline,
  * on a machine with nothing installed. No CDN, no webfont, no runtime dependency, no fetch.

@@ -20,8 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * `startedAt` onwards gone.
  */
 const planted = vi.hoisted(() => ({ line: '' }));
-vi.mock('@orcareplay/shell-shim', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@orcareplay/shell-shim')>();
+vi.mock('@agenticreplay/shell-shim', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agenticreplay/shell-shim')>();
   return {
     ...actual,
     installShellShim: async (options: Parameters<typeof actual.installShellShim>[0]) => {
@@ -48,7 +48,7 @@ describe('a torn shell frame, through the drain that writes it', () => {
 
   beforeEach(async () => {
     planted.line = '';
-    workspace = await mkdtemp(join(tmpdir(), 'orca-frames-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-frames-'));
     await exec('git', ['init', '-q'], { cwd: workspace });
     await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
     await exec('git', ['config', 'user.name', 'Test'], { cwd: workspace });
@@ -67,7 +67,7 @@ describe('a torn shell frame, through the drain that writes it', () => {
       new Output({ write: () => {}, isTTY: false }),
       workspace,
     );
-    const events = join(workspace, '.orca', 'runs', result.runId, 'events.jsonl');
+    const events = join(workspace, '.agenticreplay', 'runs', result.runId, 'events.jsonl');
     return (await readFile(events, 'utf8'))
       .split('\n')
       .filter((line) => line.trim() !== '')

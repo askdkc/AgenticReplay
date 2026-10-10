@@ -12,10 +12,10 @@ afterEach(async () => {
 /**
  * What happens to a request no dialect claims.
  *
- * Orca redirected the harness's base URL at itself, so every call the harness makes now arrives
- * here — including the ones orca has no translator for. Answering `404` to those does not mean
+ * AgenticReplay redirected the harness's base URL at itself, so every call the harness makes now arrives
+ * here — including the ones agenticreplay has no translator for. Answering `404` to those does not mean
  * "not captured", it means the agent gets an error for a call that would have worked, from a tool
- * whose entire job is not to change the run it is observing. Passthrough is orca putting back what
+ * whose entire job is not to change the run it is observing. Passthrough is agenticreplay putting back what
  * it redirected: forward it, record that it happened, and be honest that it cannot be replayed.
  */
 
@@ -70,7 +70,7 @@ describe('an upstream that never answers', () => {
       fetchImpl: (async () => {
         throw new Error(
           'https://gateway.example/v1/responses/input_tokens answered 301 redirecting to ' +
-            'https://www.example. orca does not follow it: your key is in this request.',
+            'https://www.example. agenticreplay does not follow it: your key is in this request.',
         );
       }) as unknown as typeof fetch,
       onNetExchange: (e) => void seen.push(e),
@@ -89,7 +89,7 @@ describe('an upstream that never answers', () => {
     expect(seen[0]!.path).toBe('/v1/responses/input_tokens');
     expect(seen[0]!.requestBody).toContain('count me');
     // The reason, so the trace answers "why is there no response" without a rerun.
-    expect(seen[0]!.responseBody).toContain('orca did not forward this call');
+    expect(seen[0]!.responseBody).toContain('agenticreplay did not forward this call');
     expect(seen[0]!.responseBody).toContain('301');
   });
 
@@ -180,14 +180,14 @@ describe('an upstream that never answers', () => {
   });
 
   /**
-   * The same fact on the path orca *does* understand, which was the worse half of it.
+   * The same fact on the path agenticreplay *does* understand, which was the worse half of it.
    *
-   * A call orca recognised as a model exchange and could not forward left no event at all — the
+   * A call agenticreplay recognised as a model exchange and could not forward left no event at all — the
    * trace held `run.start`, a snapshot and `run.end` — and the run then warned `capture.empty`
    * with `cause="the agent never called the proxy — it may not read a base-URL variable"`. The
    * agent had called the proxy and the base-URL variables were fine; the upstream was simply
    * unreachable. So the run that most needed explaining was the one that explained itself
-   * wrongly, and `orca show` held nothing to correct the record with.
+   * wrongly, and `agenticreplay show` held nothing to correct the record with.
    */
   it('records a model call it could not forward, not only the ones it cannot read', async () => {
     const seen: RecordedExchange[] = [];
@@ -211,7 +211,7 @@ describe('an upstream that never answers', () => {
     // `500`, not `0`: it is what the agent received, and `capture.errors` counts `>= 400`. Filed
     // as `0` this would have been counted a healthy exchange and the run called itself clean.
     expect(seen[0]!.status).toBe(500);
-    expect(seen[0]!.rawResponse).toContain('orca did not forward this call');
+    expect(seen[0]!.rawResponse).toContain('agenticreplay did not forward this call');
     expect(seen[0]!.rawResponse).toContain('fetch failed');
   });
 
@@ -281,7 +281,7 @@ describe('an upstream that never answers', () => {
     // already recorded as network traffic rather than as a replayable model exchange.
     expect(seen[0]!.status).toBe(0);
     expect(seen[0]!.path).toBe('/v1/embeddings');
-    expect(seen[0]!.responseBody).toContain('orca did not forward this call');
+    expect(seen[0]!.responseBody).toContain('agenticreplay did not forward this call');
   });
 });
 
@@ -405,7 +405,7 @@ describe('record mode — a path no dialect claims', () => {
 
   it('sends it to the configured gateway when there is one', async () => {
     // Someone who pointed this run at a gateway pointed *all* of it there. Falling back to the
-    // vendor default for the calls orca could not read would split one run across two origins.
+    // vendor default for the calls agenticreplay could not read would split one run across two origins.
     const up = stubUpstream(EMBEDDING);
     const proxy = await createProxy({
       mode: 'record',
@@ -422,7 +422,7 @@ describe('record mode — a path no dialect claims', () => {
   /**
    * A run whose two origins disagree still sends each call to one of them.
    *
-   * The shape that found this: a machine with a gateway in `~/.orca/config.json` and a single
+   * The shape that found this: a machine with a gateway in `~/.agenticreplay/config.json` and a single
    * `--upstream-openai <stub>` on the command line. `resolveUpstream` fills the openai keys from
    * the flag and `anthropic` from the gateway, so the configured set has two values, the
    * one-value shortcut does not fire, and the old code went straight to the vendor default —
@@ -451,7 +451,7 @@ describe('record mode — a path no dialect claims', () => {
   });
 
   it('falls back to the origin the client itself was speaking to', async () => {
-    // With nothing configured, orca owes the agent the destination it redirected away from. An
+    // With nothing configured, agenticreplay owes the agent the destination it redirected away from. An
     // `anthropic-version` header is Anthropic's client announcing itself.
     const up = stubUpstream({ ok: true });
     const proxy = await createProxy({ mode: 'record', fetchImpl: up.fetchImpl });
@@ -464,7 +464,7 @@ describe('record mode — a path no dialect claims', () => {
     expect(up.calls[1]!.url).toBe('https://api.openai.com/v1/embeddings');
   });
 
-  it('relays a non-200 rather than turning it into an orca error', async () => {
+  it('relays a non-200 rather than turning it into an agenticreplay error', async () => {
     const up = stubUpstream({ error: 'nope' }, 429);
     const proxy = await createProxy({
       mode: 'record',
@@ -478,8 +478,8 @@ describe('record mode — a path no dialect claims', () => {
   });
 
   it('still answers 404 to a GET, which no agent makes for a model call', async () => {
-    // Passthrough exists so a POST orca cannot read still reaches its origin. Blind-forwarding
-    // every method would make orca an open relay for whatever else is on the machine.
+    // Passthrough exists so a POST agenticreplay cannot read still reaches its origin. Blind-forwarding
+    // every method would make agenticreplay an open relay for whatever else is on the machine.
     const up = stubUpstream(EMBEDDING);
     const proxy = await createProxy({
       mode: 'record',
@@ -497,7 +497,7 @@ describe('record mode — a path no dialect claims', () => {
 describe('a fork — hybrid mode — meets a path no dialect claims', () => {
   it('forwards it, because a fork runs a live agent', async () => {
     // Refusing here reintroduced the exact failure passthrough exists to prevent, one mode over:
-    // the fork dies on the first call orca cannot read. `record` and `hybrid` both run an agent
+    // the fork dies on the first call agenticreplay cannot read. `record` and `hybrid` both run an agent
     // against the network; only strict replay has nothing to forward to.
     const up = stubUpstream(EMBEDDING);
     const proxy = await createProxy({
@@ -556,7 +556,7 @@ describe('the method guard', () => {
 describe('passthrough carries the credentials a gateway needs', () => {
   it('attaches upstreamHeaders, as the live model path does', async () => {
     // Without them a configured gateway saw only the agent's own key — often the obviously-fake
-    // `orca-recorded` placeholder — and answered 401 for a reason nothing in the trace explained.
+    // `agenticreplay-recorded` placeholder — and answered 401 for a reason nothing in the trace explained.
     const up = stubUpstream(EMBEDDING);
     const proxy = await createProxy({
       mode: 'record',
@@ -590,7 +590,7 @@ describe('replay mode — a path no dialect claims', () => {
     const res = await post(`${proxy.url}/v1/embeddings`, { input: 'hello' });
 
     expect(res.status).toBe(502);
-    // The message has to say why, because "502" during a replay reads as orca being broken.
+    // The message has to say why, because "502" during a replay reads as agenticreplay being broken.
     expect(res.text).toContain('/v1/embeddings');
     expect(res.text.toLowerCase()).toContain('replay');
     expect(unmatched).toHaveLength(1);

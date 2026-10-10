@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { resetRoots } from '../src/commands/replay.js';
 
 /**
- * What `orca replay` is about to `rm -rf` before it restores the recording's initial tree.
+ * What `agenticreplay replay` is about to `rm -rf` before it restores the recording's initial tree.
  *
- * This is the most destructive thing orca does to a directory it did not create, so what it
+ * This is the most destructive thing agenticreplay does to a directory it did not create, so what it
  * resolves to matters more than most path handling in the codebase: the rule it operates under is
- * that orca deletes only what it took a copy of first, and the copy is taken from the adapter's
+ * that agenticreplay deletes only what it took a copy of first, and the copy is taken from the adapter's
  * declared paths. A deletion wider than the declaration is a deletion wider than the copy.
  */
 const dir = process.cwd();

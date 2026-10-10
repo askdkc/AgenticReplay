@@ -6,13 +6,29 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const run = promisify(execFile);
+const exec = promisify(execFile);
+// Filesystem-only fixture agents intentionally make no HTTP requests. The recorder correctly
+// exits 2 for absent capture; these tests inspect filesystem restore and process teardown.
+const run: typeof exec = (async (...args: Parameters<typeof exec>) => {
+  try {
+    return await exec(...args);
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    if (
+      failure.code === 2 &&
+      failure.stdout?.includes('capture.empty') &&
+      args[1]?.includes('record')
+    )
+      return { stdout: failure.stdout, stderr: failure.stderr ?? '' };
+    throw error;
+  }
+}) as typeof exec;
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, '..', 'dist', 'cli.js');
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-replay-teardown-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-replay-teardown-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -21,7 +37,7 @@ afterEach(async () => {
 /**
  * A replay whose agent cannot be launched has to let go of the terminal.
  *
- * `orca replay` opens a listening proxy, and a listening server keeps node's event loop alive on
+ * `agenticreplay replay` opens a listening proxy, and a listening server keeps node's event loop alive on
  * its own — so a throw from the spawn printed `could not launch` and then hung, with Ctrl-C the
  * only way out. The fork path in the same file already handled this and says so in a comment; this
  * was the third of the three and the one still missing it.
@@ -30,7 +46,7 @@ afterEach(async () => {
  * the point of having a trace, and `spawn <agent> ENOENT` is what it looks like from inside the
  * replay.
  */
-describe('orca replay, when the recorded agent will not launch', () => {
+describe('agenticreplay replay, when the recorded agent will not launch', () => {
   const timeout = 90_000;
   const bare = { ...process.env, NO_COLOR: '1' };
 
@@ -42,11 +58,11 @@ describe('orca replay, when the recorded agent will not launch', () => {
       env: bare,
       timeout: timeout - 10_000,
     });
-    const runs = join(dir, '.orca', 'runs');
+    const runs = join(dir, '.agenticreplay', 'runs');
     const [id] = await readdir(runs);
     const path = join(runs, id!, 'manifest.json');
     const manifest = JSON.parse(await readFile(path, 'utf8')) as { argv: string[] };
-    manifest.argv = ['node', 'orca-no-such-binary', 'a.mjs'];
+    manifest.argv = ['node', 'agenticreplay-no-such-binary', 'a.mjs'];
     await writeFile(path, JSON.stringify(manifest, null, 2));
     return id!;
   }
@@ -91,7 +107,7 @@ describe('orca replay, when the recorded agent will not launch', () => {
         timeout: timeout - 20_000,
       }).catch(() => undefined);
 
-      const runs = join(dir, '.orca', 'runs');
+      const runs = join(dir, '.agenticreplay', 'runs');
       const written = (await readdir(runs)).filter((r) => r !== id);
       expect(written, 'the replay left no trace of its own').toHaveLength(1);
 

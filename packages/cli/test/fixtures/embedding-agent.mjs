@@ -6,7 +6,7 @@
  * is this one: a batch of texts to `/v1/embeddings`, no conversation anywhere. Before retrieval
  * had an answer, recording that printed `capture.empty exchanges=0 cause="the agent never called
  * the proxy — it may not read a base-URL variable"` over a run whose variable was set correctly
- * and whose every call orca had captured.
+ * and whose every call agenticreplay had captured.
  */
 const base = process.env.OPENAI_BASE_URL;
 if (!base) {

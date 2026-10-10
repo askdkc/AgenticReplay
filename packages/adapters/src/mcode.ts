@@ -1,22 +1,22 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
-import { Redactor, withoutInvisible } from '@orcareplay/core';
-import { decodeForwardPath, forwardBasePath } from '@orcareplay/proxy';
+import { Redactor, withoutInvisible } from '@agenticreplay/core';
+import { decodeForwardPath, forwardBasePath } from '@agenticreplay/proxy';
 import { forwardOrProxyBase, PLACEHOLDER_KEY, readEnv } from './env.js';
 
 /**
  * MiniMax Code — MCode, `Mavis` in its own source — captured by relocating its data directory.
  *
  * It keeps a provider's origin in `~/.minimax/config.yaml`, not in an environment variable, and
- * its HTTP client is Node's `fetch`. That rules out both of the routes orca usually takes: there
+ * its HTTP client is Node's `fetch`. That rules out both of the routes agenticreplay usually takes: there
  * is no base-URL variable to redirect, and undici consults neither `HTTP_PROXY` nor `HTTPS_PROXY`,
  * so `--tls-intercept` sees no traffic at all — a run recorded that way finishes with
  * `capture.empty` and nothing in the trace.
  *
- * What it does honour is `MINIMAX_DATA_DIR`. Pointing that at a directory of orca's own gives a
+ * What it does honour is `MINIMAX_DATA_DIR`. Pointing that at a directory of agenticreplay's own gives a
  * config the agent will read and the operator's own file never has to be touched — which matters,
  * because the obvious alternative is to rewrite `~/.minimax/config.yaml` in place and put it back
  * afterwards, and a run that is killed never puts it back.
@@ -54,19 +54,19 @@ export const mcodeAdapter: Adapter = {
 
     // The data directory moves whether or not there is anything to put in it.
     //
-    // Review caught what the earlier fallback cost. `orca replay` calls this same `prepare`, with
+    // Review caught what the earlier fallback cost. `agenticreplay replay` calls this same `prepare`, with
     // the operator's *current* environment rather than the recorded one — so a config that has
     // lost its custom provider since the recording made the fallback launch MCode untouched, on
     // the real `~/.minimax`, against the real gateway with the real credential. Nothing reached
     // the proxy, `unmatched` stayed at zero, and the replay reported success. An offline replay
     // had spent money and recorded nothing, quietly.
     //
-    // An empty directory of orca's own is what stops that: MCode finds no provider and no
+    // An empty directory of agenticreplay's own is what stops that: MCode finds no provider and no
     // credential there and refuses to start, measured — `Sign in to MiniMax to use Agent
     // features` — without making a call. The adapter cannot tell a record from a replay, so the
     // safe launch has to be the one it always produces.
     //
-    // The operator of a stock install pays for it: `orca record mcode` now ends in that sign-in
+    // The operator of a stock install pays for it: `agenticreplay record mcode` now ends in that sign-in
     // message rather than running uncaptured, and MCode fills the directory with its bundled
     // skills either way, about 14 MB. Both are worth it against a replay that silently goes live.
     const dataDir = join(ctx.runDir, 'mcode-data');
@@ -273,7 +273,7 @@ const CUSTOM_SECTION = 'custom_provider';
 /**
  * Whether `/forward/` can carry this origin, asked of the decoder rather than restated here.
  *
- * `forwardOrProxyBase` answers an origin the decoder will not take with orca's own default
+ * `forwardOrProxyBase` answers an origin the decoder will not take with agenticreplay's own default
  * upstream, which for the env route is a reasonable last resort and here is not: the request
  * would leave for a host the operator never named, and this file's own comment calls that worse
  * than not capturing. Userinfo, a query, a fragment and a non-HTTP scheme are all refused by the
@@ -310,7 +310,7 @@ export function rewriteIsTrustworthy(config: string, proxyUrl: string): boolean 
   // name — `token:`, `secret:`, `apiToken:` — would pass every check above and be copied out
   // verbatim.
   //
-  // Two nets, because one of them has a measured hole. Orca's own redactor is asked whether
+  // Two nets, because one of them has a measured hole. AgenticReplay's own redactor is asked whether
   // anything in the result still looks like a secret: it changes nothing in a rewritten real
   // config, forward URLs included, and it catches an `sk-` token, a real JWT, a 40-character
   // random string and an AWS key id. It does not catch 32 hex characters — that string's maximum
@@ -346,11 +346,11 @@ export function rewriteIsTrustworthy(config: string, proxyUrl: string): boolean 
  * The operator's config with every custom origin routed through the proxy and every key taken out.
  *
  * Rewritten as text rather than parsed and re-emitted. A YAML round-trip would reformat a file
- * orca did not write — comments, quoting, key order — and the two lines that need to change are
+ * agenticreplay did not write — comments, quoting, key order — and the two lines that need to change are
  * recognisable without understanding the rest.
  *
  * Each origin goes through `/forward/`, so the request arrives naming the destination it was taken
- * away from. Replacing it with orca's own default instead would point a recorded run at a host the
+ * away from. Replacing it with agenticreplay's own default instead would point a recorded run at a host the
  * operator never named, which is worse than not capturing it.
  *
  * Every custom provider, not the first. With several configured, rewriting one leaves the rest
@@ -361,14 +361,14 @@ export function rewriteIsTrustworthy(config: string, proxyUrl: string): boolean 
  * catch what they recognise and a short low-entropy value under an unknown name gets past both,
  * so this is a best effort rather than the guarantee an earlier version of this comment claimed.
  *
- * Two things carry the rest of the weight, and neither is detection. `orca push` ships an
+ * Two things carry the rest of the weight, and neither is detection. `agenticreplay push` ships an
  * allowlist of four top-level entries, which this directory is not one of, so a pushed run never
  * carries it. And `capture/<model>/trace/` — where `capture.mjs` moves the run — is documented as
  * the unscrubbed raw run and is the one thing the prompt vault's CONTRIBUTING forbids committing.
- * A key that survives the nets stays on the machine it was already on. Orca
- * supplies the real one for the origin it forwards to — that is what `orca setup` configures and
+ * A key that survives the nets stays on the machine it was already on. AgenticReplay
+ * supplies the real one for the origin it forwards to — that is what `agenticreplay setup` configures and
  * what `upstreamHeaders` injects. Without it the gateway answers 401, and the prompt is captured
- * anyway: it travels in the request, which orca records before the origin ever replies.
+ * anyway: it travels in the request, which agenticreplay records before the origin ever replies.
  *
  * What MCode writes back into this file on startup is its own: measured against a config whose
  * every key had been replaced by a distinct canary, it restored the built-in provider's `apiKey`

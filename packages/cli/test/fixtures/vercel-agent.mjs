@@ -4,7 +4,7 @@
  *
  * The one property that matters is what it does *not* do: it reads no base-URL variable. It
  * holds `https://api.openai.com` in code, the way any agent does once a gateway is pinned in
- * source. Under every other adapter that makes it invisible to orca — the run succeeds, exits
+ * source. Under every other adapter that makes it invisible to agenticreplay — the run succeeds, exits
  * 0, and the trace is empty.
  *
  * It also hands `fetch` a `Request` object rather than a string on its second turn, because the

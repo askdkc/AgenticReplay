@@ -7,7 +7,7 @@ import json
 import pytest
 from conftest import repo_root
 
-from orca_trace.models import (
+from agenticreplay_trace.models import (
     ACTORS,
     EVENT_TYPES,
     SCHEMA_VERSION,
@@ -25,7 +25,7 @@ TS = "2026-08-29T10:00:00.000Z"
 def schema(name: str) -> dict:
     root = repo_root()
     if root is None:
-        pytest.skip("not running inside an OrcaReplay checkout")
+        pytest.skip("not running inside an AgenticReplay checkout")
     path = root / "packages" / "schema" / "schema" / name
     if not path.is_file():
         pytest.skip(f"missing {path}")
@@ -52,7 +52,7 @@ class TestSchemaParity:
     def test_schema_version_matches_the_example_manifest(self, example_run: Path) -> None:
         """Against the manifest this is named for, not against a literal.
 
-        The literal said `0.1.0` and went on saying it after the format moved to `0.2.0`, which is
+        The literal said `0.3.0` and went on saying it after the format moved to `0.4.0`, which is
         the one thing this test exists to notice. `test_conformance.py` asserts the same equality
         from the other side; between them the constant, the example and the writer cannot drift
         apart without something going red.
@@ -129,14 +129,14 @@ class TestTraceEvent:
         assert e.payload is None
 
     def test_optional_fields_default_to_empty(self) -> None:
-        e = TraceEvent.from_json({"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "orca"})
+        e = TraceEvent.from_json({"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "agenticreplay"})
         assert e.causes == ()
         assert e.attrs == {}
         assert e.redacted == ()
 
     def test_keeps_an_inline_payload_as_is(self) -> None:
         e = TraceEvent.from_json(
-            {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "orca", "payload": [1, "two"]}
+            {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "agenticreplay", "payload": [1, "two"]}
         )
         assert e.payload == [1, "two"]
 
@@ -149,7 +149,7 @@ class TestTraceEvent:
                 "mono_us": 0,
                 "turn": 0,
                 "type": "note",
-                "actor": "orca",
+                "actor": "agenticreplay",
                 "payload": {"$blob": digest, "bytes": 167},
             }
         )
@@ -165,14 +165,14 @@ class TestTraceEvent:
                     "mono_us": 0,
                     "turn": 0,
                     "type": "note",
-                    "actor": "orca",
+                    "actor": "agenticreplay",
                     "payload": {"$blob": "sha256:short", "bytes": 1},
                 }
             )
 
     @pytest.mark.parametrize("missing", ["seq", "ts", "mono_us", "turn", "type", "actor"])
     def test_rejects_a_missing_required_field(self, missing: str) -> None:
-        raw = {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "orca"}
+        raw = {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "agenticreplay"}
         del raw[missing]
         with pytest.raises(TraceFormatError) as excinfo:
             TraceEvent.from_json(raw)
@@ -200,7 +200,7 @@ class TestTraceEvent:
         ],
     )
     def test_rejects_envelope_violations(self, bad: dict) -> None:
-        raw = {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "orca"}
+        raw = {"seq": 0, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "agenticreplay"}
         raw.update(bad)
         with pytest.raises(TraceFormatError):
             TraceEvent.from_json(raw)
@@ -212,7 +212,7 @@ class TestTraceEvent:
         which events a trace contains. The violation is reported by TraceReader.problems()
         instead; see test_reader.py.
         """
-        raw = {"seq": 2, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "orca", "causes": [5]}
+        raw = {"seq": 2, "ts": TS, "mono_us": 0, "turn": 0, "type": "note", "actor": "agenticreplay", "causes": [5]}
         assert TraceEvent.from_json(raw).causes == (5,)
 
 
@@ -220,10 +220,10 @@ class TestManifest:
     def test_parses_a_minimal_manifest(self) -> None:
         m = Manifest.from_json(
             {
-                "schema_version": "0.1.0",
+                "schema_version": "0.4.0",
                 "run_id": "run_9f2c14a03b71",
                 "created_at": "2026-08-29T10:13:38.000Z",
-                "orca_version": "0.1.0",
+                "agenticreplay_version": "0.1.0",
                 "adapter": {"id": "claude-code"},
                 "argv": ["claude"],
                 "cwd": "/home/dev/api",
@@ -238,10 +238,10 @@ class TestManifest:
     def test_exposes_the_integrity_root(self) -> None:
         m = Manifest.from_json(
             {
-                "schema_version": "0.1.0",
+                "schema_version": "0.4.0",
                 "run_id": "run_abc123",
                 "created_at": TS,
-                "orca_version": "0.1.0",
+                "agenticreplay_version": "0.1.0",
                 "adapter": {"id": "a"},
                 "argv": [],
                 "cwd": "/",
@@ -254,10 +254,10 @@ class TestManifest:
     def test_parses_a_forked_run(self) -> None:
         m = Manifest.from_json(
             {
-                "schema_version": "0.1.0",
+                "schema_version": "0.4.0",
                 "run_id": "run_abc123",
                 "created_at": TS,
-                "orca_version": "0.1.0",
+                "agenticreplay_version": "0.1.0",
                 "adapter": {"id": "a"},
                 "argv": [],
                 "cwd": "/",
@@ -272,10 +272,10 @@ class TestManifest:
     def test_a_plain_run_is_not_a_fork(self) -> None:
         m = Manifest.from_json(
             {
-                "schema_version": "0.1.0",
+                "schema_version": "0.4.0",
                 "run_id": "run_abc123",
                 "created_at": TS,
-                "orca_version": "0.1.0",
+                "agenticreplay_version": "0.1.0",
                 "adapter": {"id": "a"},
                 "argv": [],
                 "cwd": "/",
@@ -303,10 +303,10 @@ class TestManifest:
     )
     def test_rejects_manifest_violations(self, bad: dict) -> None:
         raw = {
-            "schema_version": "0.1.0",
+            "schema_version": "0.4.0",
             "run_id": "run_abc123",
             "created_at": TS,
-            "orca_version": "0.1.0",
+            "agenticreplay_version": "0.1.0",
             "adapter": {"id": "a"},
             "argv": [],
             "cwd": "/",
@@ -315,13 +315,13 @@ class TestManifest:
         with pytest.raises(TraceFormatError):
             Manifest.from_json(raw)
 
-    @pytest.mark.parametrize("missing", ["schema_version", "run_id", "created_at", "orca_version", "adapter", "argv", "cwd"])
+    @pytest.mark.parametrize("missing", ["schema_version", "run_id", "created_at", "agenticreplay_version", "adapter", "argv", "cwd"])
     def test_rejects_a_missing_required_field(self, missing: str) -> None:
         raw = {
-            "schema_version": "0.1.0",
+            "schema_version": "0.4.0",
             "run_id": "run_abc123",
             "created_at": TS,
-            "orca_version": "0.1.0",
+            "agenticreplay_version": "0.1.0",
             "adapter": {"id": "a"},
             "argv": [],
             "cwd": "/",

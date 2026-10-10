@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { rewriteMcpConfig } from '@orcareplay/adapters';
-import { EARLIEST_TS_MS, LATEST_TS_MS } from '@orcareplay/schema';
-import type { TraceWriter } from '@orcareplay/core';
-import { isMcpFrameRecord, objectsOnLine, MCP_RECORD_START } from '@orcareplay/mcp-shim';
-import type { McpFrameRecord } from '@orcareplay/mcp-shim';
+import { rewriteMcpConfig } from '@agenticreplay/adapters';
+import { EARLIEST_TS_MS, LATEST_TS_MS } from '@agenticreplay/schema';
+import type { TraceWriter } from '@agenticreplay/core';
+import { isMcpFrameRecord, objectsOnLine, MCP_RECORD_START } from '@agenticreplay/mcp-shim';
+import type { McpFrameRecord } from '@agenticreplay/mcp-shim';
 import type { Output } from './out.js';
 
 export interface McpCapture {
@@ -34,7 +34,7 @@ export type { McpFrameRecord };
  *
  * A replay used to find the source by reading the path out of the `mcp_instrumented` note, and a
  * path is a poor thing to depend on. It has to survive the trace's redactor — `mkdtemp` and every
- * CI workspace end in a random segment, and `orca-int-mcp-stdio-feH8gJ` is 25 characters of
+ * CI workspace end in a random segment, and `agenticreplay-int-mcp-stdio-feH8gJ` is 25 characters of
  * mixed-case base62, so roughly one in seven cleared the entropy sweep's threshold and reached the
  * trace as `<secret:high_entropy:…>`. `stat` then failed, MCP was dropped for the replay, and the
  * agent was launched with no `MCP_CONFIG_PATH`: `KeyError` from a recording that was perfectly
@@ -56,10 +56,10 @@ export const MCP_SOURCE_FILENAME = 'mcp-source.json';
  * recording itself used.
  *
  * Replay and fork launch the same agent the recording did, so they hit the same blind spot record
- * had before `--mcp-config` existed: without a config the harness either talks to servers orca
+ * had before `--mcp-config` existed: without a config the harness either talks to servers agenticreplay
  * cannot see, or — for one that requires the variable — does not start at all. The recording knows
  * the answer; it just had nowhere to write it down, since `manifest.argv` holds only the agent's
- * own arguments and `--mcp-config` is orca's.
+ * own arguments and `--mcp-config` is agenticreplay's.
  *
  * The path is read back from the run's own `mcp_instrumented` note. Nothing is re-instrumented from
  * the *rewritten* config in the parent run directory: its servers already point at the parent's
@@ -90,7 +90,7 @@ export function usedMcp(events: { type: string }[]): boolean {
  * Returns undefined — quietly — when the run never had MCP, which is most runs. When it did and the
  * source config has since moved or been deleted, that is said out loud rather than silently
  * dropping a capture layer: an absent `mcp.*` in the replay would otherwise read as "the agent made
- * no MCP calls" instead of "orca was not looking".
+ * no MCP calls" instead of "agenticreplay was not looking".
  */
 export async function mcpForReplay(
   args: { str(name: string): string | undefined; bool?(name: string, dflt?: boolean): boolean },
@@ -216,7 +216,7 @@ export async function drainMcpFrames(
  * Set up MCP capture for a run.
  *
  * The mechanism is a config rewrite, not a patch: each stdio server is relaunched through
- * `orca-mcp-shim`, a transparent JSON-RPC tee. The agent's own config file is never touched — a
+ * `agenticreplay-mcp-shim`, a transparent JSON-RPC tee. The agent's own config file is never touched — a
  * rewritten copy goes in the run directory, and the agent is pointed at that.
  *
  * HTTP and SSE servers are deliberately left alone and reported as skipped; they route through the
@@ -299,7 +299,7 @@ export async function setupMcpCapture(opts: {
 /**
  * Locate the installed shim entry point, whether running from source or from a published dist.
  *
- * This used to ask for `@orcareplay/mcp-shim/dist/cli.js` and fall back to `@orcareplay/mcp-shim`
+ * This used to ask for `@agenticreplay/mcp-shim/dist/cli.js` and fall back to `@agenticreplay/mcp-shim`
  * when that threw. It always threw — the package declares an `exports` map, and an exports map
  * blocks every subpath it does not list — so the fallback ran every time and resolved to
  * `dist/index.js`, which is the library.
@@ -307,7 +307,7 @@ export async function setupMcpCapture(opts: {
  * The consequence was not a missing capture layer. Every stdio MCP server in the agent's config was
  * rewritten to launch that module, which exports and exits: the real server was never started at
  * all, so `--mcp-config` silently broke the agent's MCP servers *and* recorded nothing, while
- * `orca doctor` reported the shim runnable because the wrong process exited 0.
+ * `agenticreplay doctor` reported the shim runnable because the wrong process exited 0.
  *
  * So: one declared subpath, and no fallback that can succeed with the wrong file. A resolution
  * failure has to stay a failure — `setupMcpCapture` reports it, and the run continues without MCP
@@ -315,7 +315,7 @@ export async function setupMcpCapture(opts: {
  */
 function resolveShimEntry(): string {
   const require = createRequire(import.meta.url);
-  return require.resolve('@orcareplay/mcp-shim/cli');
+  return require.resolve('@agenticreplay/mcp-shim/cli');
 }
 
 /**
@@ -345,6 +345,6 @@ export async function shimIsRunnable(): Promise<boolean> {
     child.on('error', () => resolve(false));
     // `--help` is not a flag the shim takes, so it prints its usage and exits non-zero. That usage
     // line is the identification: any other program is not this one.
-    child.on('close', () => resolve(stderr.includes('orca-mcp-shim --name')));
+    child.on('close', () => resolve(stderr.includes('agenticreplay-mcp-shim --name')));
   });
 }

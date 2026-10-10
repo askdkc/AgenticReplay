@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
+import { TraceWriter } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { stripAnsi } from '../src/out.js';
@@ -13,7 +13,7 @@ import {
   showCommand,
 } from '../src/commands/inspect.js';
 
-describe('orca show — the DETAIL column', () => {
+describe('agenticreplay show — the DETAIL column', () => {
   /**
    * `show` rendered each row's `meta` and dropped its `detail`, so the column showed token counts
    * for a model response and nothing at all for everything else. The casualties were the facts the
@@ -22,12 +22,12 @@ describe('orca show — the DETAIL column', () => {
    * and a tool call and its result rendered as two identical rows.
    */
   async function showEvents(events: { type: string; attrs: Record<string, unknown> }[]) {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-show-detail-'));
-    const writer = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-show-detail-'));
+    const writer = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
     });
     for (const e of events) {
       await writer.append({ type: e.type as never, actor: 'agent', turn: 1, attrs: e.attrs });
@@ -76,27 +76,27 @@ describe('orca show — the DETAIL column', () => {
   });
 });
 
-describe('orca list — fork provenance', () => {
+describe('agenticreplay list — fork provenance', () => {
   /**
-   * `orca compare --models a,b,c` leaves four runs in the directory: the parent and one fork per
+   * `agenticreplay compare --models a,b,c` leaves four runs in the directory: the parent and one fork per
    * model. Listing them as four unrelated ids makes the output of the tool's headline command
    * unreadable the moment you come back to it.
    */
   it('shows which run each fork came from', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-list-fork-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-list-fork-'));
     try {
-      const parent = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const parent = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
       });
       await parent.close(0);
-      const child = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const child = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
         parentRun: parent.runId,
         forkPoint: 4,
       });
@@ -115,11 +115,11 @@ describe('orca list — fork provenance', () => {
       expect(parentRow).not.toContain('@');
 
       // A replay trace has a parent but no checkpoint, and `run_x@?` reads as missing data.
-      const replay = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const replay = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
         parentRun: parent.runId,
       });
       await replay.close(0);
@@ -137,29 +137,29 @@ describe('orca list — fork provenance', () => {
   });
 });
 
-describe('orca show — fork provenance', () => {
+describe('agenticreplay show — fork provenance', () => {
   /**
    * A forked run read on its own is unintelligible without its parent: the timeline opens
    * mid-conversation, the filesystem is a worktree that no longer exists, and nothing on screen
-   * says which run or which checkpoint it came from. `orca list` does not show it either, so the
+   * says which run or which checkpoint it came from. `agenticreplay list` does not show it either, so the
    * only way to find out was to cat the manifest — for the feature the whole tool is named after.
    */
   it('names the parent run and fork point at the top of a forked run', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-show-fork-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-show-fork-'));
     try {
-      const parent = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const parent = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
       });
       await parent.close(0);
 
-      const child = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const child = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
         parentRun: parent.runId,
         forkPoint: 4,
         forkModel: 'claude-haiku-4-5-20251001',
@@ -183,21 +183,21 @@ describe('orca show — fork provenance', () => {
     // `parent_run` used to imply a fork, and now it does not: an exact replay writes its own run
     // with a parent and deliberately no `fork_point`. The line rendered "at checkpoint undefined",
     // which reads as a bug in the trace rather than as the two different things it is describing.
-    const dir = await mkdtemp(join(tmpdir(), 'orca-show-replay-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-show-replay-'));
     try {
-      const parent = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const parent = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
       });
       await parent.close(0);
 
-      const replay = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const replay = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
         parentRun: parent.runId,
       });
       await replay.close(0);
@@ -216,13 +216,13 @@ describe('orca show — fork provenance', () => {
   });
 
   it('says nothing about provenance for a run that was recorded, not forked', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-show-plain-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-show-plain-'));
     try {
-      const writer = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const writer = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
       });
       await writer.close(0);
 
@@ -243,7 +243,7 @@ describe('inspect commands', () => {
   let out: Output;
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-inspect-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-inspect-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -255,16 +255,16 @@ describe('inspect commands', () => {
   const text = () => stripAnsi(lines.join(''));
 
   async function makeRun(): Promise<string> {
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'claude-code' },
       argv: ['claude'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     await writer.append({
       type: 'fs.snapshot',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 1,
       attrs: { tree: 'a'.repeat(40) },
     });
@@ -287,11 +287,16 @@ describe('inspect commands', () => {
     });
     await writer.append({
       type: 'error',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 1,
       attrs: { kind: 'test_failure', failed: 1 },
     });
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 1, attrs: { exit_code: 1 } });
+    await writer.append({
+      type: 'run.end',
+      actor: 'agenticreplay',
+      turn: 1,
+      attrs: { exit_code: 1 },
+    });
     await writer.close(1);
     return writer.runDir;
   }
@@ -300,7 +305,7 @@ describe('inspect commands', () => {
     it('says how to record one when there are no runs, instead of printing nothing', async () => {
       await listCommand(parseArgs(['list']), out, cwd);
       expect(text()).toContain('no runs recorded yet');
-      expect(text()).toContain('orca record');
+      expect(text()).toContain('agenticreplay record');
     });
 
     it('lists a recorded run with its id and directory', async () => {
@@ -342,17 +347,17 @@ describe('inspect commands', () => {
       await checkpointsCommand(parseArgs(['checkpoints', 'last']), out, cwd);
       const rendered = text();
       expect(rendered).toMatch(/SEQ\s+TURN\s+TREE/);
-      expect(rendered).toContain('orca replay last --from');
+      expect(rendered).toContain('agenticreplay replay last --from');
     });
 
     it('explains the likely cause when a run has none', async () => {
-      const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code' },
         argv: ['claude'],
         cwd,
-        orcaVersion: '0.1.0',
+        agenticreplayVersion: '0.1.0',
       });
-      await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+      await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
       await writer.close(0);
 
       await checkpointsCommand(parseArgs(['checkpoints', 'last']), out, cwd);
@@ -381,7 +386,7 @@ describe('inspect commands', () => {
         .map((m) => m[1] ?? '')
         .filter((url) => /^https?:\/\//.test(url));
       expect(external).toEqual([]);
-      expect(html).toContain('Recorded with OrcaReplay');
+      expect(html).toContain('Recorded with AgenticReplay');
     });
 
     it('reports the path and size it wrote', async () => {

@@ -1,15 +1,19 @@
 /**
  * Reads a run directory straight off disk, per spec §1. Deliberately does not depend on
- * @orcareplay/core: the format is the contract, and a reader that only knows the spec proves it.
+ * @agenticreplay/core: the format is the contract, and a reader that only knows the spec proves it.
  */
 
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Manifest, TraceEvent } from '@orcareplay/schema';
+import { assertManifest, type Manifest, type TraceEvent } from '@agenticreplay/schema';
 import { referencedBlobs } from './render.js';
 
-/** Total inlined blob bytes allowed in one export, before placeholders take over. */
-export const DEFAULT_MAX_BLOB_BYTES = 8 * 1024 * 1024;
+/**
+ * No silent body loss: the reader loads every redacted text blob unless the caller supplies a cap.
+ * This is intentionally not a bounded-memory guarantee; callers handling untrusted large traces
+ * should pass `maxBlobBytes` and inspect `omittedBlobs`.
+ */
+export const DEFAULT_MAX_BLOB_BYTES = Number.POSITIVE_INFINITY;
 
 export interface TraceDirContents {
   manifest: Manifest;
@@ -24,6 +28,16 @@ export interface TraceDirContents {
 
 export interface ReadTraceOptions {
   maxBlobBytes?: number;
+}
+
+/** Bodies are stored as JSON strings by the writer. A download must return the body itself. */
+export function bodyText(text: string): string {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'string' ? parsed : text;
+  } catch {
+    return text;
+  }
 }
 
 /** Blob text, or null when the bytes are not text we can safely put in an HTML document. */
@@ -50,6 +64,7 @@ export async function readTraceDir(
   } catch (cause) {
     throw new Error(`manifest.json in ${runDir} is not valid JSON`, { cause });
   }
+  assertManifest(manifest);
 
   let eventsText = '';
   try {

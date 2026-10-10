@@ -83,13 +83,13 @@ function mount(labels: string[]) {
   const playhead = element('SPAN');
   const root = element('HTML');
   const byId: Record<string, StubElement> = {
-    'orca-filter': filterBox,
-    'orca-count': countBox,
-    'orca-theme': themeBtn,
-    'orca-play': playBtn,
-    'orca-speed': speedBtn,
-    'orca-progress': progressBar,
-    'orca-playhead': playhead,
+    'agenticreplay-filter': filterBox,
+    'agenticreplay-count': countBox,
+    'agenticreplay-theme': themeBtn,
+    'agenticreplay-play': playBtn,
+    'agenticreplay-speed': speedBtn,
+    'agenticreplay-progress': progressBar,
+    'agenticreplay-playhead': playhead,
   };
   const docListeners: Record<string, ((e: unknown) => void)[]> = {};
   const store: Record<string, string> = {};
@@ -256,12 +256,12 @@ describe('client runtime', () => {
     expect(ui.themeBtn.textContent).toBe('auto');
     ui.themeBtn.fire('click');
     expect(ui.root.getAttribute('data-theme')).toBe('dark');
-    expect(ui.store['orca-theme']).toBe('dark');
+    expect(ui.store['agenticreplay-theme']).toBe('dark');
     ui.themeBtn.fire('click');
     expect(ui.root.getAttribute('data-theme')).toBe('light');
     ui.themeBtn.fire('click');
     expect(ui.root.getAttribute('data-theme')).toBe(null);
-    expect(ui.store['orca-theme']).toBeUndefined();
+    expect(ui.store['agenticreplay-theme']).toBeUndefined();
   });
 
   it('ignores modified keystrokes so browser shortcuts still work', () => {

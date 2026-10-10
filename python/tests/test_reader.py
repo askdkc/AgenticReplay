@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from conftest import blob_of, event, write_trace
 
-from orca_trace import BlobRef, TraceEvent, TraceFormatError
-from orca_trace.reader import BlobIntegrityError, BlobNotFoundError, NotATraceError, TraceReader
+from agenticreplay_trace import BlobRef, TraceEvent, TraceFormatError
+from agenticreplay_trace.reader import BlobIntegrityError, BlobNotFoundError, NotATraceError, TraceReader
 
 
 def files_in(directory: Path) -> dict[str, tuple[int, bytes]]:
@@ -33,7 +33,7 @@ class TestOpen:
 
     def test_accepts_a_string_path(self, tmp_path: Path) -> None:
         write_trace(tmp_path, [event(0, "run.start")])
-        assert TraceReader.open(str(tmp_path)).manifest.schema_version == "0.1.0"
+        assert TraceReader.open(str(tmp_path)).manifest.schema_version == "0.4.0"
 
     def test_refuses_a_directory_with_no_manifest(self, tmp_path: Path) -> None:
         with pytest.raises(NotATraceError, match="manifest.json"):
@@ -168,7 +168,7 @@ class TestUnknownEventType:
     """
 
     def test_is_skipped_and_reported_not_raised(self, tmp_path: Path) -> None:
-        fabricated = event(1, "gpu.allocate")  # a type from some future Orca
+        fabricated = event(1, "gpu.allocate")  # a type from some future AgenticReplay
         write_trace(tmp_path, [event(0, "run.start"), fabricated, event(2, "run.end")])
         reader = TraceReader.open(tmp_path)
         assert [e.seq for e in reader.events()] == [0, 2]

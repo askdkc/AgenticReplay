@@ -12,7 +12,7 @@ header from whoever answers for the gateway carried the credential to a host it
 was never issued for.
 
 The first fix pinned push and pull and left `probeModels` — the third request
-carrying the very same header pair, reached by `orca setup` and `orca models` —
+carrying the very same header pair, reached by `agenticreplay setup` and `agenticreplay models` —
 following redirects. That is the shape this fence exists for: the rule is about
 a CREDENTIAL, and a fix applied at the two call sites that were reported is a
 fix of the sites rather than of the rule.
@@ -25,7 +25,7 @@ key loses nothing by being pinned.
 AND THE FIRST VERSION OF THIS FENCE WAS ITSELF TOO NARROW, TWICE OVER
 (orcacode-review). It walked `packages/cli/src` only, so the RECORDING PROXY —
 handed the same credential as `upstreamHeaders`, attaching it to both of its
-live call sites, on the path every `orca record` / `replay --loose` / `compare` /
+live call sites, on the path every `agenticreplay record` / `replay --loose` / `compare` /
 fork takes — was never looked at. And even under the wider scope it would have
 slipped through, because that call is an ALIAS: `const doFetch = options.fetchImpl ?? fetch`
 writes no bare `fetch(` for a scan to find.
@@ -36,7 +36,7 @@ the last bug was is not a fence.
 
 THE ONE EXEMPTION IS BOUND TO THE CALL'S SHAPE, NOT TO ITS FILE NAME.
 `refreshOpenCodeApiBases` cannot call `fetchPinned`: it is serialised with
-`.toString()` into the OpenCode plugin orca emits (see `opencode-capture.ts`),
+`.toString()` into the OpenCode plugin agenticreplay emits (see `opencode-capture.ts`),
 so an imported name would be a free variable in the generated module and throw
 at run time rather than pin anything. It is exempt because of what the call IS,
 not where it lives — a hard-coded public URL, `credentials: 'omit'`, and

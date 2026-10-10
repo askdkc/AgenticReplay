@@ -1,4 +1,4 @@
-import type { Adapter } from '@orcareplay/plugin-api';
+import type { Adapter } from '@agenticreplay/plugin-api';
 import { claudeCodeAdapter } from './claude-code.js';
 import { codexAdapter } from './codex.js';
 import { cursorAdapter } from './cursor.js';
@@ -31,7 +31,7 @@ export class AdapterRegistry {
       );
     }
     for (const alias of adapter.aliases ?? []) {
-      // An alias that shadows a real id, or one already claimed, would make `orca record <name>`
+      // An alias that shadows a real id, or one already claimed, would make `agenticreplay record <name>`
       // silently launch a different harness than the name says. Fail at registration instead.
       const clash = this.#adapters.get(alias) ?? this.#adapters.get(this.#aliases.get(alias) ?? '');
       if (clash && clash !== adapter) {
@@ -51,7 +51,7 @@ export class AdapterRegistry {
       throw new Error(
         `unknown adapter '${id}'. Known adapters: ${this.names().join(', ')}. ` +
           "If your agent is not listed, run it under 'generic-openai' and pass the command after " +
-          '--, e.g. orca record generic-openai -- my-agent --task ...',
+          '--, e.g. agenticreplay record generic-openai -- my-agent --task ...',
       );
     }
     return adapter;
@@ -107,7 +107,7 @@ export function defaultAdapters(): AdapterRegistry {
   // Last of the harnesses, because detection returns the first adapter that claims the workspace
   // and every earlier slot takes one away from an adapter that already had it. ZCode's detector
   // reads the machine — `~/.zcode`, or `zcode` on PATH — so on a machine with two agents
-  // installed the bare `orca record` should keep answering what it answered before this adapter
+  // installed the bare `agenticreplay record` should keep answering what it answered before this adapter
   // existed. Nothing about ZCode earns it a place ahead of them.
   registry.register(zcodeAdapter);
   // Before the three that decline to detect: its detector reads *this directory* rather than the

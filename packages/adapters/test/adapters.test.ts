@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Adapter, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, RecordContext } from '@agenticreplay/plugin-api';
 import {
   AdapterRegistry,
   claudeCodeAdapter,
@@ -24,7 +24,7 @@ let scratch: string;
 const saved = { ...process.env };
 
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'orca-adapters-'));
+  scratch = mkdtempSync(join(tmpdir(), 'agenticreplay-adapters-'));
 });
 
 afterEach(() => {
@@ -41,9 +41,10 @@ function ctx(over: Partial<RecordContext> = {}): RecordContext {
     runId: 'run_abc123',
     cwd: '/work',
     proxyUrl: 'http://127.0.0.1:51733',
-    runDir: join(scratch, '.orca/runs/run_abc123'),
+    runDir: join(scratch, '.agenticreplay/runs/run_abc123'),
     userArgs: [],
-    env: {},
+    // Keep the version branch deterministic; production probes the installed binary.
+    env: { AGENTICREPLAY_OPENCODE_VERSION: '1.18.29' },
     ...over,
   };
 }
@@ -61,10 +62,65 @@ function isolate(homeContents: string[] = []): string {
   return home;
 }
 
+describe('OpenCode version-specific capture launch', () => {
+  const v2 = { AGENTICREPLAY_OPENCODE_VERSION: '2.0.18' };
+  it.skipIf(process.platform === 'win32')(
+    'detects the installed CLI version banner in an isolated probe',
+    async () => {
+      const bin = join(scratch, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'opencode'), '#!/bin/sh\nprintf "opencode v2.0.18\\n"\n', {
+        mode: 0o755,
+      });
+      const launch = await openCodeAdapter.prepare(
+        ctx({ env: { PATH: `${bin}:/usr/bin:/bin`, HOME: scratch }, userArgs: ['run', 'hello'] }),
+      );
+      expect(launch.args).toEqual(['run', '--standalone', 'hello']);
+      expect(launch.env.OPENCODE_CONFIG).toContain('agenticreplay-opencode-v2-config.json');
+    },
+  );
+  it('uses a private server for run and interactive launch without changing prompt arguments', async () => {
+    const prompt = 'Explain --server and --attach options';
+    const run = await openCodeAdapter.prepare(ctx({ env: v2, userArgs: ['run', prompt] }));
+    expect(run.args).toEqual(['run', '--standalone', prompt]);
+    const interactive = await openCodeAdapter.prepare(
+      ctx({ env: v2, userArgs: ['-m', 'custom/model'] }),
+    );
+    expect(interactive.args).toEqual(['--standalone', '-m', 'custom/model']);
+  });
+  it('does not duplicate standalone or replace an explicit server', async () => {
+    const launch = await openCodeAdapter.prepare(
+      ctx({ env: v2, userArgs: ['run', '--standalone', 'hello'] }),
+    );
+    expect(launch.args).toEqual(['run', '--standalone', 'hello']);
+    await expect(
+      openCodeAdapter.prepare(
+        ctx({ env: v2, userArgs: ['run', '--server=http://localhost:1234'] }),
+      ),
+    ).rejects.toThrow('does not support');
+  });
+  it('leaves an explicit v1 config in place and rejects unsupported v2 config composition', async () => {
+    const path = join(scratch, 'selected.json');
+    writeFileSync(path, '{"model":"selected/provider"}');
+    const legacy = await openCodeAdapter.prepare(
+      ctx({
+        env: { AGENTICREPLAY_OPENCODE_VERSION: '1.18.29', OPENCODE_CONFIG: path },
+        userArgs: ['run', 'hello'],
+      }),
+    );
+    expect(legacy.args).toEqual(['run', 'hello']);
+    expect(legacy.env.OPENCODE_CONFIG).toBeUndefined();
+    expect(JSON.parse(legacy.env.OPENCODE_CONFIG_CONTENT!).plugins).toBeUndefined();
+    await expect(
+      openCodeAdapter.prepare(ctx({ env: { ...v2, OPENCODE_CONFIG: path } })),
+    ).rejects.toThrow('cannot compose');
+  });
+});
+
 describe('adapter aliases', () => {
   /**
    * The id is an internal handle; what a user types is the name of the binary they run. Every
-   * doc, the README headline and the demo say `orca record claude`, and that command failed with
+   * doc, the README headline and the demo say `agenticreplay record claude`, and that command failed with
    * "unknown adapter 'claude'" because the adapter is registered as `claude-code`. The first
    * command in the README is the worst possible place to make someone read an error message.
    */
@@ -116,23 +172,25 @@ describe('hasBinary', () => {
   it('finds a binary that is on PATH', async () => {
     const bin = join(scratch, 'bin');
     mkdirSync(bin);
-    const filename = process.platform === 'win32' ? 'orca-fake-agent.cmd' : 'orca-fake-agent';
+    const filename =
+      process.platform === 'win32' ? 'agenticreplay-fake-agent.cmd' : 'agenticreplay-fake-agent';
     const contents =
       process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n';
     writeFileSync(join(bin, filename), contents, { mode: 0o755 });
     process.env.PATH = `${bin}${delimiter}${BARE_PATH}`;
-    expect(await hasBinary('orca-fake-agent')).toBe(true);
+    expect(await hasBinary('agenticreplay-fake-agent')).toBe(true);
   });
 
   it('is false for a binary that is not on PATH', async () => {
     const bin = join(scratch, 'bin');
     mkdirSync(bin);
-    const filename = process.platform === 'win32' ? 'orca-fake-agent.cmd' : 'orca-fake-agent';
+    const filename =
+      process.platform === 'win32' ? 'agenticreplay-fake-agent.cmd' : 'agenticreplay-fake-agent';
     const contents =
       process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n';
     writeFileSync(join(bin, filename), contents, { mode: 0o755 });
     process.env.PATH = BARE_PATH;
-    expect(await hasBinary('orca-fake-agent')).toBe(false);
+    expect(await hasBinary('agenticreplay-fake-agent')).toBe(false);
   });
 
   it('never throws, even on a name full of shell metacharacters', async () => {
@@ -262,14 +320,10 @@ describe('codexAdapter', () => {
     expect('OPENAI_API_KEY' in none.env).toBe(false);
   });
 
-  // The variable alone never reached a Codex pointed at a gateway: the origin comes from
-  // `model_providers.<name>.base_url`, so the override has to name whichever provider is selected.
-  it('overrides the selected provider base_url on the command line', async () => {
-    const launch = await codexAdapter.prepare(ctx({ env: { CODEX_HOME: 'no-such-dir' } }));
-    expect(launch.args.slice(0, 2)).toEqual([
-      '-c',
-      'model_providers.openai.base_url=http://127.0.0.1:51733/v1',
-    ]);
+  it('does not override the reserved built-in OpenAI provider', async () => {
+    const launch = await codexAdapter.prepare(ctx({ env: { CODEX_HOME: scratch } }));
+    expect(launch.args).toEqual(['-c', 'openai_base_url=http://127.0.0.1:51733/v1']);
+    expect(launch.env.OPENAI_BASE_URL).toBe('http://127.0.0.1:51733/v1');
   });
 
   it('reads the provider name out of config.toml, ignoring same-named keys in tables', () => {
@@ -279,13 +333,14 @@ describe('codexAdapter', () => {
     expect(selectedProvider('')).toBe('openai');
   });
 
-  it('puts the override before the user argv, so an explicit -c still wins', async () => {
+  it('puts a custom provider override before the user argv', async () => {
+    writeFileSync(join(scratch, 'config.toml'), 'model_provider = "custom"\n');
     const launch = await codexAdapter.prepare(
-      ctx({ env: { CODEX_HOME: 'no-such-dir' }, userArgs: ['exec', '--skip-git-repo-check'] }),
+      ctx({ env: { CODEX_HOME: scratch }, userArgs: ['exec', '--skip-git-repo-check'] }),
     );
     expect(launch.args).toEqual([
       '-c',
-      'model_providers.openai.base_url=http://127.0.0.1:51733/v1',
+      'model_providers.custom.base_url=http://127.0.0.1:51733/v1',
       'exec',
       '--skip-git-repo-check',
     ]);
@@ -336,9 +391,45 @@ describe('openCodeAdapter', () => {
     // as the environment, so HOME is isolated: on a machine that has signed in to OpenCode the
     // placeholder branch is unreachable, which is not what this test is about.
     isolate();
-    const none = await openCodeAdapter.prepare(ctx());
-    expect(none.env.OPENAI_API_KEY).toBe('orca-recorded');
-    expect(none.env.ANTHROPIC_API_KEY).toBe('orca-recorded');
+    const none = await openCodeAdapter.prepare(
+      ctx({ env: { OPENCODE_VERSION: '1.18.29', AGENTICREPLAY_OPENCODE_VERSION: '1.18.29' } }),
+    );
+    expect(none.env.OPENAI_API_KEY).toBe('agenticreplay-recorded');
+    expect(none.env.ANTHROPIC_API_KEY).toBe('agenticreplay-recorded');
+  });
+
+  it('recognizes credentials in the child XDG data directory', async () => {
+    const home = isolate();
+    const data = join(home, 'xdg-data');
+    mkdirSync(join(data, 'opencode'), { recursive: true });
+    writeFileSync(join(data, 'opencode', 'auth.json'), '{"openai":{"type":"api"}}');
+    const launch = await openCodeAdapter.prepare(
+      ctx({
+        env: {
+          HOME: home,
+          XDG_DATA_HOME: data,
+          PATH: BARE_PATH,
+          OPENCODE_VERSION: '2.0.0',
+        },
+      }),
+    );
+    expect(launch.env.OPENAI_API_KEY).toBeUndefined();
+    expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('does not invent provider keys for v2 without an explicit environment key', async () => {
+    const launch = await openCodeAdapter.prepare(
+      ctx({
+        env: {
+          OPENCODE_VERSION: '2.0.18',
+          AGENTICREPLAY_OPENCODE_VERSION: '2.0.18',
+          HOME: isolate(),
+          PATH: BARE_PATH,
+        },
+      }),
+    );
+    expect(launch.env.OPENAI_API_KEY).toBeUndefined();
+    expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   it('rewrites the first-party providers through the proxy in a config overlay', async () => {
@@ -393,7 +484,7 @@ describe('openCodeAdapter', () => {
   });
 
   it('skips the overlay entirely when the user config cannot be parsed', async () => {
-    // A config orca cannot read is an intent orca cannot honour. Rewriting routing on top of an
+    // A config agenticreplay cannot read is an intent agenticreplay cannot honour. Rewriting routing on top of an
     // unreadable config risks sending the run somewhere the user never named; capturing nothing
     // is the recoverable failure, and the end-of-run warning says so.
     const home = isolate();
@@ -406,12 +497,16 @@ describe('openCodeAdapter', () => {
 
   it('preserves existing inline config while adding the capture plugin', async () => {
     const theirs = '{"model":"opencode-go/glm-5.3-flash"}';
-    const launch = await openCodeAdapter.prepare(ctx({ env: { OPENCODE_CONFIG_CONTENT: theirs } }));
+    const launch = await openCodeAdapter.prepare(
+      ctx({ env: { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_VERSION: '2.0.0' } }),
+    );
     const content = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!);
     expect(content.model).toBe('opencode-go/glm-5.3-flash');
     expect(content.provider).toBeUndefined();
     expect(content.plugin).toHaveLength(1);
-    expect(content.plugin[0]).toMatch(/^file:.*orca-opencode-capture\.mjs$/);
+    expect(content.plugin[0]).toMatch(/^file:.*agenticreplay-opencode-capture\.mjs$/);
+    expect(content.plugins).toHaveLength(1);
+    expect(content.plugins[0]).toMatch(/^file:.*agenticreplay-opencode-v2-capture$/);
   });
 
   it('points SHELL at the shim for a shell OpenCode would have picked anyway', async () => {

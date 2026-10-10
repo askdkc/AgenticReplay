@@ -90,12 +90,12 @@ describe('buildTimeline', () => {
     const rows = buildTimeline([
       ev({
         type: 'net.response',
-        actor: 'orca',
+        actor: 'agenticreplay',
         attrs: { host: 'api.example.com', status: 200, bytes: 396, decoded_from: 'gzip' },
       }),
       ev({
         type: 'net.response',
-        actor: 'orca',
+        actor: 'agenticreplay',
         attrs: { host: 'api.example.com', status: 200, bytes: 6742 },
       }),
     ]);
@@ -112,10 +112,14 @@ describe('buildTimeline', () => {
     const rows = buildTimeline([
       ev({
         type: 'net.response',
-        actor: 'orca',
+        actor: 'agenticreplay',
         attrs: { host: 'api.example.com', status: 0, abandoned: true },
       }),
-      ev({ type: 'net.response', actor: 'orca', attrs: { host: 'api.example.com', status: 200 } }),
+      ev({
+        type: 'net.response',
+        actor: 'agenticreplay',
+        attrs: { host: 'api.example.com', status: 200 },
+      }),
     ]);
     // Without the marker this row is `status 0` and nothing else, which reads as a failure.
     expect(rows[0]!.detail).toContain('client left');
@@ -126,10 +130,28 @@ describe('buildTimeline', () => {
     expect(rows[1]!.detail).toBe('status 200');
   });
 
+  it('distinguishes upstream failure from an incomplete capture', () => {
+    const rows = buildTimeline([
+      ev({ type: 'model.response', actor: 'model', attrs: { model: 'gpt', status: 502 } }),
+      ev({ type: 'model.response', actor: 'model', attrs: { model: 'gpt', truncated: true } }),
+      ev({
+        type: 'net.response',
+        actor: 'agenticreplay',
+        attrs: { host: 'api.example.com', status: 200, truncated: true },
+      }),
+    ]);
+    expect(rows[0]!.detail).toContain('upstream failed');
+    expect(rows[0]!.tone).toBe('attention');
+    expect(rows[1]!.detail).toContain('capture incomplete');
+    expect(rows[1]!.tone).toBe('attention');
+    expect(rows[2]!.detail).toContain('capture incomplete');
+    expect(rows[2]!.tone).toBe('attention');
+  });
+
   it('marks errors and divergences as attention', () => {
     const rows = buildTimeline([
       ev({ type: 'error', actor: 'harness', attrs: { message: 'ENOENT', code: 'ENOENT' } }),
-      ev({ type: 'divergence', actor: 'orca', attrs: { level: 'major', rung: 3 } }),
+      ev({ type: 'divergence', actor: 'agenticreplay', attrs: { level: 'major', rung: 3 } }),
     ]);
     expect(rows.map((r) => r.tone)).toEqual(['attention', 'attention']);
     expect(rows[0]!.label).toBe('ENOENT');
@@ -163,7 +185,7 @@ describe('buildTimeline', () => {
 
   /**
    * The renderer and the writer have to agree on attribute names, and for filesystem events they
-   * did not. `orca record` emits `{ path, status, insertions, deletions }` for fs.change and
+   * did not. `agenticreplay record` emits `{ path, status, insertions, deletions }` for fs.change and
    * `{ tree, changes, initial }` for fs.snapshot; the renderer read `added`, `removed` and
    * `files` — names nothing produces. Every FILE row therefore rendered with an empty detail and
    * never said whether the file was added, modified or deleted, and every SNAP row dropped its
@@ -187,7 +209,7 @@ describe('buildTimeline', () => {
     expect(rows[1]!.tone).toBe('normal');
   });
 
-  it('renders the filesystem attributes orca record actually writes', () => {
+  it('renders the filesystem attributes agenticreplay record actually writes', () => {
     const rows = buildTimeline([
       ev({
         type: 'fs.change',
@@ -431,7 +453,7 @@ describe('detectLoops', () => {
   });
 
   /**
-   * The false positive that made the old detector useless, in the shape it actually took: orca
+   * The false positive that made the old detector useless, in the shape it actually took: agenticreplay
    * snapshots the workspace before every model request, so a conversation that writes no files
    * produces a run of turns all carrying the same tree. That is what the tree-based detector
    * called a loop, and it is what answering a question looks like.

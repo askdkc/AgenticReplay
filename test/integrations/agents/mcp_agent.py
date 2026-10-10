@@ -4,8 +4,8 @@ Both halves on purpose. The model call is what every other check asserts and wha
 exchange counts comparable; the MCP session is the half no other check covers at all.
 
 It reads the config rather than building `StdioServerParameters` in code, because that is the shape
-orca can instrument — it rewrites the config to put its shim between client and server. A client
-that constructs the parameters itself leaves orca nothing to rewrite, and the session is then
+agenticreplay can instrument — it rewrites the config to put its shim between client and server. A client
+that constructs the parameters itself leaves agenticreplay nothing to rewrite, and the session is then
 invisible to every capture layer: the transport is OS pipes, so the proxy never sees it, and
 `mcp.client.stdio` spawns in list form rather than through a shell, so the PATH shim never fires.
 That gap is real and is not what this check covers.

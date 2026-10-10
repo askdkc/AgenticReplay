@@ -2,8 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, TraceWriter } from '@orcareplay/core';
-import { INLINE_PAYLOAD_LIMIT, isBlobRef } from '@orcareplay/schema';
+import { TraceReader, TraceWriter } from '@agenticreplay/core';
+import { INLINE_PAYLOAD_LIMIT, isBlobRef } from '@agenticreplay/schema';
 import { loadExchanges } from '../src/commands/replay.js';
 
 /**
@@ -24,7 +24,7 @@ describe('replay across the inline/blob spill boundary', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-spill-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-spill-'));
   });
 
   afterEach(async () => {
@@ -46,20 +46,26 @@ describe('replay across the inline/blob spill boundary', () => {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
-      orcaVersion: '0.0.0',
+      agenticreplayVersion: '0.0.0',
     });
     await writer.append({
-      type: 'model.request',
+      type: 'net.request',
       actor: 'agent',
       turn: 1,
-      attrs: { model: 'claude-opus-5', dialect: 'anthropic' },
+      attrs: {
+        phase: 'body',
+        request_id: 'attempt-1',
+        model_dialect: 'anthropic',
+        path: '/v1/messages',
+      },
       payload: rawRequest,
     });
     await writer.append({
-      type: 'model.response',
-      actor: 'model',
+      type: 'net.response',
+      actor: 'agenticreplay',
       turn: 1,
-      attrs: { model: 'claude-opus-5', status: 200, streamed: false },
+      causes: [0],
+      attrs: { request_id: 'attempt-1', status: 200, response_complete: true },
       payload: JSON.stringify({ id: 'msg_1', content: [{ type: 'text', text: 'done' }] }),
     });
     await writer.close(0);
@@ -73,7 +79,7 @@ describe('replay across the inline/blob spill boundary', () => {
     const reader = await TraceReader.open(await writeRun(raw));
     const events = await reader.events();
     // The premise of the test: this body really did spill.
-    expect(isBlobRef(events.find((e) => e.type === 'model.request')?.payload)).toBe(true);
+    expect(isBlobRef(events.find((e) => e.type === 'net.request')?.payload)).toBe(true);
 
     const [exchange] = await loadExchanges(reader);
     expect(exchange).toBeDefined();

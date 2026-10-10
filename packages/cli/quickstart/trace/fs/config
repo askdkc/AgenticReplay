@@ -1,9 +1,9 @@
 [core]
 	repositoryformatversion = 0
-	filemode = false
+	filemode = true
 	bare = true
-	symlinks = false
 	ignorecase = true
+	precomposeunicode = true
 	autocrlf = false
 	eol = lf
 	fsmonitor = false

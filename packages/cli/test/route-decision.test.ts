@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, resolveRunSelector } from '@orcareplay/core';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader, resolveRunSelector } from '@agenticreplay/core';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -19,7 +19,7 @@ const FAKE_AGENT = join(import.meta.dirname, 'fixtures', 'fake-agent.mjs');
  * `route.decision` — spec §2, "a gateway chose a model".
  *
  * It was declared in the schema, rendered by the viewer, and emitted by nothing, which the
- * conformance job reported run after run. On a fork orca *is* the gateway: it substitutes the
+ * conformance job reported run after run. On a fork agenticreplay *is* the gateway: it substitutes the
  * model, picks the wire format that serves it and picks the origin, and it was making all three
  * choices silently. A verdict table reading `claude-opus-5 vs gpt-5.2` says nothing about where
  * either one went.
@@ -31,7 +31,7 @@ describe('route.decision', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-route-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-route-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -120,7 +120,7 @@ describe('route.decision', () => {
 
   it('says nothing on a plain recording, which chooses nothing', async () => {
     // An event announcing that no decision was taken is noise, and it would put a `route.decision`
-    // in every trace orca has ever written.
+    // in every trace agenticreplay has ever written.
     const recorded = await record();
     const events = await (await TraceReader.open(recorded.runDir)).events();
     expect(events.some((e) => e.type === 'route.decision')).toBe(false);

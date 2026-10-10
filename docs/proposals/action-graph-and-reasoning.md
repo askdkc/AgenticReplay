@@ -5,14 +5,14 @@ Status: **all four steps shipped**. Read against `d20d471`; built on
 
 | Step | State |
 |---|---|
-| 1. Observed edges, `runGraph()`, `orca graph --json` | shipped |
+| 1. Observed edges, `runGraph()`, `agenticreplay graph --json` | shipped |
 | 2. `renderChainCard()` and `renderGraphCard()` — SVG | shipped |
 | 3. PNG for both cards, and `compare --share` | shipped |
 | 4. GIF of the chain resolving, one frame per hop | shipped |
 
 The rasterizer question was settled the way `docs/media/README.md` already answers it: the render
 toolchain stays out of `package.json`, is imported at the moment of use, and its absence is a
-message naming the one line that installs it. `orca doctor` reports it, and `.svg` never needs it.
+message naming the one line that installs it. `agenticreplay doctor` reports it, and `.svg` never needs it.
 Deferred to a follow-up: the model's reasoning (section 2), and a graph pane inside the exported
 HTML viewer.
 
@@ -35,7 +35,7 @@ trace format already declares a causal DAG, and `scripts/` already contains a wo
 
 | Piece | Where | State |
 |---|---|---|
-| `causes` — a normative causal DAG on every event | `spec/orca-trace-v0.md:40` | shipped |
+| `causes` — a normative causal DAG on every event | `spec/agenticreplay-trace-v0.md:40` | shipped |
 | `causalChain()` — transitive backward walk | `packages/core/src/graph.ts:117` | written, tested, **no caller** |
 | `thinking` block in the canonical IR | `packages/plugin-api/src/canonical.ts:12` | parsed, then dropped |
 | Reasoning read in all three wire dialects | `translate/anthropic.ts:140`, `openai.ts:320`, `openai-responses.ts:117` | shipped |
@@ -74,7 +74,7 @@ EFFECT              6                        11* ─▶ 12*
                                                     └── nothing consumes this
 
   ─▶ written into `causes`      ┆▼ inferred, derived at read time, never written
-  *  the chain `orca graph last --to 12` returns
+  *  the chain `agenticreplay graph last --to 12` returns
 ```
 
 Two things this makes obvious that the timeline list does not.
@@ -92,7 +92,7 @@ What ships first, and what an agent asking "why did this run fail" actually cons
 names the rule that produced it, so an inferred edge can be argued with:
 
 ```console
-$ orca graph last --to 12 --json
+$ agenticreplay graph last --to 12 --json
 {
   "runId": "run_6473f858b59e",
   "nodes": [
@@ -145,7 +145,7 @@ reader can trust.
 ### Where it lands
 
 Extend `packages/core/src/graph.ts` with `runGraph(events)` returning nodes plus typed edges
-(`recorded` | `inferred`, with the inference rule named on each). Expose `orca graph <run> --json`
+(`recorded` | `inferred`, with the inference rule named on each). Expose `agenticreplay graph <run> --json`
 alongside the other `--json` commands, add it to the MCP tool set so an agent can ask what caused
 seq N, and render it in the viewer. `causalChain()` finally gets a caller.
 
@@ -177,13 +177,13 @@ is a read-path feature, not a capture-path one.
 | `redacted_thinking` / encrypted reasoning | Opaque ciphertext, no canonical home | unreadable |
 
 Label this per turn in the UI. A capability row that says "private chain-of-thought: works" is the
-row that ends up being the thing that is wrong — the same reason `orca models` prints a dash rather
+row that ends up being the thing that is wrong — the same reason `agenticreplay models` prints a dash rather
 than inventing a price.
 
 ### The payoff
 
 The interesting artefact is not the reasoning on its own. It is the reasoning set against what the
-harness actually did and what the terminal actually showed, and orca is the only layer holding all
+harness actually did and what the terminal actually showed, and agenticreplay is the only layer holding all
 three: *the model said it would verify the fix; the transcript never showed a verification; seq 12
 says the check exited 1 and the run exited 0.*
 
@@ -194,8 +194,8 @@ restating the task in the clear. The README already says to treat a trace as a s
 heap dump; this raises that bar, and it lands in exactly the artefact people are encouraged to
 attach to public issues.
 
-So: capture by default (local, `0600`, no change in posture), but **strip it from `orca export` by
-default** behind `--include-thinking`, extend `orca scrub` to cover thinking blobs, and keep the
+So: capture by default (local, `0600`, no change in posture), but **strip it from `agenticreplay export` by
+default** behind `--include-thinking`, extend `agenticreplay scrub` to cover thinking blobs, and keep the
 existing behaviour where export prints exactly what it is about to write. The signature handling at
 `redaction.ts:131` is the precedent — that care has to extend to the new blob, or forks of thinking
 turns break.
@@ -239,7 +239,7 @@ raster.
 
 **So: SVG is the source, PNG and GIF are the shareable outputs, and the rasterizer is the only new
 dependency.** Keep SVG dependency-free so the command always works; make PNG and GIF opt-in, and
-have `orca doctor` report whether the render toolchain is present — the same way it already warns
+have `agenticreplay doctor` report whether the render toolchain is present — the same way it already warns
 about a missing POSIX shell and lets you carry on with `--no-shell`.
 
 Worth doing in the same slice: `compare --share` already produces the best shareable asset in the
@@ -275,7 +275,7 @@ that travels without its trace launders a guess into a fact — the same discipl
 Both cards and the exported page sign themselves, from one constant so they cannot drift:
 
 ```
-Recorded with OrcaReplay · built by the OrcaRouter.ai team  github.com/Continuum-AI-Corp/OrcaReplay
+Recorded with AgenticReplay · github.com/askdkc/AgenticReplay
 ```
 
 Shipped ahead of the rest of this plan, since `renderCompareCard` and the viewer footer both
@@ -304,7 +304,7 @@ frame's delay. Roughly eight frames: title, one per hop, the failing hop held lo
 held longest before it loops. A 720×322 monochrome card quantised to 32 colours lands well under a
 couple of hundred kilobytes — the existing hero GIF is a far busier scene through the same encoder.
 
-**What not to build:** a GIF of `orca ui` playing the run back. That exists as a docs asset because
+**What not to build:** a GIF of `agenticreplay ui` playing the run back. That exists as a docs asset because
 it is a scripted, hand-trimmed *demo of the product*. Generated automatically from an arbitrary
 400-event run it is a long scroll with no climax, and nobody watches a forty-second GIF in an issue
 thread.
@@ -317,21 +317,21 @@ migration file, in five hops, is a far more compelling image than a cost table �
 it is finally postable where people post.
 
 This does not fully solve distribution: a card is still an image someone has to attach, not a link
-someone can click, and `orca share` remains the larger question. But it is the cheap two-thirds of
+someone can click, and `agenticreplay share` remains the larger question. But it is the cheap two-thirds of
 the answer, it reuses an encoder already in the tree, and it carries no privacy decision — which is
 exactly why it is the right thing to build before reasoning.
 
 ## Build order
 
-1. **The two observed edges, `runGraph()`, and `orca graph --json`.** No format change, no version
+1. **The two observed edges, `runGraph()`, and `agenticreplay graph --json`.** No format change, no version
    bump — `causes` is already normative and already optional. Gives the MCP server a "what caused
    seq N" tool and `causalChain()` its first caller. Everything below depends on it.
    Touches `core/graph.ts`, `cli/exchange-events.ts`, `cli/commands/record.ts`.
 2. **`renderChainCard()` — SVG, zero dependencies.** Same idiom and same file as
-   `renderCompareCard`. `orca export last --card chain.svg`. This is the artefact that has to exist;
+   `renderCompareCard`. `agenticreplay export last --card chain.svg`. This is the artefact that has to exist;
    everything after it is a format conversion. Touches `cli/share-card.ts`, `cli/commands/inspect.ts`.
 3. **PNG output, for both cards.** Promote the rasterizer out of `scripts/` into a real module, keep
-   it opt-in, and have `orca doctor` report whether it is present. Do `compare --share --png` in the
+   it opt-in, and have `agenticreplay doctor` report whether it is present. Do `compare --share --png` in the
    same slice.
 4. **GIF — the chain resolving, one frame per hop.** The encoder exists and the technique is proven
    at `render-demo.mjs:97`. The smallest slice of the four, once step 3 has settled the dependency

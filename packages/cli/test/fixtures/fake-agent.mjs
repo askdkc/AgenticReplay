@@ -2,10 +2,10 @@
 /**
  * A stand-in coding agent, for end-to-end tests.
  *
- * It behaves the way the real targets do in the only respects OrcaReplay depends on: it reads
+ * It behaves the way the real targets do in the only respects AgenticReplay depends on: it reads
  * ANTHROPIC_BASE_URL from the environment, drives a multi-turn tool loop over the Messages API,
  * resends the whole conversation every turn (which is what lets the proxy see tool results), and
- * edits a file on disk. If OrcaReplay can record and replay this, the mechanism is sound.
+ * edits a file on disk. If AgenticReplay can record and replay this, the mechanism is sound.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -100,15 +100,15 @@ for (let turn = 0; turn < turns; turn += 1) {
 // One HTTPS side-call, only when a test asks for it. This is what a harness that talks to its own
 // backend does, and it is the only way a *fork* — which launches this same agent from the parent's
 // argv — can be checked for interception at all.
-if (process.env.ORCA_TEST_TARGETS) {
+if (process.env.AGENTICREPLAY_TEST_TARGETS) {
   const { callConfiguredTargets } = await import('./proxy-call.mjs');
   const results = await callConfiguredTargets();
-  if (process.env.ORCA_TEST_RESULT_OUT) {
-    writeFileSync(process.env.ORCA_TEST_RESULT_OUT, JSON.stringify(results, null, 2));
+  if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
+    writeFileSync(process.env.AGENTICREPLAY_TEST_RESULT_OUT, JSON.stringify(results, null, 2));
   }
 }
-if (process.env.ORCA_TEST_ENV_OUT) {
-  writeFileSync(process.env.ORCA_TEST_ENV_OUT, JSON.stringify(process.env, null, 2));
+if (process.env.AGENTICREPLAY_TEST_ENV_OUT) {
+  writeFileSync(process.env.AGENTICREPLAY_TEST_ENV_OUT, JSON.stringify(process.env, null, 2));
 }
 
 console.log(`fake-agent: completed ${messages.length} messages`);

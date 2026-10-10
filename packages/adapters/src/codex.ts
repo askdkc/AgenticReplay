@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Adapter, Launch, RecordContext, SessionSupport } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext, SessionSupport } from '@agenticreplay/plugin-api';
 import { detectAgent, homeDir } from './detect.js';
 import { passThrough, proxyBase, readEnv } from './env.js';
 import { contentText, parseJsonl } from './session.js';
@@ -76,8 +76,8 @@ export const codexSession: SessionSupport = {
 /**
  * Codex CLI.
  *
- * `OPENAI_BASE_URL` is set for the built-in provider, but it is not enough on its own and never
- * was: Codex resolves its origin from `model_providers.<name>.base_url` in `config.toml`, so an
+ * `OPENAI_BASE_URL` routes the built-in provider. Recent Codex releases reject overrides of
+ * reserved built-in provider IDs. Custom providers still require a scoped config override: Codex resolves its origin from `model_providers.<name>.base_url` in `config.toml`, so an
  * installation pointed at a gateway — which is the reason most people have a `config.toml` at all
  * — ignores the variable completely and talks straight to its own endpoint. The recording then
  * ends with `capture.empty` and nothing to replay, having cost a full run of real tokens.
@@ -110,7 +110,10 @@ export const codexAdapter: Adapter = {
     }
 
     // Ahead of the user's own arguments so that anything they pass explicitly still wins.
-    const args = ['-c', `model_providers.${provider}.base_url=${base}`, ...ctx.userArgs];
+    const args =
+      provider === 'openai'
+        ? ['-c', `openai_base_url=${base}`, ...ctx.userArgs]
+        : ['-c', `model_providers.${provider}.base_url=${base}`, ...ctx.userArgs];
     return { command: 'codex', args, env };
   },
 

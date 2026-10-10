@@ -2,7 +2,7 @@
 /**
  * Set one version across every workspace, and rewrite the internal pins that name it.
  *
- * Twelve packages depend on each other by *exact* version — `"@orcareplay/core": "0.2.3"`, never a
+ * Twelve packages depend on each other by *exact* version — `"@agenticreplay/core": "0.2.3"`, never a
  * range — for the reason `publish-order.mjs` gives: a range resolves to whatever is latest, so a
  * 0.1.0 CLI would install a 0.9.0 core. The cost is that a version bump is not one edit but
  * thirteen manifests plus every pin inside them, and `npm version --workspaces` does not touch the
@@ -75,7 +75,7 @@ async function internalNames(paths) {
   const names = new Set();
   for (const path of paths) {
     const pkg = JSON.parse(await readFile(path, 'utf8').catch(() => '{}'));
-    if (typeof pkg.name === 'string' && pkg.name.startsWith('@orcareplay/')) names.add(pkg.name);
+    if (typeof pkg.name === 'string' && pkg.name.startsWith('@agenticreplay/')) names.add(pkg.name);
   }
   return names;
 }

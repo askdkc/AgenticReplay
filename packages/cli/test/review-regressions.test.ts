@@ -5,9 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { canonicalToAnthropicRequest, responsesToCanonicalRequest } from '@orcareplay/providers';
+import { canonicalToAnthropicRequest, responsesToCanonicalRequest } from '@agenticreplay/providers';
 import { parseArgs } from '../src/args.js';
-import { Orca } from '../src/api.js';
+import { AgenticReplay } from '../src/api.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
 const run = promisify(execFile);
@@ -24,7 +24,7 @@ const AGENT = join(here, 'fixtures', 'responses-agent.mjs');
 
 describe('--json is a valueless flag', () => {
   it('does not swallow the positional that follows it', () => {
-    // `orca record --json claude` parsed as json='claude' with no adapter left, so orca
+    // `agenticreplay record --json claude` parsed as json='claude' with no adapter left, so agenticreplay
     // auto-detected the harness *and* printed no JSON — silently, which is the whole hazard the
     // VALUELESS list exists to prevent. The list's own doc comment describes this bug.
     const args = parseArgs(['record', '--json', 'claude']);
@@ -85,7 +85,7 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
   let model: Awaited<ReturnType<typeof startResponsesModel>>;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-review-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-review-'));
     model = await startResponsesModel();
     await run('git', ['init', '-q'], { cwd: workspace });
     await run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
@@ -101,7 +101,7 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
    * Run the API in a child process and watch its real stdout.
    *
    * `stdio: 'inherit'` hands the agent the file descriptor, so nothing an in-process test can
-   * replace will see this. Under `orca mcp` that descriptor is the JSON-RPC transport, and one
+   * replace will see this. Under `agenticreplay mcp` that descriptor is the JSON-RPC transport, and one
    * line of agent chatter ends the session.
    */
   async function stdoutOf(script: string): Promise<string> {
@@ -110,8 +110,8 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
       file,
       // A `file://` URL, not a bare path: written into a generated `.mjs`, an absolute Windows
       // path is rejected by the ESM loader outright and the child dies before its first statement.
-      `import { Orca } from '${pathToFileURL(join(here, '..', 'dist', 'api.js')).href}';\n` +
-        `const orca = new Orca({ cwd: ${JSON.stringify(workspace)} });\n${script}`,
+      `import { AgenticReplay } from '${pathToFileURL(join(here, '..', 'dist', 'api.js')).href}';\n` +
+        `const agenticreplay = new AgenticReplay({ cwd: ${JSON.stringify(workspace)} });\n${script}`,
     );
     const { stdout } = await run(process.execPath, [file], { cwd: workspace });
     return stdout;
@@ -119,7 +119,7 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
 
   it('stays silent on stdout while recording', async () => {
     const out = await stdoutOf(`
-      await orca.record({
+      await agenticreplay.record({
         adapter: 'generic-openai',
         command: [process.execPath, ${JSON.stringify(AGENT)}],
         upstream: { openai: ${JSON.stringify(model.url)} },
@@ -131,12 +131,12 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
 
   it('stays silent on stdout while replaying', async () => {
     const out = await stdoutOf(`
-      await orca.record({
+      await agenticreplay.record({
         adapter: 'generic-openai',
         command: [process.execPath, ${JSON.stringify(AGENT)}],
         upstream: { openai: ${JSON.stringify(model.url)} },
       });
-      await orca.replay('last');
+      await agenticreplay.replay('last');
       process.stdout.write('SENTINEL');
     `);
     expect(out).toBe('SENTINEL');

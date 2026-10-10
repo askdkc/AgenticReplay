@@ -14,7 +14,7 @@ other framework reads the new name.
 The model name is a real one rather than `stub-1` because LlamaIndex refuses anything outside its
 own built-in list — `ValueError: Unknown model 'stub-1'`, raised from `openai_modelname_to_contextsize`
 before a request is ever made, and there is no `context_window` argument to bypass it. That is a
-property of LlamaIndex, not of orca, and `llama_index_model_names.py` is what stops the claim
+property of LlamaIndex, not of agenticreplay, and `llama_index_model_names.py` is what stops the claim
 drifting. The stub echoes whatever model it is given, so the name changes nothing here.
 """
 

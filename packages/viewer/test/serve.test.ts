@@ -28,7 +28,7 @@ describe('serveViewer', () => {
       expect(response.headers.get('content-type')).toMatch(/text\/html/);
       const body = await response.text();
       expect(body.startsWith('<!doctype html>')).toBe(true);
-      expect(body).toContain('Recorded with OrcaReplay');
+      expect(body).toContain('Recorded with AgenticReplay');
       expect(body).toContain('ls');
     } finally {
       await server.close();
@@ -36,6 +36,46 @@ describe('serveViewer', () => {
     // A trace is sensitive: the socket must actually be gone afterwards.
     const url = server.url;
     await expect(fetch(url)).rejects.toThrow();
+  });
+
+  it('keeps large blob bodies out of the page and serves them on demand', async () => {
+    resetSeq();
+    const dir = await tempRunDir('serve-blob');
+    scratch.push(dir);
+    await writeRun(dir, {
+      events: [ev({ type: 'tool.result', payload: { $blob: 'sha256:beef', bytes: 200_004 } })],
+      blobs: { 'sha256:beef': `${'x'.repeat(200_000)}complete body` },
+    });
+    const server = await serveViewer({ runDir: dir, port: 0, maxInlineChars: 100 });
+    try {
+      const page = await (await fetch(server.url)).text();
+      expect(page).toContain('/blobs/beef');
+      expect(page).toContain('truncated');
+      expect(page).not.toContain('complete body');
+      const body = await fetch(`${server.url}blobs/beef`);
+      expect(body.status).toBe(200);
+      expect(await body.text()).toBe(`${'x'.repeat(200_000)}complete body`);
+      expect((await fetch(`${server.url}blobs/%2e%2e/manifest.json`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('downloads serialized API bytes without the storage JSON string wrapper', async () => {
+    resetSeq();
+    const dir = await tempRunDir('serve-body');
+    scratch.push(dir);
+    const body = 'data: {"text":"full body"}\n\ndata: [DONE]\n\n';
+    await writeRun(dir, {
+      events: [ev({ type: 'net.response', payload: { $blob: 'sha256:cafe', bytes: 80 } })],
+      blobs: { 'sha256:cafe': JSON.stringify(body) },
+    });
+    const server = await serveViewer({ runDir: dir });
+    try {
+      expect(await (await fetch(`${server.url}blobs/cafe`)).text()).toBe(body);
+    } finally {
+      await server.close();
+    }
   });
 
   it('refuses to bind anything but loopback', async () => {

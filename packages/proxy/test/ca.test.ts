@@ -12,7 +12,7 @@ import { RunCa } from '../src/ca.js';
  * 0600 and 0700 say nothing on Windows: `chmod` there sets the read-only attribute and `stat`
  * answers 0o666 whatever was asked for. What actually decides who may read the file is its ACL, so
  * that is what gets checked — `(I)` marks an inherited entry, and an inherited entry on this path
- * is one the workspace handed down to it. `restrictToOwner`'s own tests in @orcareplay/core cover
+ * is one the workspace handed down to it. `restrictToOwner`'s own tests in @agenticreplay/core cover
  * exactly which trustees are left; the property here is that none of them came from outside.
  */
 async function expectOwnerOnly(path: string, mode: number): Promise<void> {
@@ -45,7 +45,7 @@ describe('per-run certificate authority', () => {
   let ca: RunCa;
 
   beforeEach(async () => {
-    runDir = await mkdtemp(join(tmpdir(), 'orca-ca-'));
+    runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-ca-'));
     ca = await RunCa.create({ runDir });
   });
 
@@ -57,7 +57,7 @@ describe('per-run certificate authority', () => {
   it('mints a self-signed CA certificate that OpenSSL parses', () => {
     const cert = new X509Certificate(ca.certPem);
     expect(cert.ca).toBe(true);
-    expect(cert.subject).toContain('OrcaReplay');
+    expect(cert.subject).toContain('AgenticReplay');
     // Self-signed: the issuer is itself, and it verifies under its own key.
     expect(cert.issuer).toBe(cert.subject);
     expect(cert.verify(cert.publicKey)).toBe(true);

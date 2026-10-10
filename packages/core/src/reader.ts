@@ -2,8 +2,8 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { BlobRef, Manifest, TraceEvent } from '@orcareplay/schema';
-import { EVENT_TYPES, assertManifest, isBlobRef, validateEvent } from '@orcareplay/schema';
+import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
+import { EVENT_TYPES, assertManifest, isBlobRef, validateEvent } from '@agenticreplay/schema';
 import { BlobStore, sha256File } from './blobs.js';
 
 /** A line the reader could not use. Reported, never repaired (spec §6). */
@@ -34,7 +34,7 @@ const KNOWN_TYPES = new Set<string>(EVENT_TYPES);
  * Reader for one recorded run.
  *
  * Two tolerances are mandated by spec §2 and both are deliberate: a run that crashed mid-write
- * leaves a partial final line, and a trace written by a newer Orca may carry event types this
+ * leaves a partial final line, and a trace written by a newer AgenticReplay may carry event types this
  * build has never heard of. Neither may take down the whole trace — but neither is hidden either,
  * so anything skipped shows up in {@link problems}.
  */
@@ -58,7 +58,7 @@ export class TraceReader {
     try {
       raw = await readFile(path, 'utf8');
     } catch {
-      throw new Error(`not an orca run: cannot read ${path}`);
+      throw new Error(`not an agenticreplay run: cannot read ${path}`);
     }
     let parsed: unknown;
     try {

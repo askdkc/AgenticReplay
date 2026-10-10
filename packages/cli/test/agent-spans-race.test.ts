@@ -30,12 +30,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-vi.mock('@orcareplay/core', async (importOriginal) => {
-  const core = await importOriginal<typeof import('@orcareplay/core')>();
+vi.mock('@agenticreplay/core', async (importOriginal) => {
+  const core = await importOriginal<typeof import('@agenticreplay/core')>();
   return {
     ...core,
     restrictToOwner: async (path: string, mode: 0o600 | 0o700) => {
-      if (attack.kind && attack.phase === 'acl' && path.includes('orca-spans-')) {
+      if (attack.kind && attack.phase === 'acl' && path.includes('agenticreplay-spans-')) {
         attack.transport = path;
         attack.displaced = `${path}.displaced`;
         await rename(path, attack.displaced);
@@ -71,7 +71,7 @@ describe.runIf(process.platform === 'win32')('agent-span transport replacement',
   it.each(['junction', 'directory', 'missing'])(
     'refuses a %s swapped in during ACL setup',
     async (kind) => {
-      root = await mkdtemp(join(tmpdir(), 'orca-transport-race-'));
+      root = await mkdtemp(join(tmpdir(), 'agenticreplay-transport-race-'));
       attack.target = join(root, 'attacker');
       await mkdir(attack.target);
       await writeFile(join(attack.target, 'keep'), 'attacker data');
@@ -84,7 +84,7 @@ describe.runIf(process.platform === 'win32')('agent-span transport replacement',
   );
 
   it('refuses a directory replaced when the spans file is created after narrowing', async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-transport-race-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-transport-race-'));
     attack.target = join(root, 'attacker');
     await mkdir(attack.target);
     await writeFile(join(attack.target, 'keep'), 'attacker data');

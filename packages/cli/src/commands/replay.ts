@@ -24,19 +24,19 @@ import {
   ensureRunsDir,
   snapToCheckpoint,
   TraceWriter,
-} from '@orcareplay/core';
-import { FsCapture } from '@orcareplay/fs-capture';
+} from '@agenticreplay/core';
+import { FsCapture } from '@agenticreplay/fs-capture';
 import {
   createProxy,
   defaultDialects,
   type RecordedExchange,
   type RecordedRetrieval,
   type RunCa,
-} from '@orcareplay/proxy';
-import { defaultAdapters, resolveLaunch } from '@orcareplay/adapters';
-import { serveViewer } from '@orcareplay/viewer';
-import { isBlobRef, type TraceEvent } from '@orcareplay/schema';
-import type { HarnessArtifacts } from '@orcareplay/plugin-api';
+} from '@agenticreplay/proxy';
+import { defaultAdapters, resolveLaunch } from '@agenticreplay/adapters';
+import { serveViewer } from '@agenticreplay/viewer';
+import { isBlobRef, type TraceEvent } from '@agenticreplay/schema';
+import type { HarnessArtifacts } from '@agenticreplay/plugin-api';
 import { ExchangeEventDeriver, appendDerivedEvents } from '../exchange-events.js';
 import { cdCommand, type Output } from '../out.js';
 import type { ParsedArgs } from '../args.js';
@@ -45,13 +45,13 @@ import { appendSnapshot } from '../fs-events.js';
 import { drainMcpFrames, mcpForReplay, pointAtMcpConfig } from '../mcp.js';
 import { planTlsCapture, recordedTlsHosts, setupTlsCapture, trustRunCa } from '../tls-capture.js';
 import { upstreamPlan, type UpstreamPlan } from '../upstream.js';
-import { ORCA_VERSION } from '../version.js';
+import { AGENTICREPLAY_VERSION } from '../version.js';
 
 export interface ReplayResult {
   /** The run that was *read*: the recording being replayed or forked. */
   runId: string;
   mode: 'exact' | 'fork';
-  matchedExact: number;
+  canonicalExact: number;
   divergences: number;
   /**
    * Requests the recording could not serve.
@@ -80,43 +80,59 @@ export interface ReplayResult {
 /**
  * Rebuild the recorded exchanges from a trace.
  *
- * The raw request and response bodies are the authoritative record — they are what makes exact
- * replay exact — so they come back verbatim from the blob store rather than being regenerated
- * from the canonical form.
+ * Eligible redacted transport bodies come back verbatim from storage. Canonical request matching
+ * is a separate measure; a provider-translated origin response is not the client's response.
  */
 export async function loadExchanges(reader: TraceReader): Promise<RecordedExchange[]> {
   const events = await reader.events();
-  const requests = events.filter((e) => e.type === 'model.request');
-  const responses = events.filter((e) => e.type === 'model.response');
-
+  const requests = events.filter((e) => e.type === 'net.request' && e.attrs?.phase === 'body');
+  const responses = new Map<string, TraceEvent>();
+  for (const event of events) {
+    if (event.type === 'net.response' && typeof event.attrs?.request_id === 'string') {
+      responses.set(event.attrs.request_id, event);
+    }
+  }
   const dialects = defaultDialects();
   const exchanges: RecordedExchange[] = [];
-  for (const [i, req] of requests.entries()) {
-    const res = responses[i];
+  for (const req of requests) {
+    const id = req.attrs?.request_id;
+    if (typeof id !== 'string') continue;
+    const res = responses.get(id);
+    if (
+      !res ||
+      !res.causes?.includes(req.seq) ||
+      res.attrs?.response_complete !== true ||
+      req.attrs?.capture_incomplete ||
+      req.attrs?.truncated ||
+      res.attrs?.capture_incomplete ||
+      res.attrs?.truncated ||
+      res.attrs?.abandoned ||
+      req.attrs?.replay_eligible === false ||
+      res.transformations?.some((change) => change.rule === 'provider-protocol-translation') ||
+      req.payload === undefined ||
+      res.payload === undefined
+    )
+      continue;
+    const dialectId = req.attrs?.model_dialect;
+    const dialect = dialects.find((d) => d.id === dialectId);
+    if (!dialect) continue;
     const rawRequest = await rawBodyOf(reader, req);
-    const rawResponse = res ? await rawBodyOf(reader, res) : '{}';
-    const dialectId = String(req.attrs?.dialect ?? 'anthropic');
-    const dialect = dialects.find((d) => d.id === dialectId) ?? dialects[0]!;
+    const rawResponse = await rawBodyOf(reader, res);
+    const headers = res.attrs?.headers as Record<string, unknown> | undefined;
+    const streamed =
+      String(headers?.['content-type'] ?? '').includes('text/event-stream') ||
+      rawResponse.trimStart().startsWith('data:') ||
+      rawResponse.trimStart().startsWith('event:');
     exchanges.push({
       seq: req.seq,
-      dialect: dialectId,
-      path: String(
-        req.attrs?.path ??
-          (dialectId === 'anthropic'
-            ? '/v1/messages'
-            : dialectId === 'codex'
-              ? '/backend-api/codex/responses'
-              : '/v1/chat/completions'),
-      ),
+      dialect: dialect.id,
+      path: String(req.attrs?.path ?? '/'),
       rawRequest,
       rawResponse,
-      status: Number(res?.attrs?.status ?? 200),
-      streamed: Boolean(res?.attrs?.streamed ?? false),
-      // The stored body is the provider's wire format, not the canonical form. Canonicalizing it
-      // with the same translator the proxy uses at replay time is what makes rung-1 matching
-      // possible at all — parsing it directly makes every request look like a major divergence.
+      status: Number(res.attrs?.status ?? 0),
+      streamed,
       canonicalRequest: dialect.toCanonicalRequest(JSON.parse(rawRequest)),
-      durationMs: Number(res?.attrs?.duration_ms ?? 0),
+      durationMs: Number(res.attrs?.duration_ms ?? 0),
     });
   }
   return exchanges;
@@ -149,6 +165,15 @@ export async function loadRetrievals(reader: TraceReader): Promise<RecordedRetri
     const key = request.attrs?.['replay_key'];
     if (typeof key !== 'string' || key === '') continue;
     const response = responses.get(request.seq);
+    if (
+      request.attrs?.['truncated'] ||
+      response?.attrs?.['truncated'] ||
+      request.attrs?.['capture_incomplete'] ||
+      response?.attrs?.['capture_incomplete'] ||
+      response?.attrs?.['abandoned'] ||
+      response === undefined
+    )
+      continue;
     const headers = response?.attrs?.['headers'];
     const contentType =
       headers !== null && typeof headers === 'object'
@@ -168,7 +193,7 @@ export async function loadRetrievals(reader: TraceReader): Promise<RecordedRetri
       // recorded vector answered. A recording made before that existed has none, and simply
       // cannot be reordered.
       rawRequest: await rawBodyOf(reader, request),
-      // A digest-only recording kept no body. Empty here is what the proxy reads as "orca has
+      // A digest-only recording kept no body. Empty here is what the proxy reads as "agenticreplay has
       // proof of this answer and not the answer", and it says so rather than serving nothing.
       rawResponse:
         stored === 'digest' || response === undefined ? '' : await rawBodyOf(reader, response),
@@ -214,7 +239,7 @@ async function rawBodyOf(reader: TraceReader, event: TraceEvent): Promise<string
 /**
  * The arguments that will make the agent ask again.
  *
- * A run recorded as `orca record claude -- -p "..."` carries its prompt in argv, and replaying it
+ * A run recorded as `agenticreplay record claude -- -p "..."` carries its prompt in argv, and replaying it
  * is simply a matter of passing it back. A run driven by hand carries nothing: the prompt went
  * into a terminal, and argv is just `["claude"]`. Replaying that launched an agent with no reason
  * to call anything, so the recorded exchanges were never requested and the replay came back empty.
@@ -247,7 +272,7 @@ function driveArgs(
  * first. What it *is* good for is the second question someone asks of a flaky pipeline — "is this
  * a concurrency problem?" — which is worth one flag and worth being asked for.
  *
- * The adapter declares which flag its harness spells this with; orca does not guess. An adapter
+ * The adapter declares which flag its harness spells this with; agenticreplay does not guess. An adapter
  * that declares none says so rather than silently doing nothing.
  */
 function serialized(
@@ -258,7 +283,7 @@ function serialized(
   const clamp = artifacts?.concurrencyFlag;
   if (clamp === undefined) {
     out.warn('replay.serialize_unsupported', {
-      why: 'this adapter declares no concurrency flag, so orca has nothing to clamp',
+      why: 'this adapter declares no concurrency flag, so agenticreplay has nothing to clamp',
       effect: 'the replay runs exactly as recorded',
     });
     return argv;
@@ -352,6 +377,12 @@ export async function replayCommand(
   const selector = args.positionals[0] ?? 'last';
   const runDir = (await resolveRunSelector(cwd, selector)).dir;
   const reader = await TraceReader.open(runDir);
+  if (reader.manifest().capture?.status === 'incomplete') {
+    out.warn('replay.source_incomplete', {
+      issues: reader.manifest().capture!.issues.join(','),
+      detail: 'only complete transport pairs are eligible; missing responses cannot be served',
+    });
+  }
   const manifest = reader.manifest();
   const events = await reader.events();
 
@@ -449,7 +480,7 @@ interface Ctx {
 async function replayExact(args: ParsedArgs, out: Output, ctx: Ctx): Promise<ReplayResult> {
   // Before `replayWorkspace`, because these refuse and `replayWorkspace` replaces the working
   // tree. Resolved after it, a refusal threw with the checkout holding the recorded run's files
-  // and the operator's own tree left behind in an `orca-safety-*` scratch whose path nothing
+  // and the operator's own tree left behind in an `agenticreplay-safety-*` scratch whose path nothing
   // prints — the outcome the release exists to prevent, escaping it because it only ran at the
   // child's launch. An invocation that cannot work should decide so before it touches anything,
   // which is the rule `attach` already follows where it resolves the advertised URL before making
@@ -457,7 +488,7 @@ async function replayExact(args: ParsedArgs, out: Output, ctx: Ctx): Promise<Rep
   //
   // Two refusals, not one. `upstreamPlan` rejects an upstream that is not an origin;
   // `planTlsCapture` rejects a `--tls-hosts` list that names `*` or contradicts itself, and an
-  // `ORCA_TLS_UPSTREAM_CA` that cannot be read. It is the refusing half of `setupTlsCapture` on
+  // `AGENTICREPLAY_TLS_UPSTREAM_CA` that cannot be read. It is the refusing half of `setupTlsCapture` on
   // its own — it mints nothing, so the certificate authority is still created down where the run
   // is, after the workspace exists.
   const plan = await upstreamPlan(args);
@@ -519,11 +550,11 @@ async function replayRestored(
   let openProxy: { close: () => Promise<void> } | undefined;
 
   /**
-   * Give up on a replay that has already built something, then re-throw. `orca record`'s
+   * Give up on a replay that has already built something, then re-throw. `agenticreplay record`'s
    * `abandon` is the same function for the same two reasons.
    *
    * A listening proxy keeps Node's event loop alive, so a throw printed the error and then hung
-   * forever — `orca replay` was the one command of the three that had to be killed. And an
+   * forever — `agenticreplay replay` was the one command of the three that had to be killed. And an
    * unsealed trace has no `ended_at` or `integrity`, so `verifyIntegrity` reports the run as
    * *tampered* rather than as unfinished.
    *
@@ -536,7 +567,7 @@ async function replayRestored(
     await writes.drain().catch(() => undefined);
     if (trace) {
       await trace
-        .append({ type: 'run.end', actor: 'orca', turn: 0, attrs: { error: String(err) } })
+        .append({ type: 'run.end', actor: 'agenticreplay', turn: 0, attrs: { error: String(err) } })
         .catch(() => undefined);
       await trace.close().catch(() => undefined);
     }
@@ -545,13 +576,13 @@ async function replayRestored(
 
   /*
    * Everything from here to the child's exit mints a key and then opens a socket, so everything
-   * from here to the child's exit has to come back through `abandon` — the rule `orca record`
+   * from here to the child's exit has to come back through `abandon` — the rule `agenticreplay record`
    * states in the same words, having learned it the same way.
    *
    * The guard used to start at the spawn, which covered the failure it was written for and missed
    * the four that happen first. `RunCa.create` writes `tls/ca.key`; `createProxy` binds; then
    * `mcpForReplay` rewrites a config and `adapter.prepare` runs a harness's own validation, which
-   * is where `orca replay` on a trace naming an adapter this build does not have ended up — the
+   * is where `agenticreplay replay` on a trace naming an adapter this build does not have ended up — the
    * right error message, printed, and then a process that never exited with a private key left
    * behind in the run directory.
    */
@@ -589,7 +620,7 @@ async function replayRestored(
         writes.push(async () => {
           await trace.append({
             type: 'divergence',
-            actor: 'orca',
+            actor: 'agenticreplay',
             // Turn 0 for everything in this trace, and deliberately not a running count. An exact
             // match produces no callback, so a counter here would number the third divergence as
             // turn 1 and claim a position in the conversation that it does not have. `source_seq`
@@ -601,7 +632,7 @@ async function replayRestored(
       },
       // Printed as it happens rather than tallied at the end. A halted replay stops the agent, so
       // the count in `replay.done` arrives after the operator has already seen the run die — and a
-      // bare `unmatched=1` with no reason is indistinguishable from a bug in orca itself.
+      // bare `unmatched=1` with no reason is indistinguishable from a bug in agenticreplay itself.
       //
       // The two directories are on the line because a distance in the hundreds of thousands is true
       // and unactionable. Harnesses put absolute paths in their tool calls, so a replay running
@@ -616,8 +647,8 @@ async function replayRestored(
         const delegation = enclosingDelegation(ctx.events, u.seq);
         const next =
           workspace.dir === ctx.manifest.cwd
-            ? 'orca replay <run> --loose'
-            : `${cdCommand(ctx.manifest.cwd)} && orca replay <run> --in-place   # or --loose to continue live`;
+            ? 'agenticreplay replay <run> --loose'
+            : `${cdCommand(ctx.manifest.cwd)} && agenticreplay replay <run> --in-place   # or --loose to continue live`;
         out.warn('replay.unmatched', {
           seq: u.seq,
           index: u.index,
@@ -645,7 +676,7 @@ async function replayRestored(
         writes.push(async () => {
           await trace.append({
             type: 'error',
-            actor: 'orca',
+            actor: 'agenticreplay',
             turn: 0,
             attrs: {
               rule: 'replay_unmatched',
@@ -666,7 +697,7 @@ async function replayRestored(
 
     await trace?.append({
       type: 'run.start',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 0,
       attrs: {
         adapter: ctx.manifest.adapter.id,
@@ -684,18 +715,18 @@ async function replayRestored(
       run: ctx.manifest.run_id,
       exchanges: ctx.exchanges.length,
       // Read from the flag, because `--loose` is exactly the run where it is not blocked. It was a
-      // literal, so `orca replay <run> --loose` announced `egress=blocked` and then answered the
+      // literal, so `agenticreplay replay <run> --loose` announced `egress=blocked` and then answered the
       // first unmatched request from the provider — the one line a reader checks to know whether a
       // run can spend money, saying the opposite of what the run was about to do. Worse than an
       // inaccuracy, because `replay halted` recommends `--loose` by name: the reader is following
-      // orca's own advice when the label stops being true.
+      // agenticreplay's own advice when the label stops being true.
       egress: args.bool('loose') ? 'live-on-unmatched' : 'blocked',
       proxy: proxy.url,
       cwd: workspace.dir,
     });
 
     // The agent runs live for everything that is not a model call, MCP included. Without a config it
-    // talks to servers orca cannot see — or, for a harness that requires the variable, does not start
+    // talks to servers agenticreplay cannot see — or, for a harness that requires the variable, does not start
     // at all, which is how a replay of a working recording exits non-zero for a reason that has
     // nothing to do with the recording.
     const mcp =
@@ -757,7 +788,7 @@ async function replayRestored(
       if (mcp) await drainMcpFrames(mcp, trace, () => 0, 0);
       await trace.append({
         type: 'run.end',
-        actor: 'orca',
+        actor: 'agenticreplay',
         turn: 0,
         attrs: {
           exit_code: verdict,
@@ -789,7 +820,7 @@ async function replayRestored(
       // every request was served from disk still reported one match. What someone wants to know here
       // is how much of the recording was reused, and how much of that reuse was exact.
       reused: `${stats.matchedExact + stats.matchedInexact}/${ctx.exchanges.length}`,
-      exact: stats.matchedExact,
+      canonical_exact: stats.matchedExact,
       divergences: stats.divergences,
       unmatched: stats.unmatched,
       // Only when it happened. An exchange served from a position other than the cursor is not a
@@ -808,19 +839,19 @@ async function replayRestored(
       runId: ctx.manifest.run_id,
       mode: 'exact',
       ...(trace === undefined ? {} : { traceRunId: trace.runId }),
-      matchedExact: stats.matchedExact,
+      canonicalExact: stats.matchedExact,
       divergences: stats.divergences,
       unmatched: stats.unmatched,
       liveCalls: stats.liveCalls,
       exitCode: verdict,
     };
   } catch (err) {
-    // `return await`, not the bare `return abandon(err)` that `orca record` can afford. The
+    // `return await`, not the bare `return abandon(err)` that `agenticreplay record` can afford. The
     // difference is the `finally` below: a promise returned out of a `catch` is not adopted by
     // the caller until the `finally` has finished, and this one awaits real I/O, so the
     // rejection sits with no handler attached for as long as that takes. Node reports it as an
     // unhandled rejection and kills the process on the spot — the operator got a raw stack trace
-    // where `orca replay` had always printed `error replay.failed`, and `main`'s catch never ran
+    // where `agenticreplay replay` had always printed `error replay.failed`, and `main`'s catch never ran
     // at all. Awaiting here turns it back into a throw *inside* the catch, before the finally,
     // which is what every frame above expects.
     return await abandon(err);
@@ -845,17 +876,17 @@ async function replayRestored(
  * into the run being replayed — it is append-only and its manifest carries a digest over
  * events.jsonl, so a single line appended would invalidate every verification anyone had done of
  * it — so the replay becomes a run of its own, pointing back at its subject through `parent_run`.
- * That one field is what `orca list`, `orca show` and `orca gc` already read, which is why it is
+ * That one field is what `agenticreplay list`, `agenticreplay show` and `agenticreplay gc` already read, which is why it is
  * on the manifest and not only in an event: gc uses it to refuse to delete a run something else
  * still points at.
  *
  * There is no `fork_point`. An exact replay does not branch anywhere, and a fabricated checkpoint
- * would be a number `orca list` prints as though someone had chosen it.
+ * would be a number `agenticreplay list` prints as though someone had chosen it.
  *
  * What it deliberately does NOT record is the exchanges it served. Every one of them was read out
  * of the parent's own events.jsonl and handed back byte for byte, so copying them here would
  * duplicate the trace's single largest cost — the conversation bodies, blobs and all — to store a
- * second copy that is identical by construction, and would make `orca gc` report a store twice the
+ * second copy that is identical by construction, and would make `agenticreplay gc` report a store twice the
  * size for one recording's worth of content. An unmatched request is the opposite case: it is
  * something the agent asked that the recording never contained, so it exists nowhere else and is
  * written as an `error` event above. The rule is that this trace holds what replaying *discovered*,
@@ -872,10 +903,10 @@ async function openReplayTrace(
     adapter: ctx.manifest.adapter,
     argv: ctx.manifest.argv,
     // Where the replay actually ran, which is not always where the recording did: `--worktree`
-    // puts it in a scratch copy, and `orca gc` reads exactly this to decide whether the directory
+    // puts it in a scratch copy, and `agenticreplay gc` reads exactly this to decide whether the directory
     // is one of ours to reclaim.
     cwd,
-    orcaVersion: ORCA_VERSION,
+    agenticreplayVersion: AGENTICREPLAY_VERSION,
     parentRun: ctx.manifest.run_id,
   });
 }
@@ -915,9 +946,9 @@ async function replayFork(
 
   // Before the worktree and the fork's own run directory, because both of these refuse:
   // `upstreamPlan` an upstream that is not an origin, `planTlsCapture` a `--tls-hosts` list that
-  // names `*` or contradicts itself and an `ORCA_TLS_UPSTREAM_CA` that cannot be read. Resolved
-  // after them, a typo in any of them left a restored temp tree in `$TMPDIR` that `orca gc` will
-  // not reclaim — no manifest points at it — and an empty fork in `orca list`, reading
+  // names `*` or contradicts itself and an `AGENTICREPLAY_TLS_UPSTREAM_CA` that cannot be read. Resolved
+  // after them, a typo in any of them left a restored temp tree in `$TMPDIR` that `agenticreplay gc` will
+  // not reclaim — no manifest points at it — and an empty fork in `agenticreplay list`, reading
   // `FROM <parent>@<n>` as though it had run.
   const plan = await upstreamPlan(args);
   // A fork continues a recorded conversation, so it is intercepted on the same terms the
@@ -926,8 +957,8 @@ async function replayFork(
   await planTlsCapture(args, forkInterceptedHosts);
 
   // Before the worktree too, for the same reason as the two above: this refuses, and refusing
-  // after `mkdtemp` left an empty `orca-<seq>-*` directory in `$TMPDIR` on every attempt — no
-  // manifest points at it, so `orca gc` never reclaims it, and nothing printed where it was.
+  // after `mkdtemp` left an empty `agenticreplay-<seq>-*` directory in `$TMPDIR` on every attempt — no
+  // manifest points at it, so `agenticreplay gc` never reclaims it, and nothing printed where it was.
   let restoreFrom: { fs: FsCapture; tree: string } | undefined;
   if (checkpoint.fsTree && args.bool('fs', true)) {
     // Restore from the ORIGINAL run's shadow store: that is the only place the tree object
@@ -939,14 +970,14 @@ async function replayFork(
     // The line above guards against reading the WRONG store. It cannot guard against there being
     // no store at all, and `materialize` then died inside git — "failed to unpack tree object
     // <40 hex>" — which names neither the cause nor anything to do about it, on the exact path the
-    // gateway console tells people to take (`orca pull <run>` then `orca compare last --from N`).
+    // gateway console tells people to take (`agenticreplay pull <run>` then `agenticreplay compare last --from N`).
     //
     // Refusing rather than forking anyway: an empty worktree is not the state the checkpoint
     // describes, and a fork from the wrong state is the failure this machinery exists to prevent.
     // `--no-fs` is the way to say "the conversation is what I am forking", and it now leaves the
     // workspace alone on both ends — this restore and the fork's own capture below.
     if (!(await fs.hasTree(checkpoint.fsTree))) {
-      // The detail goes in the warning, not the thrown message: `orca compare` renders each leg's
+      // The detail goes in the warning, not the thrown message: `agenticreplay compare` renders each leg's
       // error in one cell of a table, so anything past the first line is lost exactly where this
       // is most likely to be read.
       out.warn('fork.no_snapshot', {
@@ -955,7 +986,7 @@ async function replayFork(
         store: join(ctx.runDir, 'fs'),
         why: NO_SNAPSHOT_WHY,
         recorded_in: ctx.manifest.cwd,
-        next: `orca ${args.command} ${ctx.manifest.run_id} --from ${checkpoint.seq} --no-fs   # fork the conversation, without the workspace`,
+        next: `agenticreplay ${args.command} ${ctx.manifest.run_id} --from ${checkpoint.seq} --no-fs   # fork the conversation, without the workspace`,
       });
       throw new Error(
         `no workspace snapshot for the checkpoint at seq ${checkpoint.seq} — see fork.no_snapshot; --no-fs forks without it`,
@@ -965,7 +996,7 @@ async function replayFork(
     restoreFrom = { fs, tree: checkpoint.fsTree };
   }
 
-  const worktree = await mkdtemp(join(tmpdir(), `orca-${checkpoint.seq}-`));
+  const worktree = await mkdtemp(join(tmpdir(), `agenticreplay-${checkpoint.seq}-`));
   if (restoreFrom !== undefined) {
     await restoreFrom.fs.restore(restoreFrom.tree, worktree, { allowIncomplete: true });
   }
@@ -975,9 +1006,9 @@ async function replayFork(
     adapter: ctx.manifest.adapter,
     argv: ctx.manifest.argv,
     cwd: worktree,
-    orcaVersion: ORCA_VERSION,
+    agenticreplayVersion: AGENTICREPLAY_VERSION,
     // Also in the manifest, not only the fork event: the manifest is what an out-of-process
-    // reader sees first, and `orca gc` uses it to decide a parent run may not be deleted.
+    // reader sees first, and `agenticreplay gc` uses it to decide a parent run may not be deleted.
     parentRun: ctx.manifest.run_id,
     forkPoint: checkpoint.seq,
     ...(ctx.model === undefined ? {} : { forkModel: ctx.model }),
@@ -1002,7 +1033,7 @@ async function replayFork(
    * The fork's own filesystem capture, over its worktree.
    *
    * A fork had none, so its trace carried no `fs.snapshot` — and a checkpoint is derived from a
-   * snapshot (spec §3), so a fork had no checkpoints and could not itself be forked. `orca compare
+   * snapshot (spec §3), so a fork had no checkpoints and could not itself be forked. `agenticreplay compare
    * last` immediately after a fork failed with "this run has no checkpoints", because `last` had
    * resolved to the fork. The tool is pitched on iterative exploration; a branch you cannot branch
    * again is a dead end one step in.
@@ -1026,7 +1057,7 @@ async function replayFork(
     }
   }
 
-  // A fork runs a real agent live, so it has exactly the same blind spot `orca record` does: a
+  // A fork runs a real agent live, so it has exactly the same blind spot `agenticreplay record` does: a
   // harness that talks to its own backend over TLS reads no base-URL variable and is invisible
   // without interception. The flag was parsed here and silently discarded, which is the worse
   // half — the operator believes they captured that traffic.
@@ -1038,7 +1069,7 @@ async function replayFork(
   let openProxy: { close: () => Promise<void> } | undefined;
 
   /**
-   * The same two failures `orca record` had. A listening proxy keeps Node's event loop alive, so
+   * The same two failures `agenticreplay record` had. A listening proxy keeps Node's event loop alive, so
    * a throw printed the error and then hung; and a fork that mints a certificate authority must
    * not leave the private key on disk when it dies. The trace is sealed either way, because a
    * fork that failed to launch is still a fork someone will want to read.
@@ -1053,7 +1084,7 @@ async function replayFork(
     await writes.drain().catch(() => undefined);
     await mintedCa?.dispose().catch(() => undefined);
     await writer
-      .append({ type: 'run.end', actor: 'orca', turn, attrs: { error: String(err) } })
+      .append({ type: 'run.end', actor: 'agenticreplay', turn, attrs: { error: String(err) } })
       .catch(() => undefined);
     await writer.close().catch(() => undefined);
     throw err;
@@ -1098,7 +1129,7 @@ async function replayFork(
       writes.push(async () => {
         await writer.append({
           type: 'route.decision',
-          // On a fork the gateway is orca: it substituted the model and picked what serves it.
+          // On a fork the gateway is agenticreplay: it substituted the model and picked what serves it.
           actor: 'gateway',
           turn,
           attrs: { ...decision },
@@ -1109,7 +1140,7 @@ async function replayFork(
       writes.push(async () => {
         await writer.append({
           type: 'divergence',
-          actor: 'orca',
+          actor: 'agenticreplay',
           turn,
           attrs: { level: d.level, rung: d.rung, detail: d.detail, source_seq: d.seq },
         });
@@ -1121,11 +1152,11 @@ async function replayFork(
 
   // A fork is a run, and a run opens with run.start (spec §2.3). It opened on `fork` instead, so
   // the gateway refused every fork on push — "0 run.start and 1 run.end events" — which meant the
-  // output of `orca compare`, the thing the tool is pitched on, could not be shared with anyone.
+  // output of `agenticreplay compare`, the thing the tool is pitched on, could not be shared with anyone.
   // `fork` keeps everything that makes it a fork; it just is not the first line any more.
   await writer.append({
     type: 'run.start',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 0,
     attrs: {
       adapter: ctx.manifest.adapter.id,
@@ -1137,7 +1168,7 @@ async function replayFork(
 
   await writer.append({
     type: 'fork',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 0,
     attrs: {
       parent_run: ctx.manifest.run_id,
@@ -1160,7 +1191,7 @@ async function replayFork(
   });
 
   // `defaultAdapters().get` refuses a manifest naming an adapter this build does not have, which
-  // is what replaying a newer orca's recording looks like from here, and `prepare` is where a
+  // is what replaying a newer agenticreplay's recording looks like from here, and `prepare` is where a
   // harness validates its own invocation. Both are throws with the proxy already listening.
   const launch = await (async () => {
     const adapter = defaultAdapters().get(ctx.manifest.adapter.id);
@@ -1198,7 +1229,12 @@ async function replayFork(
   if (mcp) await drainMcpFrames(mcp, writer, turnAtFork, turn);
 
   const stats = proxy.stats();
-  await writer.append({ type: 'run.end', actor: 'orca', turn, attrs: { exit_code: exitCode } });
+  await writer.append({
+    type: 'run.end',
+    actor: 'agenticreplay',
+    turn,
+    attrs: { exit_code: exitCode },
+  });
   const manifest = await writer.close(exitCode);
   await proxy.close();
   await tls.ca?.dispose();
@@ -1223,7 +1259,7 @@ async function replayFork(
     forkRunId: writer.runId,
     worktree,
     mode: 'fork',
-    matchedExact: stats.matchedExact,
+    canonicalExact: stats.matchedExact,
     divergences: stats.divergences,
     unmatched: stats.unmatched,
     liveCalls: stats.liveCalls,
@@ -1246,7 +1282,7 @@ interface Workspace {
    *
    * False for `--in-place`, for a run with no snapshot to restore, and for a replay invoked from
    * somewhere other than the directory the recording was made in. It gates the one thing a replay
-   * does that is not reversible on its own: deleting an adapter's declared artifacts. Orca may
+   * does that is not reversible on its own: deleting an adapter's declared artifacts. AgenticReplay may
    * delete only what it took a copy of first — anywhere else that would be destroying the
    * operator's index to reproduce someone else's.
    */
@@ -1303,7 +1339,7 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
   // below may fall back to the operator's directory. Two branches did, both ahead of the one that
   // reads it: `--in-place` given beside it won without a word, and a run with no snapshot took the
   // in-place warning and ran the agent over the working tree anyway. Measured on a run recorded
-  // with --no-fs: `orca replay last --worktree` wrote the recorded edit over uncommitted work.
+  // with --no-fs: `agenticreplay replay last --worktree` wrote the recorded edit over uncommitted work.
   const wantsWorktree = args.bool('worktree');
   if (wantsWorktree && args.bool('in-place')) {
     throw new Error(
@@ -1324,7 +1360,7 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
     if (wantsWorktree) {
       out.warn('replay.no_snapshot', {
         why: 'this run was recorded without filesystem capture, so it holds no workspace to copy',
-        next: `orca replay ${ctx.manifest.run_id} --in-place   # against this directory as it stands`,
+        next: `agenticreplay replay ${ctx.manifest.run_id} --in-place   # against this directory as it stands`,
       });
       throw new Error(
         'no workspace snapshot to copy — see replay.no_snapshot; --in-place replays without it',
@@ -1342,13 +1378,13 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
 
   if (args.bool('worktree')) {
     // Both before `mkdtemp`, because either can refuse, and a refusal after it left an empty
-    // `orca-replay-*` directory in `$TMPDIR` on every attempt: nothing had printed its path yet,
-    // and `orca gc` never reclaims an exact replay's worktree.
+    // `agenticreplay-replay-*` directory in `$TMPDIR` on every attempt: nothing had printed its path yet,
+    // and `agenticreplay gc` never reclaims an exact replay's worktree.
     await assertSnapshotHeld(out, ctx, recorded, initial.fsTree);
     await keepNested(out, recorded, initial.fsTree, 'a fresh worktree');
     // A fresh directory, so there is nothing for a reset to remove: the restore below is the only
     // thing that puts anything here, and what it puts here is the recording's starting state.
-    const worktree = await mkdtemp(join(tmpdir(), `orca-replay-${ctx.manifest.run_id}-`));
+    const worktree = await mkdtemp(join(tmpdir(), `agenticreplay-replay-${ctx.manifest.run_id}-`));
     await recorded.restore(initial.fsTree, worktree, { allowIncomplete: true });
     return { dir: worktree, release: noRelease, restored: true };
   }
@@ -1375,10 +1411,10 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
 
   // A store of its own, under the OS temp dir: the safety snapshot is scratch, and writing it into
   // the trace's shadow store would leave an object in a recorded run that nothing references.
-  const scratch = await mkdtemp(join(tmpdir(), 'orca-safety-'));
+  const scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-safety-'));
   // With the adapter's declared artifacts, for the reason the safety snapshot exists at all: the
   // replay is about to delete those paths (see `resetArtifacts`), and a snapshot that skipped
-  // them because the workspace ignores them would make that deletion permanent. Orca may delete
+  // them because the workspace ignores them would make that deletion permanent. AgenticReplay may delete
   // only what it has a copy of.
   const forced = [
     ...new Set([...(artifacts?.capture ?? []), ...(artifacts?.resetBeforeReplay ?? [])]),
@@ -1400,9 +1436,9 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
   const keptHere = await safety.gitlinks(before.tree);
   // And the ones no snapshot could hold at all. A nested repository with no commit is not a
   // gitlink — git has no id to record it by — so neither `gitlinks` call can see it, and before
-  // this the safety snapshot did not merely miss it: it threw, and `orca replay` exited on git's
-  // own sentence about a commit checked out with an `orca-safety-*` directory left behind. It is
-  // skipped now, which makes it exactly the case these lines are about: orca holds no copy of
+  // this the safety snapshot did not merely miss it: it threw, and `agenticreplay replay` exited on git's
+  // own sentence about a commit checked out with an `agenticreplay-safety-*` directory left behind. It is
+  // skipped now, which makes it exactly the case these lines are about: agenticreplay holds no copy of
   // what is inside it.
   //
   // And the repositories around a declared artifact path, which the forced add set aside for the
@@ -1417,12 +1453,13 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
   ].sort();
 
   // Not "they are left exactly as they are", which is only true of the restore. The replay runs
-  // the recorded agent live in this directory, and orca does not intercept what it does — so a
+  // the recorded agent live in this directory, and agenticreplay does not intercept what it does — so a
   // recorded build step, generator or `rm` reaches inside these repositories like any other
   // path, and neither snapshot holds anything of theirs. Said before the agent starts.
   keepNestedNote(out, kept, {
-    effect: 'orca holds no copy of what is inside them, so whatever this replay does there stays',
-    next: 'replay with --worktree to run the agent somewhere orca can put back',
+    effect:
+      'agenticreplay holds no copy of what is inside them, so whatever this replay does there stays',
+    next: 'replay with --worktree to run the agent somewhere agenticreplay can put back',
   });
 
   out.info('replay.restored', {
@@ -1474,8 +1511,8 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
     // thing the failure means you still need — better a directory to clean up by hand than the
     // one that had your uncommitted work in it.
     //
-    // Left behind on every run until now: a whole workspace per `orca replay`, in a directory
-    // `orca gc` deliberately will not touch because it only reclaims scratch worktrees belonging
+    // Left behind on every run until now: a whole workspace per `agenticreplay replay`, in a directory
+    // `agenticreplay gc` deliberately will not touch because it only reclaims scratch worktrees belonging
     // to forks. Owning its lifetime here is the fix; teaching gc to delete unknown temp
     // directories is how gc ends up removing someone's work.
     await rm(scratch, { recursive: true, force: true });
@@ -1538,15 +1575,15 @@ async function replayWorkspace(args: ParsedArgs, out: Output, ctx: Ctx): Promise
 /**
  * Why a run's events can name workspace snapshots its own store does not hold.
  *
- * Two ways, and nothing left on disk says which: `orca pull` of a run pushed without `--fs` — the
- * default, because push will not ship what scrub cannot reach — and `orca scrub --drop-fs`, which
+ * Two ways, and nothing left on disk says which: `agenticreplay pull` of a run pushed without `--fs` — the
+ * default, because push will not ship what scrub cannot reach — and `agenticreplay scrub --drop-fs`, which
  * deletes the store and keeps the `fs.snapshot` events that name it. This used to name only the
  * first, and as though it were unconditional ("a gateway archive … never the filesystem
  * snapshots"), which blamed a gateway for a run that had never been near one and hid the way to
  * get the snapshots: a copy pushed with `--fs` restores and replays exactly.
  */
 const NO_SNAPSHOT_WHY =
-  "the run's workspace snapshots are not in its store: a pulled run carries them only if it was pushed with --fs, and orca scrub --drop-fs deletes them";
+  "the run's workspace snapshots are not in its store: a pulled run carries them only if it was pushed with --fs, and agenticreplay scrub --drop-fs deletes them";
 
 /**
  * Refuse a restore the run's own store cannot serve, before anything is written.
@@ -1571,7 +1608,7 @@ async function assertSnapshotHeld(
     tree,
     store: join(ctx.runDir, 'fs'),
     why: NO_SNAPSHOT_WHY,
-    next: `orca replay ${ctx.manifest.run_id} --in-place   # against this directory as it stands`,
+    next: `agenticreplay replay ${ctx.manifest.run_id} --in-place   # against this directory as it stands`,
   });
   throw new Error(
     'no workspace snapshot to restore — see replay.no_snapshot; --in-place replays without it',
@@ -1664,7 +1701,7 @@ function reachedByReset(path: string, roots: readonly string[]): boolean {
  * `effect` differs by caller because the consequence does: a fork writes into a directory of its
  * own, where the repository is simply missing and the operator's copy is never in reach. An
  * in-place replay runs the agent over the operator's own tree, where it is very much in reach and
- * orca cannot put it back.
+ * agenticreplay cannot put it back.
  */
 function keepNestedNote(
   out: Output,
@@ -1716,7 +1753,7 @@ function adapterArtifacts(ctx: {
  * including entries whose recorded outcome was a failure, so keeping what looks valid promotes
  * the previous run's failures to completed work — a subtler wrong answer than the one being
  * fixed. The workspace is restored afterwards, which is what makes deleting acceptable at all,
- * and `workspace.restored` is the gate: orca deletes only where it took a copy first.
+ * and `workspace.restored` is the gate: agenticreplay deletes only where it took a copy first.
  */
 async function resetArtifacts(
   dir: string,
@@ -1807,7 +1844,7 @@ export interface Introduced {
  * and silent.
  *
  * Refusing rather than warning, because there is no second chance after the `rm`, and the rule this
- * replay is operating under says so in as many words: orca deletes only what it took a copy of
+ * replay is operating under says so in as many words: agenticreplay deletes only what it took a copy of
  * first. In the ordinary run nothing under these paths is excluded and this asks git one question
  * and moves on.
  */
@@ -1860,8 +1897,8 @@ export async function assertResettable(
   const rest = missing.length > 5 ? `, and ${missing.length - 5} more` : '';
   throw new Error(
     `this replay would delete ${roots.join(', ')} to put the harness back where the recording ` +
-      `started, and the copy orca took first does not hold ${shown}${rest} — a nested git ` +
-      'repository, or a path the sensitive-file rules keep out of every snapshot. Orca deletes ' +
+      `started, and the copy agenticreplay took first does not hold ${shown}${rest} — a nested git ` +
+      'repository, or a path the sensitive-file rules keep out of every snapshot. AgenticReplay deletes ' +
       'only what it has a copy of, so nothing has been deleted. Move those out of the reset ' +
       'paths, or replay with --in-place to leave the working tree alone.',
   );
@@ -1876,15 +1913,15 @@ export async function assertResettable(
  * undone from is an ordinary snapshot, which honours the workspace's `.gitignore`, so a path the
  * recording tracked and the workspace ignores now was overwritten with the recorded bytes, and the
  * put-back had nothing to put back. Measured: a `settings.json` moved into `.gitignore` after the
- * recording, holding the operator's local settings, came out of `orca replay` holding the
- * recording's, under "your files are restored when the replay ends" — and neither git nor orca
+ * recording, holding the operator's local settings, came out of `agenticreplay replay` holding the
+ * recording's, under "your files are restored when the replay ends" — and neither git nor agenticreplay
  * held the original anywhere. The rule `assertResettable` enforces for a delete holds for an
- * overwrite: orca destroys only what it took a copy of first.
+ * overwrite: agenticreplay destroys only what it took a copy of first.
  *
  * The same listing settles the other half of that sentence. A file the recorded tree holds and the
  * working tree does not — deleted since, say — is written by the restore, and the put-back, whose
  * copy never had it, left it there: a replay brought back a config the operator had removed and
- * committed the removal of. Those are returned for the put-back to take away again. Orca put them
+ * committed the removal of. Those are returned for the put-back to take away again. AgenticReplay put them
  * there, and nothing of the operator's was at those paths when it did.
  *
  * EVERY TREE THE RUN RECORDED, not only the one the restore writes. An exact replay makes the
@@ -1967,7 +2004,7 @@ export async function assertOverwritable(
     const shown = listed.slice(0, 5).join(', ');
     const rest = listed.length > 5 ? `, and ${listed.length - 5} more` : '';
     throw new Error(
-      `this replay would overwrite ${shown}${rest}: your tree has them and the copy orca took ` +
+      `this replay would overwrite ${shown}${rest}: your tree has them and the copy agenticreplay took ` +
         'first does not — the workspace ignores them, or they sit in a nested repository — so ' +
         'nothing could put them back. Nothing has been changed. Move them aside, or replay with ' +
         '--worktree to leave the working tree alone.',
@@ -2012,7 +2049,7 @@ export async function assertOverwritable(
  *
  * `rmdir` takes a directory only while it is empty, so one that something else wrote into stays,
  * with what it wrote. Exported for the test that pins which files it will not take; `judging` is
- * that test's way in to the moment a file is being judged, and nothing in orca passes one.
+ * that test's way in to the moment a file is being judged, and nothing in agenticreplay passes one.
  */
 export async function removeIntroduced(
   dir: string,
@@ -2024,7 +2061,7 @@ export async function removeIntroduced(
   const setAside: string[] = [];
   for (const file of introduced.files) {
     if (!onlyThroughDirectories(dir, file.path, introduced.walked)) continue;
-    const suffix = `.orca-${randomBytes(4).toString('hex')}`;
+    const suffix = `.agenticreplay-${randomBytes(4).toString('hex')}`;
     const outcome = await takeIfRecorded(join(dir, file.path), suffix, file.oids, judging);
     if (outcome === 'kept') kept.push(file.path);
     else if (outcome === 'set-aside') setAside.push(`${file.path}${suffix}`);
@@ -2034,14 +2071,14 @@ export async function removeIntroduced(
     try {
       rmdirSync(join(dir, made));
     } catch {
-      // Not empty: something wrote into it that is not orca's to take.
+      // Not empty: something wrote into it that is not agenticreplay's to take.
     }
   }
   if (kept.length > 0 || setAside.length > 0) {
     out.warn('replay.left_in_place', {
       paths: kept.length > 0 ? kept.sort().join(',') : undefined,
       set_aside: setAside.length > 0 ? setAside.sort().join(',') : undefined,
-      why: 'orca takes away only what it can show it put there, and could not show it of these — written since by something else, or in use where they could not be moved',
+      why: 'agenticreplay takes away only what it can show it put there, and could not show it of these — written since by something else, or in use where they could not be moved',
       next: 'delete them yourself if they are not yours; set_aside names ones whose path was taken while they were being judged',
     });
   }
@@ -2076,7 +2113,7 @@ async function takeIfRecorded(
     return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
   await judging?.(target);
-  // A file that cannot even be read is not one orca can show it wrote — and throwing here would
+  // A file that cannot even be read is not one agenticreplay can show it wrote — and throwing here would
   // leave it under the name it was set aside as. Back where it was, like any other.
   const now = await blobId(aside, oids).catch(() => undefined);
   if (now !== undefined && oids.has(now)) {
@@ -2192,7 +2229,7 @@ function warnArtifactsKept(artifacts: HarnessArtifacts | undefined, out: Output)
   if (paths.length === 0) return;
   out.warn('replay.artifacts_kept', {
     paths: paths.join(','),
-    why: 'this replay is not restoring the working tree, so orca has no copy to put back',
+    why: 'this replay is not restoring the working tree, so agenticreplay has no copy to put back',
     effect:
       'the harness may resume from artifacts the recording had not produced yet and ask nothing',
     next: 'replay without --in-place, or clear them yourself',
@@ -2217,7 +2254,7 @@ function agentStdoutFor(args: ParsedArgs): 'inherit' | 'stderr' | 'ignore' {
  * Where the replayed agent's own stdout goes:
  *
  *   inherit  the default — you asked to watch the run happen again, so you watch it
- *   stderr   `--json`: orca's stdout is the result document, so the agent's output moves aside
+ *   stderr   `--json`: agenticreplay's stdout is the result document, so the agent's output moves aside
  *            rather than landing in the middle of it
  *   ignore   `--quiet`: the run is being replayed for its verdict, not for its narration
  *

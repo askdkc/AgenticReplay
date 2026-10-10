@@ -12,8 +12,8 @@ import {
   resolveRunSelector,
   runGraph,
   chainTo,
-} from '@orcareplay/core';
-import { isBlobRef, validateEvent, validateManifest } from '@orcareplay/schema';
+} from '@agenticreplay/core';
+import { isBlobRef, validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -37,7 +37,7 @@ const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
 async function withIsolatedTmp<T>(
   body: () => Promise<T>,
 ): Promise<{ result: T; leftBehind: string[] }> {
-  const isolated = await mkdtemp(join(tmpdir(), 'orca-tmproot-'));
+  const isolated = await mkdtemp(join(tmpdir(), 'agenticreplay-tmproot-'));
   const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
   process.env.TMPDIR = isolated;
   process.env.TMP = isolated;
@@ -56,9 +56,9 @@ async function withIsolatedTmp<T>(
 /**
  * The acceptance test for the whole project.
  *
- *   orca record <agent>
- *   orca replay last
- *   orca replay last --from N --model <other>
+ *   agenticreplay record <agent>
+ *   agenticreplay replay last
+ *   agenticreplay replay last --from N --model <other>
  *
  * If these three work against a real child process, a real proxy and a real trace on disk, the
  * mechanism is proven. Everything else is refinement.
@@ -70,7 +70,7 @@ describe('end to end: record → replay → fork', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-e2e-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -151,7 +151,7 @@ describe('end to end: record → replay → fork', () => {
     const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
 
     expect(result.mode).toBe('exact');
-    expect(result.matchedExact).toBeGreaterThan(0);
+    expect(result.canonicalExact).toBeGreaterThan(0);
     expect(result.divergences).toBe(0);
     expect(result.liveCalls).toBe(0);
     expect(model.calls.length, 'exact replay must not reach the network at all').toBe(
@@ -175,7 +175,7 @@ describe('end to end: record → replay → fork', () => {
 
       const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
 
-      expect(result.matchedExact).toBeGreaterThan(0);
+      expect(result.canonicalExact).toBeGreaterThan(0);
       expect(result.divergences).toBe(0);
       expect(result.liveCalls).toBe(0);
     } finally {
@@ -191,7 +191,7 @@ describe('end to end: record → replay → fork', () => {
     try {
       const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
 
-      expect(result.matchedExact).toBe(0);
+      expect(result.canonicalExact).toBe(0);
       expect(result.exitCode, 'a halted replay must not look like a clean run').not.toBe(0);
       const halt = lines.find((l) => l.includes('replay.unmatched'));
       expect(halt, `no halt reason in output:\n${lines.join('\n')}`).toBeDefined();
@@ -220,7 +220,7 @@ describe('end to end: record → replay → fork', () => {
 
       const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
 
-      expect(result.matchedExact).toBeGreaterThan(0);
+      expect(result.canonicalExact).toBeGreaterThan(0);
       expect(result.exitCode).toBe(0);
       expect(lines.join('\n')).not.toContain('replay.unmatched');
     } finally {
@@ -265,7 +265,7 @@ describe('end to end: record → replay → fork', () => {
    * `upstreamPlan` rejects an upstream that is not an origin, and it used to be resolved *after*
    * `replayWorkspace` had already replaced the checkout with the recording — so the throw escaped
    * the `finally` that puts the tree back, which only begins at the child's launch. The operator's
-   * own files were left in an `orca-safety-*` scratch nothing pointed at, on a command that had
+   * own files were left in an `agenticreplay-safety-*` scratch nothing pointed at, on a command that had
    * just printed "your files are restored when the replay ends".
    *
    * Asserted on the file rather than on the error, because the error was never the problem.
@@ -280,7 +280,7 @@ describe('end to end: record → replay → fork', () => {
         out,
         workspace,
       ),
-    ).rejects.toThrow(/is not an origin orca can use/);
+    ).rejects.toThrow(/is not an origin agenticreplay can use/);
 
     expect(
       await readFile(join(workspace, 'auth.ts'), 'utf8'),
@@ -296,7 +296,7 @@ describe('end to end: record → replay → fork', () => {
    * The same misordering as above, in its quiet form. `upstreamPlan` throws for an upstream that is
    * not an origin, and every command resolved it *after* creating the run directory — `record`,
    * `attach`, and the fork path, which also restores a temp worktree first. So a typo in
-   * `--upstream-*` left an empty run for `orca list` to show, reading `FROM <parent>@<n>` on a fork
+   * `--upstream-*` left an empty run for `agenticreplay list` to show, reading `FROM <parent>@<n>` on a fork
    * as though it had run, plus a restored tree abandoned in `$TMPDIR`. Nothing was lost, which is
    * why it went unnoticed; it is the same rule, and the rule is that an invocation which cannot
    * work decides so before it touches anything.
@@ -311,7 +311,7 @@ describe('end to end: record → replay → fork', () => {
         out,
         workspace,
       ),
-    ).rejects.toThrow(/is not an origin orca can use/);
+    ).rejects.toThrow(/is not an origin agenticreplay can use/);
     expect((await listRuns(workspace)).length, 'a refused record must not have created a run').toBe(
       before,
     );
@@ -335,7 +335,7 @@ describe('end to end: record → replay → fork', () => {
         out,
         workspace,
       ),
-    ).rejects.toThrow(/is not an origin orca can use/);
+    ).rejects.toThrow(/is not an origin agenticreplay can use/);
     expect((await listRuns(workspace)).length, 'a refused fork must not have created a run').toBe(
       afterGood,
     );
@@ -349,7 +349,7 @@ describe('end to end: record → replay → fork', () => {
    * checkout, and after the replay's own run directory existed. The throw escaped the `finally`
    * that puts the tree back for the same reason the upstream one did: that `finally` only begins
    * at the child's launch. So the operator was left holding the recording's files, with their own
-   * work in an `orca-safety-*` scratch whose path nothing prints.
+   * work in an `agenticreplay-safety-*` scratch whose path nothing prints.
    *
    * `planTlsCapture` is the refusing half on its own and mints nothing; `attach` already calls it
    * before its run directory for exactly this reason.
@@ -379,7 +379,7 @@ describe('end to end: record → replay → fork', () => {
   /**
    * The refusal that hoisting alone would still have missed.
    *
-   * `ORCA_TLS_UPSTREAM_CA` is read from disk, so it cannot be decided from the arguments the way
+   * `AGENTICREPLAY_TLS_UPSTREAM_CA` is read from disk, so it cannot be decided from the arguments the way
    * a host list can — `setupTlsCapture` opens it, past the restore. Two things now stand between
    * that and the operator's checkout: `planTlsCapture` reads the roots too, so the refusal
    * happens before `replayWorkspace`; and the release is armed for the whole restored span, so a
@@ -392,7 +392,7 @@ describe('end to end: record → replay → fork', () => {
     await record();
     await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
 
-    process.env.ORCA_TLS_UPSTREAM_CA = join(workspace, 'no-such-root.pem');
+    process.env.AGENTICREPLAY_TLS_UPSTREAM_CA = join(workspace, 'no-such-root.pem');
     try {
       await expect(
         replayCommand(
@@ -402,7 +402,7 @@ describe('end to end: record → replay → fork', () => {
         ),
       ).rejects.toThrow(/ENOENT|no such file/);
     } finally {
-      delete process.env.ORCA_TLS_UPSTREAM_CA;
+      delete process.env.AGENTICREPLAY_TLS_UPSTREAM_CA;
     }
 
     expect(
@@ -417,7 +417,7 @@ describe('end to end: record → replay → fork', () => {
    *
    * A fork restores its checkpoint into a temp worktree and opens its own run before it reaches
    * `setupTlsCapture`, and `record` opens its run first too — so a refused host list left an empty
-   * run for `orca list` to show, plus a worktree in `$TMPDIR` that `orca gc` will not reclaim
+   * run for `agenticreplay list` to show, plus a worktree in `$TMPDIR` that `agenticreplay gc` will not reclaim
    * because no manifest points at it. Cheaper than the checkout, the same rule.
    */
   it('leaves no run behind when it refuses the tls host list', async () => {
@@ -475,7 +475,7 @@ describe('end to end: record → replay → fork', () => {
    * only copy of the operator's tree was abandoned in `$TMPDIR` with nothing printing its path.
    *
    * The store is emptied of its objects rather than deleted, so `FsCapture.start` still opens it
-   * and the failure lands where it matters: on `read-tree`, inside the restore. `orca gc` on a
+   * and the failure lands where it matters: on `read-tree`, inside the restore. `agenticreplay gc` on a
    * half-copied trace gets there the same way.
    */
   it('puts the working tree back when the restore itself fails', async () => {
@@ -513,7 +513,7 @@ describe('end to end: record → replay → fork', () => {
    * `tls/ca.key` on disk.
    *
    * The throw here is a trace naming an adapter this build does not have, which is what replaying
-   * a newer orca's recording looks like. It also pins the other half: the proxy is listening by
+   * a newer agenticreplay's recording looks like. It also pins the other half: the proxy is listening by
    * then, and a proxy that is not closed keeps Node's event loop alive — so a regression shows up
    * as this test timing out rather than as a hang nobody notices until a user reports it.
    */
@@ -535,7 +535,7 @@ describe('end to end: record → replay → fork', () => {
     ).rejects.toThrow(/unknown adapter/);
 
     const withKey: string[] = [];
-    const runsRoot = join(workspace, '.orca', 'runs');
+    const runsRoot = join(workspace, '.agenticreplay', 'runs');
     for (const run of await readdir(runsRoot)) {
       const entries = await readdir(join(runsRoot, run)).catch(() => [] as string[]);
       if (entries.includes('tls')) withKey.push(run);
@@ -639,7 +639,7 @@ describe('end to end: record → replay → fork', () => {
     await writeFile(join(workspace, 'notes.txt'), 'MY NOTES\n');
 
     const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-    expect(replayed.matchedExact, 'the agent must actually have run').toBe(2);
+    expect(replayed.canonicalExact, 'the agent must actually have run').toBe(2);
     expect(existsSync(join(workspace, 'auth.ts')), 'the replayed agent left its file').toBe(false);
     expect(await readFile(join(workspace, 'notes.txt'), 'utf8')).toBe('MY NOTES\n');
   });
@@ -671,7 +671,7 @@ describe('end to end: record → replay → fork', () => {
    * git records a symlink as itself, so there this holds trivially; on Windows it is the case.
    */
   it('treats a directory link git walks into as the directory it is', async () => {
-    const outside = await mkdtemp(join(tmpdir(), 'orca-outside-'));
+    const outside = await mkdtemp(join(tmpdir(), 'agenticreplay-outside-'));
     const link = join(workspace, 'data');
     symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
     try {
@@ -682,7 +682,7 @@ describe('end to end: record → replay → fork', () => {
       await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
 
       const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-      expect(replayed.matchedExact).toBe(2);
+      expect(replayed.canonicalExact).toBe(2);
       expect(await readdir(outside), 'the deleted file must stay deleted').toEqual(['a.csv']);
       expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe('MY UNCOMMITTED WORK\n');
     } finally {
@@ -708,14 +708,14 @@ describe('end to end: record → replay → fork', () => {
     await writeFile(join(workspace, 'cfg'), 'MY UNCOMMITTED EDIT\n');
 
     const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-    expect(replayed.matchedExact).toBe(2);
+    expect(replayed.canonicalExact).toBe(2);
     expect(await readFile(join(workspace, 'cfg'), 'utf8')).toBe('MY UNCOMMITTED EDIT\n');
   });
 
   it('does not leave a copy of the working tree in the temp directory', async () => {
     // The safety snapshot is a shadow git store holding the whole workspace, and it was never
-    // removed — one per `orca replay`, growing with the size of your checkout, in a directory
-    // `orca gc` deliberately will not sweep because it only reclaims fork worktrees. Replay owns
+    // removed — one per `agenticreplay replay`, growing with the size of your checkout, in a directory
+    // `agenticreplay gc` deliberately will not sweep because it only reclaims fork worktrees. Replay owns
     // it, so replay has to clean it up.
     //
     // Watched in a temp directory of this test's own, not in the machine's. Diffing a listing of
@@ -723,7 +723,7 @@ describe('end to end: record → replay → fork', () => {
     // one another test's replay created in the same window, so under the parallel suite it failed
     // with nothing wrong. `replay.ts` calls `tmpdir()` at the moment it mkdtemps, so redirecting
     // it here is enough, and leaves the product's own output alone.
-    const isolatedTmp = await mkdtemp(join(tmpdir(), 'orca-e2e-tmp-'));
+    const isolatedTmp = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-tmp-'));
     const outerTmp = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
     process.env.TEMP = isolatedTmp;
     process.env.TMP = isolatedTmp;
@@ -732,7 +732,9 @@ describe('end to end: record → replay → fork', () => {
     try {
       await record();
       await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      const leaked = (await readdir(isolatedTmp)).filter((e) => e.startsWith('orca-safety-'));
+      const leaked = (await readdir(isolatedTmp)).filter((e) =>
+        e.startsWith('agenticreplay-safety-'),
+      );
       expect(leaked, 'the pre-replay snapshot store must not outlive the replay').toEqual([]);
     } finally {
       delete process.env.FAKE_AGENT_READ;
@@ -793,7 +795,7 @@ describe('end to end: record → replay → fork', () => {
 
     // Unchanged without the flag: a run with no snapshot still replays where it is, and says so.
     const inPlace = await replayCommand(parseArgs(['replay', noFs.runId]), out, workspace);
-    expect(inPlace.matchedExact).toBe(2);
+    expect(inPlace.canonicalExact).toBe(2);
     expect(lines.join('\n')).toContain('replay.in-place');
   });
 
@@ -812,11 +814,11 @@ describe('end to end: record → replay → fork', () => {
 
   /**
    * A RUN CAN BE WITHOUT THE STORE ITS OWN EVENTS POINT AT: pulled from a gateway it was pushed to
-   * without `--fs`, or put through `orca scrub --drop-fs`. Either way its `fs.snapshot` events name
+   * without `--fs`, or put through `agenticreplay scrub --drop-fs`. Either way its `fs.snapshot` events name
    * trees that are nowhere on this machine, and a restore of one died inside git — "failed to
-   * unpack tree object <40 hex>" — on `orca replay` and `--worktree` alike, while only the fork
+   * unpack tree object <40 hex>" — on `agenticreplay replay` and `--worktree` alike, while only the fork
    * path said what had happened. Each refusal also left an empty directory in `$TMPDIR` that
-   * nothing named and `orca gc` never reclaims.
+   * nothing named and `agenticreplay gc` never reclaims.
    */
   it('says why it cannot restore a run whose snapshots are gone, and leaves nothing behind', async () => {
     const recorded = await record(2);
@@ -873,7 +875,7 @@ describe('end to end: record → replay → fork', () => {
       workspace,
     );
     expect(inPlace.unmatched).toBe(0);
-    expect(inPlace.matchedExact).toBe(2);
+    expect(inPlace.canonicalExact).toBe(2);
   });
 
   it('says where the recording ran and where the replay ran when it halts', async () => {
@@ -899,11 +901,11 @@ describe('end to end: record → replay → fork', () => {
 
   it('points at the recording directory when the replay is somewhere else', async () => {
     await record();
-    const elsewhere = await mkdtemp(join(tmpdir(), 'orca-elsewhere-'));
+    const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-elsewhere-'));
     process.env.FAKE_AGENT_PROMPT = 'ask something else entirely';
     try {
       // Copy the trace, not the files: this is someone replaying a colleague's run.
-      await run('cp', ['-r', join(workspace, '.orca'), elsewhere]);
+      await run('cp', ['-r', join(workspace, '.agenticreplay'), elsewhere]);
       await replayCommand(parseArgs(['replay', 'last']), out, elsewhere);
 
       const warned = lines.find((l) => l.includes('replay.elsewhere')) ?? '';
@@ -925,7 +927,7 @@ describe('end to end: record → replay → fork', () => {
    */
   it('restores and puts back where it was recorded, however that path is spelled', async () => {
     await record(2);
-    const aliasRoot = await mkdtemp(join(tmpdir(), 'orca-alias-'));
+    const aliasRoot = await mkdtemp(join(tmpdir(), 'agenticreplay-alias-'));
     const alias = join(aliasRoot, 'same');
     await symlink(workspace, alias, process.platform === 'win32' ? 'junction' : 'dir');
     const spellings = [alias];
@@ -975,7 +977,7 @@ describe('end to end: record → replay → fork', () => {
     // `proxy.close()` and `writer.close()`.
     //
     // The proxy is the visible one: a listening server keeps Node's event loop alive, so
-    // `orca record generic-openai -- /nonexistent` printed its error and then **hung** — verified
+    // `agenticreplay record generic-openai -- /nonexistent` printed its error and then **hung** — verified
     // against the built CLI, killed at 12s. Mistyping an agent name is the first thing a new user
     // does.
     //
@@ -1070,7 +1072,7 @@ describe('end to end: record → replay → fork', () => {
 
   it('records the filesystem as a fork runs, so a fork can be forked again', async () => {
     // A fork used to record only the conversation. A checkpoint is derived from a snapshot
-    // (spec §3), so a fork had no checkpoints and could not be forked — and `orca compare last`
+    // (spec §3), so a fork had no checkpoints and could not be forked — and `agenticreplay compare last`
     // straight after a fork failed with "this run has no checkpoints", because `last` resolves to
     // the fork. A branch you cannot branch again is a dead end one step in.
     const recorded = await record();

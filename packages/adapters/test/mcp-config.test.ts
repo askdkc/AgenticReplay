@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { rewriteMcpConfig } from '../src/index.js';
 
-const SHIM = 'orca-mcp-shim';
+const SHIM = 'agenticreplay-mcp-shim';
 const SHIM_ARGS = ['--out', '/tmp/run/mcp.jsonl'];
 
 function fixture() {

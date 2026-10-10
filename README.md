@@ -1,29 +1,25 @@
-# OrcaReplay
+# AgenticReplay
 <sub>**English** · [简体中文](docs/i18n/README.zh-CN.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Deutsch](docs/i18n/README.de.md) · [Français](docs/i18n/README.fr.md) · [Español](docs/i18n/README.es.md) · [العربية](docs/i18n/README.ar.md)</sub>
 
-### Your agent broke something at 2am. Replay it at 9am — exactly, offline, as many times as you like.
+### Record model API traffic, inspect the evidence, and replay recorded responses offline.
 
-Record any coding agent. Reproduce the run byte-for-byte with no model called. Fork it from any step
-onto a different model and see who gets it right.
+AgenticReplay records supported clients at the HTTP proxy or process-local fetch boundary.
+It preserves serialized request and response bodies after documented redaction, including
+unknown provider fields and streaming content. A run with missing, interrupted, or over-limit
+bodies is incomplete. Capture status, upstream outcome, and the agent's exit status are separate.
 
-<a href="https://www.orcarouter.ai">
-  <img src="docs/orcarouter.svg" alt="OrcaRouter" height="28" align="left" hspace="10">
-</a>
+The default limit is **64 MiB per body**, configurable with `--max-body-bytes`; the buffering
+budget is configurable with `--max-buffered-bytes`. Whole-body redaction runs before persistence.
+The viewer exposes transformation details and complete redacted body downloads. Replay's
+`canonical_exact`/`canonicalExact` score measures canonical request matching, not transport-byte equality.
 
-**Built by the team behind [OrcaRouter](https://www.orcarouter.ai)** — one API key and one endpoint
-for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and the rest. It is what `orca setup` points at by
-default, and what makes `orca compare` a single command instead of four provider accounts.
-
-Find us: [OrcaRouter All model APIs](https://www.orcarouter.ai/models) 
-
-Github Repos: [OrcaCode Review](https://www.orcarouter.ai/code-review) · [OrcaRouter Lite](https://github.com/Continuum-AI-Corp/OrcaRouter-Lite) 
-
-Connect: [X](https://x.com/OrcaRouter) · [Discord](https://discord.com/invite/YEubt8enRA) · [Hugging Face](https://huggingface.co/orcarouter) · [Ollama](https://ollama.com/orcarouter)
-
-<br clear="left">
+Wrap the **host client** using Kiokuko (for example `agenticreplay record claude -- …`), not only
+its `kiokuko mcp` child. Native Kiokuko DSH needs the companion recorder changes. See
+[the acceptance status](docs/agenticreplay-acceptance.md) for verified paths and remaining gates.
+Provider-hidden reasoning and SDK changes before the capture boundary are not observable.
 
 [![License](https://img.shields.io/badge/code-Apache--2.0-blue)](LICENSE)
-[![Spec](https://img.shields.io/badge/trace%20spec-CC%20BY%204.0-blue)](spec/orca-trace-v0.md)
+[![Spec](https://img.shields.io/badge/trace%20spec-CC%20BY%204.0-blue)](spec/agenticreplay-trace-v0.md)
 [![Node](https://img.shields.io/badge/node-20%2B-brightgreen)](#install)
 [![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Agents%20SDK%20%C2%B7%20AI%20SDK%20%C2%B7%20any-black)](#which-agents)
 [![Good first issues](https://img.shields.io/badge/good%20first%20issues-12-orange)](docs/good-first-issues.md)
@@ -36,15 +32,15 @@ forked at checkpoint 4 onto two models and graded by `npx tsc --noEmit`. Nothing
 
 ## Try it in three commands
 
-One npm package named `orcareplay`, which puts one command named `orca` on your PATH. There is no
-separate tool called "orca", and nothing is installed into your agent.
+The npm package `agenticreplay` installs the `agenticreplay` command. It wraps the client process
+with temporary capture settings; it does not edit personal client configuration.
 
 ```console
-npm i -g orcareplay             # the package is orcareplay; the command it installs is orca
+npm i -g agenticreplay             # the package is agenticreplay; the command it installs is agenticreplay
 
-orca record claude              # your agent, unmodified, doing whatever it does
-orca replay last                # the same run again — no network, no tokens, no charge
-orca replay last --from 4 --model claude-haiku-4-5 --ui
+agenticreplay record claude              # your agent, unmodified, doing whatever it does
+agenticreplay replay last                # the same run again — no network, no tokens, no charge
+agenticreplay replay last --from 4 --model claude-haiku-4-5 --ui
 ```
 
 The third line is the one people stay for: same files, same conversation prefix, different model
@@ -54,7 +50,7 @@ The three commands at the top need an agent installed, a key, a network and real
 have none of those yet, one command brings its own:
 
 ```console
-orca quickstart
+agenticreplay quickstart
 ```
 
 It writes a small project with a genuine bug in it and a recording of an agent fixing that bug,
@@ -82,9 +78,9 @@ failure, you add print statements to someone else's harness. The tools that exis
 observability tools: they tell you a run cost $4.12 and used 61k tokens, which is not the question
 you have. The question you have is *why did it delete my migration file.*
 
-OrcaReplay answers that by giving you the run back.
+AgenticReplay answers that by giving you the run back.
 
-|  | Observability tools | OrcaReplay |
+|  | Observability tools | AgenticReplay |
 |---|---|---|
 | Tells you what a run cost | ✅ | ✅ |
 | Tells you which tool call deleted the file | sometimes | ✅ |
@@ -99,7 +95,7 @@ The last two rows are the ones an SDK wrapper structurally cannot reach. Capture
 the agent — at the process and socket boundary — so it does not matter whether the agent is
 yours, whether you can edit it, or whether it even holds an API key: a Codex CLI signed in with
 a ChatGPT subscription talks to its own backend over TLS, with a credential that only that backend
-accepts, so it cannot be pointed elsewhere and stay the same session — and orca can still record
+accepts, so it cannot be pointed elsewhere and stay the same session — and agenticreplay can still record
 it. See
 [when the harness will not be redirected](#when-the-harness-will-not-be-redirected).
 
@@ -108,7 +104,7 @@ it. See
 Model APIs are stateless, so on every turn an agent resends the entire conversation — including the
 previous turn's tool results. **A proxy in front of the model therefore sees the whole loop**: each
 request, each streamed response, every tool call the model emitted, and every tool result the
-harness produced. That one property is what the tool is built on, and it is why **OrcaReplay does
+harness produced. That one property is what the tool is built on, and it is why **AgenticReplay does
 not patch your agent** — it stands up a local proxy, sets two environment variables, and gets out of
 the way.
 
@@ -126,7 +122,7 @@ all — none of which reaches the wire.
 flowchart LR
     A["<b>your agent</b><br/><i>unmodified</i>"]
 
-    subgraph orca["orca · six capture layers"]
+    subgraph agenticreplay["agenticreplay · six capture layers"]
         direction TB
         P["<b>proxy</b><br/>base-URL env var"]
         SH["<b>PATH shim</b><br/>exit code · timing · streams"]
@@ -136,11 +132,11 @@ flowchart LR
     end
 
     A --> P & SH & MC & FS & FH
-    P -->|"forwarded, auth intact"| U["<b>the model API</b><br/><i>or OrcaRouter · any gateway</i>"]
-    orca ==> T[("<b>one trace</b><br/>.orca/runs/run_a1b2c3")]
+    P -->|"forwarded, auth intact"| U["<b>the model API</b><br/><i>or your configured gateway</i>"]
+    agenticreplay ==> T[("<b>one trace</b><br/>.agenticreplay/runs/run_a1b2c3")]
 ```
 
-They all land in the same timeline, ordered by when they actually happened rather than when orca
+They all land in the same timeline, ordered by when they actually happened rather than when agenticreplay
 got around to reading them.
 
 ### Exact, fork and compare are one thing
@@ -165,9 +161,9 @@ flowchart LR
 
 | command | where the cursor sits | what you get |
 |---|---|---|
-| `orca replay last` | at the end | the whole run again, **network blocked** — no tokens, no charge, no variance |
-| `orca replay last --from 4 --model X` | at checkpoint 4 | turns up to 4 identical, then a different model takes over |
-| `orca compare last --from 4 --models a,b` | at checkpoint 4, several times | one table, one variable — the model |
+| `agenticreplay replay last` | at the end | the whole run again, **network blocked** — no tokens, no charge, no variance |
+| `agenticreplay replay last --from 4 --model X` | at checkpoint 4 | turns up to 4 identical, then a different model takes over |
+| `agenticreplay compare last --from 4 --models a,b` | at checkpoint 4, several times | one table, one variable — the model |
 
 A **checkpoint** is not recorded; it is *derived* — any point where the conversation prefix is
 complete and the workspace was snapshotted. Every fork therefore starts from a state that provably
@@ -179,7 +175,7 @@ Your agent was supposed to fix a failing auth test. It exited 0 and the test sti
 what it actually did:
 
 ```console
-$ orca show last
+$ agenticreplay show last
 run_6473f858b59e  generic-openai@0.1.0  14 events  exit 0
 
 SEQ  KIND   WHAT                                            DETAIL
@@ -205,11 +201,11 @@ Three facts the model's own transcript could not have told you, and the run's ex
 file really changed (seq 6, `+1 −3`), the check the agent ran **failed** (seq 12, `exit 1`), and it
 finished anyway. The run exited 0 because the *agent* exited 0.
 
-That last fact is the one worth a command of its own. `orca show` gives you the order things
-happened in; `orca graph` gives you what produced what:
+That last fact is the one worth a command of its own. `agenticreplay show` gives you the order things
+happened in; `agenticreplay graph` gives you what produced what:
 
 ```console
-$ orca graph last
+$ agenticreplay graph last
 FROM              TO               KIND      WHY
 3 model.response  4 tool.call      recorded  tool_use block in the response
 4 tool.call       6 fs.change      inferred  changed path appears in tool input, same or previous turn
@@ -226,7 +222,7 @@ happened, because a `tool_use` block is physically inside the response that emit
 once per turn rather than once per tool call, so attributing a file change to a *particular* call
 is a good guess and not a fact. Inferred edges are never written back into the trace, the same way
 checkpoints are derived and never recorded, so a field a third-party reader trusts never contains
-something orca made up.
+something agenticreplay made up.
 
 `--graph-card` draws the whole run that way — time left to right, kind of thing top to bottom, with
 the chain that produced the failure lit against everything else:
@@ -237,7 +233,7 @@ The shape is the point. A run is one motif repeated — request, response, call,
 anything that breaks it is worth a look, and an event with **no edge leaving it** is an absence a
 list cannot show at all.
 
-`orca export last --card bug.svg` draws just that chain, which is the version that fits in an issue
+`agenticreplay export last --card bug.svg` draws just that chain, which is the version that fits in an issue
 or a message:
 
 ![One causal chain: a model response, the bash tool call it emitted, the shell command, and its exit 1](docs/chain-card.png)
@@ -248,30 +244,30 @@ prints the command that reproduces it.
 
 SVG renders in a GitHub issue and almost nowhere else that matters — X will not take it as an
 upload, and Slack and Discord give it no preview — so name the file `.png` and you get one, or
-`.gif` and the chain builds a hop at a time. That path needs a browser, and orca does not depend on
+`.gif` and the chain builds a hop at a time. That path needs a browser, and agenticreplay does not depend on
 one: `docs/media/README.md` keeps the render toolchain out of `package.json` so nobody running
 `npm ci` pays for a Chromium download, and a picture command is not a reason to reverse that. Ask
-for a raster without it and orca says the one line that fixes it; `orca doctor` reports it either
+for a raster without it and agenticreplay says the one line that fixes it; `agenticreplay doctor` reports it either
 way, and `.svg` never needs anything.
 
 ```console
-orca export last --card bug.png       # the chain, ready to post
-orca export last --card bug.gif       # the same chain, one hop per frame
+agenticreplay export last --card bug.png       # the chain, ready to post
+agenticreplay export last --card bug.gif       # the same chain, one hop per frame
 npm i --no-save playwright-core pngjs gifenc   # only needed for the two above
 ```
 
 Now reproduce it as often as you like, for nothing:
 
 ```console
-$ orca replay last
-info replay.done reused=2/2 exact=2 divergences=0 unmatched=0 exit=0
+$ agenticreplay replay last
+info replay.done reused=2/2 canonical_exact=2 divergences=0 unmatched=0 exit=0
 ```
 
 No network, no tokens, no variance. Then ask the question you actually have — *would a different
 model have got this right?*
 
 ```console
-$ orca compare last --from 5 --models claude-opus-5,claude-haiku-4-5 --verify "npm test"
+$ agenticreplay compare last --from 5 --models claude-opus-5,claude-haiku-4-5 --verify "npm test"
 MODEL             VERDICT  TOKENS  COST       WALL  RUN
 claude-opus-5     pass     201/25  $0.004890  0.3s  run_1457b35062ba
 claude-haiku-4-5  pass     201/25  $0.000326  0.3s  run_b8ee08479fb6
@@ -282,30 +278,30 @@ is the only thing that changed, which is the only reason that number means anyth
 
 ## The timeline
 
-`orca replay last --ui` (or `orca ui`) opens the run as one self-contained HTML file — no server
+`agenticreplay replay last --ui` (or `agenticreplay ui`) opens the run as one self-contained HTML file — no server
 to keep running, no network, nothing to install. Filter it, step it, or press space and watch the
 run play back at the pace it actually happened.
 
-![The OrcaReplay timeline: filtering a 42-event run down to its tool loop](docs/demo-viewer.gif)
+![The AgenticReplay timeline: filtering a 42-event run down to its tool loop](docs/demo-viewer.gif)
 
 Every layer lands in the same timeline, so you can read the run as one story rather than four:
 the model turns and their token counts, each tool call with its arguments and result, the shell
 commands with their exit codes and timing, and the filesystem changes with the tree they produced.
 
-`orca export last -o bug.html` writes exactly that page to a single file you can attach to an
+`agenticreplay export last -o bug.html` writes exactly that page to a single file you can attach to an
 issue. It carries no external reference of any kind — CI asserts that — so it renders from a
 download folder, on a plane, in five years.
 
 ## Same task, different model
 
-`orca compare` forks one recorded run onto several models from the same checkpoint, with the same
+`agenticreplay compare` forks one recorded run onto several models from the same checkpoint, with the same
 files and the same conversation prefix, and grades each one with a command you choose. The model
 is the only variable, which is what makes the answer mean anything.
 
 ![A comparison table: two models forked from the same checkpoint, both passing, with real token counts and costs](docs/compare-card.png)
 
 ```console
-orca compare last --from 4 \
+agenticreplay compare last --from 4 \
   --models claude-sonnet-5,claude-haiku-4-5 \
   --verify "npm test" \
   --share verdict.svg          # the card above, ready to paste into an issue
@@ -319,11 +315,10 @@ and where the key goes. All of that is real and none of it is discoverable, so t
 that asks instead:
 
 ```console
-$ orca setup
-Gateway URL (serves the model APIs) [https://api.orcarouter.ai]:
-  get a key at https://www.orcarouter.ai/console/token — OrcaRouter keys start sk-orca-
+$ agenticreplay setup
+Gateway URL (required): https://gateway.example
 API key (stored 0600; leave blank for none):
-  info config.saved path=~/.config/orca/config.json mode=0600 gateway=https://api.orcarouter.ai auth=stored
+  info config.saved path=~/.config/agenticreplay/config.json mode=0600 gateway=https://gateway.example auth=stored
 
   6 models available:
     anthropic/claude-opus-5
@@ -331,7 +326,7 @@ API key (stored 0600; leave blank for none):
     openai/gpt-5.2
     ...
 
-$ orca models
+$ agenticreplay models
 MODEL                      $/MTOK IN  $/MTOK OUT
 anthropic/claude-opus-5    15         75
 anthropic/claude-haiku-4-5 1          5
@@ -339,77 +334,60 @@ openai/gpt-5.2             1.25       10
 some-local-model           —          —
 ```
 
-`orca setup` asks the gateway what it actually serves rather than just writing the file, so a wrong
+`agenticreplay setup` asks the gateway what it actually serves rather than just writing the file, so a wrong
 URL or a dead key is an answer now instead of a 401 in the middle of a comparison. It also stores the
-models you picked, so after that `orca compare last --verify "npm test"` needs no model list and no
-upstream flags at all. `orca models` prices what it recognises and shows a
+models you picked, so after that `agenticreplay compare last --verify "npm test"` needs no model list and no
+upstream flags at all. `agenticreplay models` prices what it recognises and shows a
 dash for what it does not, because inventing a number for an unknown model is how a comparison
 table ends up quoting a cost that was never real.
 
-[**OrcaRouter**](https://www.orcarouter.ai) is the default answer to that first question — press
-Enter and you have one origin and one key serving Claude, GPT, Gemini, Grok, DeepSeek, Qwen and the
-rest, which is exactly the shape `orca compare` wants. Its model ids are namespaced by provider
-(`anthropic/claude-sonnet-4.6`, `openai/gpt-4o-mini`), which orca handles: the namespace picks the
-wire format and is stripped before pricing.
+A gateway must be configured explicitly. Use an endpoint you control or a provider you choose
+that supports the required API dialects. There is no default gateway.
 
-It is a *default*, not a destination: type over it, or pass `--gateway <url>`, and anything that
-speaks the OpenAI-compatible `/v1/models` and chat endpoints works just as well — another hosted
-gateway, or something you run yourself.
-
-It is also only ever a default for traffic **you** asked to send somewhere. With no gateway
-configured, `orca record` proxies your agent's own calls straight to whatever provider it was
-already talking to, on the agent's own key. Orca does not reroute a recording you never configured:
-that would post your source code to a third party as a side effect of pressing record.
-
-Non-interactive: `orca setup --key <k>` takes the default, `orca setup --gateway <url> --key <k>`
-names another, and `--key-env <VAR>` reads the key from the environment rather than keeping a
-credential on disk.
+Without a configured gateway, `agenticreplay record` retains the agent's selected provider and
+credentials. Non-interactive setup requires `agenticreplay setup --gateway <url> --key-env <VAR>`;
+`--key <key>` stores the credential in the private configuration file instead.
 
 The key never reaches a trace. It is attached to the outbound request only, while what gets
 recorded is built from the *incoming* request with auth stripped — so it is invisible to the
 recording by construction, not by a rule someone has to remember. It is withheld entirely if a flag
 sends that traffic somewhere other than the gateway that issued it.
 
-## The other half of the run: `orca push` and `orca pull`
+## The other half of the run: `agenticreplay push` and `agenticreplay pull`
 
-A local recording and a gateway recording see different things, and neither is the whole picture.
-`orca record` sits on your machine, so it sees the shell, the filesystem and MCP — the side effects.
-An OrcaRouter gateway sits on the wire, so it sees what no laptop can: every key, every colleague,
-every CI job, and the routing decision behind each call. Both write the same `orca-trace v0`, so the
-interesting direction was never one or the other. It was moving a run between them.
-
-Until now that round trip was a browser download and a form upload. Three commands:
+A compatible gateway can store and exchange AgenticReplay archives. Configure its URL explicitly;
+legacy OrcaReplay archives are rejected by this clean-break release.
 
 ```console
-$ orca list --remote  # what the gateway is holding
-$ orca push [run]     # this machine  ->  the gateway
-$ orca pull <run>     # the gateway   ->  this machine
+$ agenticreplay list --remote  # what the gateway is holding
+$ agenticreplay push [run]     # this machine  ->  the gateway
+$ agenticreplay pull <run>     # the gateway   ->  this machine
 ```
 
-![orca push sending a locally recorded run to a gateway, then orca pull fetching it into a different workspace and orca show reading the pulled copy](docs/sync-card.png)
+![agenticreplay push sending a locally recorded run to a gateway, then agenticreplay pull fetching it into a different workspace and agenticreplay show reading the pulled copy](docs/sync-card.png)
 
 <sub>Real output. The card is generated by `scripts/render-sync-card.mjs` from
-`docs/media/sync-transcript.txt`, a captured round trip — `orca record`, then push, then pull into a
-*different* workspace, then `orca show` reading the pulled copy. No line is written by hand. The
+`docs/media/sync-transcript.txt`, a captured round trip — `agenticreplay record`, then push, then pull into a
+*different* workspace, then `agenticreplay show` reading the pulled copy. No line is written by hand. The
 gateway there is a local stub speaking the same two endpoints, which is why its address is a
 loopback one.</sub>
 
 `push` defaults to the last run, like every other run-taking command. `pull` will not: "last" means
 nothing on a machine that has not seen the run yet, so it takes an id.
 
-Which is what `orca list --remote` is for. An id you do not have is not a default you can supply,
+Which is what `agenticreplay list --remote` is for. An id you do not have is not a default you can supply,
 and the only place to read one used to be the console in a browser — so the command that needs an
 id lived on a tab the terminal could not open. `--remote` asks the gateway the same question
-`orca list` asks this directory, over the GET on the path push already POSTs to:
+`agenticreplay list` asks this directory, over the GET on the path push already POSTs to:
 
 ```console
-$ orca list --remote --limit 3
+$ agenticreplay list --remote --limit 3
 RUN                           STARTED           SOURCE   APP             TURNS  TOOLS  LAYERS       MODELS                           OUTCOME
 run_3d9e61a07b52              2026-09-21 09:36  upload   generic-openai  1      0      model,fs     m                                exit 0
 run_8c14f2e9a07d3b6150e2c49a  2026-09-20 04:21  gateway  Unknown         1      0      model,route  deepseek/deepseek-v4-flash-free  end_turn
 run_f07a5c2e91d4468bb3e0a17c  2026-09-20 02:02  gateway  curl            1      0      model,route  deepseek/deepseek-v4.1-flash     error
 
-  orca pull <run>      # fetch one into this machine’s store
+  agenticreplay pull <run>      # fetch one into this machine’s store
 ```
 
 **LAYERS is the column to read.** It is what the two halves of this page are about: `model` and
@@ -426,11 +404,11 @@ left unset rather than dated 1970. `--source gateway` narrows to what the gatewa
 with an empty list; without the flag you get both. `--limit` sets how many (20 by default). `--gateway`
 stays what it is for push and pull — an optional override of *which* host — rather than doubling
 as the switch, so a destination you have already named needs no url typed at it. All three belong
-to `--remote`: given without it they are refused, not ignored, because `orca list --gateway <url>`
+to `--remote`: given without it they are refused, not ignored, because `agenticreplay list --gateway <url>`
 answering with this directory's runs would read as that host's answer.
 
-`--json` asks the same question: `orca list --remote --json` emits the gateway's runs as one
-document on stdout, which is where the id in `orca pull <run>` wants to come from when nobody
+`--json` asks the same question: `agenticreplay list --remote --json` emits the gateway's runs as one
+document on stdout, which is where the id in `agenticreplay pull <run>` wants to come from when nobody
 is reading a table.
 
 ### What it needs
@@ -442,26 +420,22 @@ and turned on under **Settings → request logs**; a gateway that is only record
 is the normal state.
 
 ```console
-$ export ORCA_GATEWAY_URL=https://api.orcarouter.ai   # or your own gateway
-$ read -rs ORCA_GATEWAY_KEY && export ORCA_GATEWAY_KEY   # not typed on the command line
-$ orca push last
+$ export AGENTICREPLAY_GATEWAY_URL=https://gateway.example   # your explicitly selected gateway
+$ read -rs AGENTICREPLAY_GATEWAY_KEY && export AGENTICREPLAY_GATEWAY_KEY   # not typed on the command line
+$ agenticreplay push last
 ```
 
 Both exports persist for the shell session, which is the point of the rule above: a later
-`orca push --gateway <somewhere-else>` in that same shell is refused rather than quietly handed the
+`agenticreplay push --gateway <somewhere-else>` in that same shell is refused rather than quietly handed the
 key you exported for your own gateway.
 
 ### What it will not do
 
-- **Never a default destination.** `orca setup` may default the *model* gateway to OrcaRouter,
-  because proxying a call your agent was already making is not a disclosure. A run is: it holds
-  source, shell output and workspace snapshots, which travel with it as content-addressed blobs.
-  So push has no default host. A gateway counts as a destination only when you NAMED it —
-  `--gateway`, `ORCA_GATEWAY_URL`, or a URL you typed at `orca setup` — and the one `orca setup`
-  fills in for you when you press Enter does not count, however well it serves your model traffic.
-  Running plain `orca setup` and then `orca push last` is refused, and says why. `push.packed` also
-  reports the file count and byte size *before* the request goes out rather than after.
-- **Never the workspace snapshots, unless you ask.** `orca scrub` rewrites `events.jsonl` and the
+- **Explicit destination required.** Name the gateway with `--gateway`,
+  `AGENTICREPLAY_GATEWAY_URL`, or `agenticreplay setup --gateway <url>`. A trace can contain source,
+  shell output and filesystem snapshots. `push.packed` reports its file count and size before upload.
+
+- **Never the workspace snapshots, unless you ask.** `agenticreplay scrub` rewrites `events.jsonl` and the
   blobs, but it cannot rewrite the shadow git store under `fs/` — its objects are deflated and
   addressed by the hash of their contents, so it searches them, tells you what is still in there,
   and offers `--drop-fs`. Push therefore leaves `fs/` at home by default: a scrub that reports
@@ -470,7 +444,7 @@ key you exported for your own gateway.
   on the way out, because that is the one part of the payload the scan on either end cannot read
   (the objects are compressed, so a plaintext scan sees nothing).
 - **Never a key to a host it was not set up for.** Every credential has a home — the stored key's
-  is `orca setup`'s gateway, an exported key's is `ORCA_GATEWAY_URL`, and a key exported
+  is `agenticreplay setup`'s gateway, an exported key's is `AGENTICREPLAY_GATEWAY_URL`, and a key exported
   with no URL beside it has no home at all — and it is attached only when the destination matches
   that home. `--gateway` changes where the run goes, not what the key was
   issued for, so pointing it elsewhere refuses the push rather than authenticating it with someone
@@ -501,32 +475,32 @@ not a repeat of the first.
 ## Which agents
 
 Two things decide whether a harness can be recorded: whether it can be pointed at the proxy, and
-whether orca understands the wire format it speaks once it arrives.
+whether agenticreplay understands the wire format it speaks once it arrives.
 
 | Agent | How it is captured | State |
 |---|---|---|
 | **Claude Code** | `ANTHROPIC_BASE_URL` | works — validated against a real bug fix, [in detail](docs/validation.md) |
-| **Codex CLI** (API key) | `OPENAI_BASE_URL` → Responses API | works |
-| **Codex CLI** (ChatGPT login) | `--tls-intercept` → Responses API | works, [with a decision to make](#when-the-harness-will-not-be-redirected) |
-| **OpenAI Agents SDK** | `OPENAI_BASE_URL` → Responses API | works — the SDK itself, on the Responses API it defaults to, records and replays at `exact=1`, [in CI](test/integrations/); [its own tracing is a second egress](docs/integrations.md#openai-agents-sdk) |
-| **Vercel AI SDK** | `OPENAI_BASE_URL` via `@ai-sdk/openai` (since 2.0.41) — `orca record generic-openai --`; fetch hook (`orca record node --`) when the origin is compiled in | works — env-aware SDK clients via `generic-openai` at `exact=1`, [in CI](test/integrations/); an agent posting to an origin compiled into its source records and replays at `exact=1` |
-| **grok-cli** (and its Telegram bot) | `orca record grok` — `GROK_BASE_URL`, plus the hook for its sub-agents | works |
-| **OpenClaw** | `orca record openclaw` — the hook for the gateway, inherited variables for the agents it spawns | works |
-| **opencode** | `orca record opencode` | adapter shipped, both origins redirected |
-| **goose** (Block) | `orca record goose` — `OPENAI_HOST` **and** `OPENAI_BASE_URL`, `ANTHROPIC_HOST` → Responses API | works — driven end to end against goose 1.49.0, [what is different about it](#the-harness-that-reads-different-variables) |
-| **LangGraph / LangChain** | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | works — a two-node graph, streaming and with a tool, records and replays at `exact=2` and forks live, [in CI](test/integrations/); `pip install orcareplay-langgraph` [also records the graph](python-langgraph/README.md) — which node ran, in which superstep, including the ones that call no model |
-| **Haystack** | `orca record generic-openai -- python your_pipeline.py` — its `OpenAIChatGenerator` leaves `base_url` to the OpenAI SDK, which reads `OPENAI_BASE_URL` | works — a `Pipeline` with `ChatPromptBuilder` and `OpenAIChatGenerator` records and replays at `exact=1`, [in CI](test/integrations/) |
-| **OpenHands** | `orca record generic-openai -- python your_agent.py` — its SDK wraps LiteLLM and reads `OPENAI_API_BASE` | works — the SDK's own LLM layer records and replays at `exact=1`, [in CI](test/integrations/) |
-| **CrewAI** | `orca record generic-openai -- python your_crew.py` — since 1.x its own provider, reading `OPENAI_API_BASE` and `OPENAI_BASE_URL` | works — a real `Agent`, `Task` and `Crew` records and replays at `exact=1`, [in CI](test/integrations/); [what 1.x changed](docs/integrations.md#crewai) |
-| **Aider** | `orca record generic-openai -- python your_agent.py` — routes through LiteLLM, which reads `OPENAI_API_BASE` | works — the LiteLLM layer records and replays at `exact=1`, [in CI](test/integrations/) |
-| **browser-use** | `orca record generic-openai -- python your_task.py` — its `ChatOpenAI` passes an unset `base_url` straight through | works — records and replays at `exact=1`, [in CI](test/integrations/); LLM layer only, [the browser is not driven](docs/integrations.md#browser-use) |
-| **Hermes** (Nous Research) | `ORCA_BASE_URL_VARS=… orca record generic-openai -- hermes …` | should work — it overrides per provider; [name the variable](#a-base-url-variable-orca-has-never-heard-of) |
-| **IndexRAG** | `orca record indexrag -- --data-dir dataset/<name>/documents` — the whole pipeline as one run: `OPENAI_BASE_URL` for chat, `INDEXRAG_EMBEDDING_BASE_URL` for a second origin | works — driven end to end against the real pipeline: indexing, embeddings and answering replay offline at `exact=11/11 retrieval=3/3`, and a fork keeps the recorded index, [what is different about a pipeline](docs/integrations.md#rag-and-retrieval-frameworks) |
-| **a RAG pipeline** (LlamaIndex, GraphRAG, LightRAG) | `orca record generic-openai -- <cmd>` — embeddings and rerank replay without a dialect | works — a concurrent index build plus an embedding batch records and replays at `exact=5 retrieval=2`, [in CI](test/integrations/) |
-| **Codex-in-the-IDE** | `orca record exec --tls-intercept -- code .` | works — the extension spawns the agent, and it inherits the capture |
-| **a bot with a hardcoded origin** | `orca record exec --tls-intercept -- <cmd>` | works — a Grok bot posting to a URL in its own source, [in detail](#an-agent-that-reads-nothing-at-all) |
-| **an agent in a sandbox or on another machine** | `orca attach` | works — orca is reachable and prints what to export, [in detail](#an-agent-that-is-not-on-this-machine) |
-| **anything else** | `orca record generic-openai -- <cmd>` | works if it reads a base-URL variable; `orca record node -- <cmd>` if it does not |
+| **Codex CLI** (API key) | Invocation-scoped selected-provider URL override → Responses API | adapter implemented; current installed-client acceptance remains blocked — see [status](docs/agenticreplay-acceptance.md) |
+| **Codex CLI** (ChatGPT login) | `--tls-intercept` → Responses API | protocol fixtures pass; current authenticated-client acceptance remains unverified |
+| **OpenAI Agents SDK** | `OPENAI_BASE_URL` → Responses API | works — the SDK itself, on the Responses API it defaults to, records and replays at `canonical_exact=1`, [in CI](test/integrations/); [its own tracing is a second egress](docs/integrations.md#openai-agents-sdk) |
+| **Vercel AI SDK** | `OPENAI_BASE_URL` via `@ai-sdk/openai` (since 2.0.41) — `agenticreplay record generic-openai --`; fetch hook (`agenticreplay record node --`) when the origin is compiled in | works — env-aware SDK clients via `generic-openai` at `canonical_exact=1`, [in CI](test/integrations/); an agent posting to an origin compiled into its source records and replays at `canonical_exact=1` |
+| **grok-cli** (and its Telegram bot) | `agenticreplay record grok` — `GROK_BASE_URL`, plus the hook for its sub-agents | works |
+| **OpenClaw** | `agenticreplay record openclaw` — the hook for the gateway, inherited variables for the agents it spawns | works |
+| **opencode** | `agenticreplay record opencode` | adapter shipped, both origins redirected |
+| **goose** (Block) | `agenticreplay record goose` — `OPENAI_HOST` **and** `OPENAI_BASE_URL`, `ANTHROPIC_HOST` → Responses API | works — driven end to end against goose 1.49.0, [what is different about it](#the-harness-that-reads-different-variables) |
+| **LangGraph / LangChain** | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | works — a two-node graph, streaming and with a tool, records and replays at `canonical_exact=2` and forks live, [in CI](test/integrations/); `pip install agenticreplay-langgraph` [also records the graph](python-langgraph/README.md) — which node ran, in which superstep, including the ones that call no model |
+| **Haystack** | `agenticreplay record generic-openai -- python your_pipeline.py` — its `OpenAIChatGenerator` leaves `base_url` to the OpenAI SDK, which reads `OPENAI_BASE_URL` | works — a `Pipeline` with `ChatPromptBuilder` and `OpenAIChatGenerator` records and replays at `canonical_exact=1`, [in CI](test/integrations/) |
+| **OpenHands** | `agenticreplay record generic-openai -- python your_agent.py` — its SDK wraps LiteLLM and reads `OPENAI_API_BASE` | works — the SDK's own LLM layer records and replays at `canonical_exact=1`, [in CI](test/integrations/) |
+| **CrewAI** | `agenticreplay record generic-openai -- python your_crew.py` — since 1.x its own provider, reading `OPENAI_API_BASE` and `OPENAI_BASE_URL` | works — a real `Agent`, `Task` and `Crew` records and replays at `canonical_exact=1`, [in CI](test/integrations/); [what 1.x changed](docs/integrations.md#crewai) |
+| **Aider** | `agenticreplay record generic-openai -- python your_agent.py` — routes through LiteLLM, which reads `OPENAI_API_BASE` | works — the LiteLLM layer records and replays at `canonical_exact=1`, [in CI](test/integrations/) |
+| **browser-use** | `agenticreplay record generic-openai -- python your_task.py` — its `ChatOpenAI` passes an unset `base_url` straight through | works — records and replays at `canonical_exact=1`, [in CI](test/integrations/); LLM layer only, [the browser is not driven](docs/integrations.md#browser-use) |
+| **Hermes** (Nous Research) | `agenticreplay record hermes --tls-intercept -- …` | transport adapter implemented; current installed-client acceptance remains unverified |
+| **IndexRAG** | `agenticreplay record indexrag -- --data-dir dataset/<name>/documents` — the whole pipeline as one run: `OPENAI_BASE_URL` for chat, `INDEXRAG_EMBEDDING_BASE_URL` for a second origin | works — driven end to end against the real pipeline: indexing, embeddings and answering replay offline at `canonical_exact=11/11 retrieval=3/3`, and a fork keeps the recorded index, [what is different about a pipeline](docs/integrations.md#rag-and-retrieval-frameworks) |
+| **a RAG pipeline** (LlamaIndex, GraphRAG, LightRAG) | `agenticreplay record generic-openai -- <cmd>` — embeddings and rerank replay without a dialect | works — a concurrent index build plus an embedding batch records and replays at `canonical_exact=5 retrieval=2`, [in CI](test/integrations/) |
+| **Codex-in-the-IDE** | `agenticreplay record exec --tls-intercept -- code .` | works — the extension spawns the agent, and it inherits the capture |
+| **a bot with a hardcoded origin** | `agenticreplay record exec --tls-intercept -- <cmd>` | works — a Grok bot posting to a URL in its own source, [in detail](#an-agent-that-reads-nothing-at-all) |
+| **an agent in a sandbox or on another machine** | `agenticreplay attach` | works — agenticreplay is reachable and prints what to export, [in detail](#an-agent-that-is-not-on-this-machine) |
+| **anything else** | `agenticreplay record generic-openai -- <cmd>` | works if it reads a base-URL variable; `agenticreplay record node -- <cmd>` if it does not |
 
 Claude Code, Hermes and goose have been driven end to end against the real harness, and each of
 them broke something. Claude Code [broke four things](docs/validation.md); Hermes found a streaming
@@ -544,7 +518,7 @@ reads `OPENAI_HOST` **first** — and for Anthropic it reads `ANTHROPIC_HOST` an
 That combination is worse than it sounds, because both halves fail silently:
 
 - Setting only `OPENAI_BASE_URL` works right up until the user already has `OPENAI_HOST` exported
-  for something else. Then their value wins, the run goes to their origin, and orca prints a clean
+  for something else. Then their value wins, the run goes to their origin, and agenticreplay prints a clean
   recording over an empty trace.
 - `ANTHROPIC_BASE_URL` — the variable `generic-openai` sets, and the one the rest of the ecosystem
   reads — does nothing at all here. A sink addressed only by it receives no request.
@@ -554,13 +528,13 @@ and the fixture pins all three. The traffic that arrives is the Responses API �
 plus one `GET /v1/models` on start-up — which the proxy's `openai-responses` dialect already claims.
 
 ```console
-GOOSE_PROVIDER=openai GOOSE_MODEL=<model> orca record goose -- run -t "fix the failing test"
+GOOSE_PROVIDER=openai GOOSE_MODEL=<model> agenticreplay record goose -- run -t "fix the failing test"
 ```
 
 `GOOSE_PROVIDER` and `GOOSE_MODEL` are passed through, never invented: goose has no default for a
 custom endpoint, and choosing one for you would launch a different agent than `goose` does.
 
-Two limits worth knowing before you rely on it. goose runs its shell without going through orca's
+Two limits worth knowing before you rely on it. goose runs its shell without going through agenticreplay's
 PATH shim, so `shell` tool calls are in the trace with their output but without the real exit code,
 duration or stdout/stderr split — record with `--no-shell` to claim nothing rather than that. And
 goose asks a second model for a session title *while the conversation is already under way*, so
@@ -576,10 +550,10 @@ because OpenClaw reads them, but because **a child process inherits its parent's
 the Claude Code it spawns sees `ANTHROPIC_BASE_URL` exactly as it would if you had run it yourself.
 
 ```console
-orca record openclaw
+agenticreplay record openclaw
 ```
 
-That inheritance is a property of the operating system rather than of orca, which is the kind of
+That inheritance is a property of the operating system rather than of agenticreplay, which is the kind of
 thing that stays obviously true right up until some layer in between sanitises the environment. So
 it has a test: a gateway fixture that makes no model call of its own, spawns an agent that does, and
 is recorded and replayed offline through the grandchild's traffic.
@@ -591,31 +565,31 @@ redirected. It is also, by some distance, the most common shape of agent people 
 below the agent instead, at the socket:
 
 ```console
-orca record exec --tls-intercept -- python bot.py
-orca record exec --tls-intercept -- ./my-agent --task "fix the test"
+agenticreplay record exec --tls-intercept -- python bot.py
+agenticreplay record exec --tls-intercept -- ./my-agent --task "fix the test"
 ```
 
 `exec` (or `any`) launches your command and sets nothing — no origin and no credential — so the bot
-still talks to whoever it was already talking to, and orca reads the conversation on the way past.
+still talks to whoever it was already talking to, and agenticreplay reads the conversation on the way past.
 `api.x.ai` is on the default decrypt list, so a Grok bot needs no host named.
 
-The same command reaches an agent orca did not launch, as long as something orca *did* launch is
+The same command reaches an agent agenticreplay did not launch, as long as something agenticreplay *did* launch is
 its ancestor. That is the shape of Codex-in-the-IDE: the extension spawns the agent as a child, so
 recording the editor captures the agent underneath it.
 
 ```console
-orca record exec --tls-intercept -- code .
-orca record exec --tls-intercept -- cursor .
+agenticreplay record exec --tls-intercept -- code .
+agenticreplay record exec --tls-intercept -- cursor .
 ```
 
 Replay needs no flags repeated. A run recorded through interception writes down which hosts it
-decrypted, and `orca replay` reads that back and re-establishes the same policy — `--no-tls-intercept`
+decrypted, and `agenticreplay replay` reads that back and re-establishes the same policy — `--no-tls-intercept`
 if you would rather it did not.
 
 To decrypt an endpoint the default list does not cover, add it rather than replacing the list:
 
 ```console
-orca record exec --tls-intercept --tls-hosts '+my-gateway.internal' -- ./my-agent
+agenticreplay record exec --tls-intercept --tls-hosts '+my-gateway.internal' -- ./my-agent
 ```
 
 A plain `--tls-hosts a,b` still means "decrypt exactly these", as it always has. Mixing the two
@@ -623,14 +597,14 @@ forms is refused rather than guessed at.
 
 ### An agent that is not on this machine
 
-An agent in a dev container, on a VPS, or in someone's CI cannot be launched by orca, so there is
-no environment for it to build. `orca attach` turns it around: orca holds the proxy open, prints
+An agent in a dev container, on a VPS, or in someone's CI cannot be launched by agenticreplay, so there is
+no environment for it to build. `agenticreplay attach` turns it around: agenticreplay holds the proxy open, prints
 the block to paste on the far side, and records whatever arrives until you stop it.
 
 ```console
-orca attach --for claude
-orca attach --for claude --bind 0.0.0.0 --advertise host.docker.internal
-orca attach --tls-intercept          # for an agent over there that reads no variable either
+agenticreplay attach --for claude
+agenticreplay attach --for claude --bind 0.0.0.0 --advertise host.docker.internal
+agenticreplay attach --tls-intercept          # for an agent over there that reads no variable either
 ```
 
 ```
@@ -642,31 +616,31 @@ info attached run=run_e3d64e15ee8f proxy=http://127.0.0.1:33437 for=claude-code
   Recording. Press ctrl-C when the agent is done.
 ```
 
-The variables come from the same adapters `orca record` uses, so a sandbox recording cannot drift
+The variables come from the same adapters `agenticreplay record` uses, so a sandbox recording cannot drift
 from a local one. `--advertise` is required when you bind a wildcard: `0.0.0.0` is a statement about
-listening, not an address anything can dial, and orca refuses to print a URL that cannot work.
+listening, not an address anything can dial, and agenticreplay refuses to print a URL that cannot work.
 
 Replaying such a run has the same problem in reverse — the agent may not exist on this machine — so
 replay attaches too:
 
 ```console
-orca attach --replay <run>
+agenticreplay attach --replay <run>
 ```
 
 It serves the recording with egress blocked and takes the harness from the recording itself. Point
 the same remote agent at it and the run happens again, offline, with no model called.
 
-### A base-URL variable orca has never heard of
+### A base-URL variable agenticreplay has never heard of
 
 Enumerating them is hopeless. Hermes overrides per provider, and its own `.env.example` carries
 `NOVITA_BASE_URL`, `GLM_BASE_URL`, `KIMI_BASE_URL`, `MINIMAX_BASE_URL`, `HF_BASE_URL`,
-`NEBIUS_BASE_URL` and a dozen more. A list baked into orca would be stale the week after it was
+`NEBIUS_BASE_URL` and a dozen more. A list baked into agenticreplay would be stale the week after it was
 written, so name the variable instead:
 
 ```console
-ORCA_BASE_URL_VARS='OPENROUTER_BASE_URL' orca record generic-openai -- hermes
-ORCA_BASE_URL_VARS='GLM_BASE_URL,KIMI_BASE_URL' orca record generic-openai -- my-agent
-ORCA_BASE_URL_VARS='SOMETHING_BASE_URL=/' orca record node -- node agent.mjs
+AGENTICREPLAY_BASE_URL_VARS='CUSTOM_API_BASE_URL' agenticreplay record generic-openai -- my-agent
+AGENTICREPLAY_BASE_URL_VARS='GLM_BASE_URL,KIMI_BASE_URL' agenticreplay record generic-openai -- my-agent
+AGENTICREPLAY_BASE_URL_VARS='SOMETHING_BASE_URL=/' agenticreplay record node -- node agent.mjs
 ```
 
 Each name is pointed at the proxy with `/v1` appended, which is what an OpenAI-compatible override
@@ -674,7 +648,7 @@ wants; `=<path>` overrides that, and `=/` gives the bare origin.
 
 If you record an agent this way and it works, an adapter is about twenty lines —
 [docs/plugins.md](docs/plugins.md). If it does not, the trace is the most useful thing you can send:
-`orca export last -o run.html`.
+`agenticreplay export last -o run.html`.
 
 ## When the harness will not be redirected
 
@@ -693,35 +667,35 @@ ours to reach either.
 make, because it mints a certificate authority.
 
 ```console
-orca record codex --tls-intercept
-orca record codex --tls-intercept --tls-hosts 'api.openai.com,*.chatgpt.com'
+agenticreplay record codex --tls-intercept
+agenticreplay record codex --tls-intercept --tls-hosts 'api.openai.com,*.chatgpt.com'
 ```
 
-The CA is unique to the run, trusted only by the agent orca launches — through that child's own
-environment, never a system or browser trust store — and deleted when the run ends. Orca will not
+The CA is unique to the run, trusted only by the agent agenticreplay launches — through that child's own
+environment, never a system or browser trust store — and deleted when the run ends. AgenticReplay will not
 offer to install it anywhere. Hosts outside the allowlist are tunnelled unread and recorded as an
-address and a byte count, with no path and no body, because orca never held the plaintext. Asking
+address and a byte count, with no path and no body, because agenticreplay never held the plaintext. Asking
 to intercept everything is refused rather than honoured.
 
 What comes back through it is not a log line. An intercepted request is parsed by the same wire
 dialects as any other, so it lands in the trace as an ordinary exchange — replayable offline and
 forkable to a different model, on a run that never had an API key of yours in it.
 
-It works on `orca replay --model`, `orca fork` and `orca compare` too, which launch a live agent for
+It works on `agenticreplay replay --model`, `agenticreplay fork` and `agenticreplay compare` too, which launch a live agent for
 the same reason.
 
 ## For an agent, a script, or CI
 
 A trace is a file, which is the one thing an observability dashboard cannot be — so the most useful
 question about a failed run is one an *agent* can ask: *replay my last run and tell me what
-diverged.* Every command answers as data, and orca serves itself over MCP.
+diverged.* Every command answers as data, and agenticreplay serves itself over MCP.
 
 ```console
-$ orca replay last --json
+$ agenticreplay replay last --json
 {"runId":"run_a278eea7b535","mode":"exact","traceRunId":"run_687e3f84b208","matchedExact":2,"divergences":0,"unmatched":0,"liveCalls":0,"exitCode":0}
 
-$ orca show last --json | jq '.events[] | select(.kind == "TOOL")'
-$ orca checkpoints last --json | jq '.[-1].seq'
+$ agenticreplay show last --json | jq '.events[] | select(.kind == "TOOL")'
+$ agenticreplay checkpoints last --json | jq '.[-1].seq'
 ```
 
 One JSON document on stdout, diagnostics on stderr — including the recorded agent's own output, so
@@ -729,26 +703,26 @@ the document stays parseable while a run is talking. Failures answer in JSON too
 exit. `--json` covers `list`, `show`, `events`, `checkpoints`, `graph`, `record`, `replay`,
 `compare` and `doctor`.
 
-**As tools.** `orca mcp` serves the trace store to an agent over stdio:
+**As tools.** `agenticreplay mcp` serves the trace store to an agent over stdio:
 
 ```json
-{ "mcpServers": { "orca": { "command": "orca", "args": ["mcp"] } } }
+{ "mcpServers": { "agenticreplay": { "command": "agenticreplay", "args": ["mcp"] } } }
 ```
 
-`orca_list_runs`, `orca_show_run`, `orca_checkpoints`, `orca_graph`, `orca_replay` and
-`orca_compare`. Replay is free and offline; `orca_compare` says in its own description that it
+`agenticreplay_list_runs`, `agenticreplay_show_run`, `agenticreplay_checkpoints`, `agenticreplay_graph`, `agenticreplay_replay` and
+`agenticreplay_compare`. Replay is free and offline; `agenticreplay_compare` says in its own description that it
 spends real tokens, because a model choosing a tool reads that string and nothing else — and
-`orca_graph` spends its description saying what `recorded` and `inferred` mean, for the same
+`agenticreplay_graph` spends its description saying what `recorded` and `inferred` mean, for the same
 reason.
 
 **From code**, if you would rather not shell out:
 
 ```ts
-import { Orca } from 'orcareplay';
+import { AgenticReplay } from 'agenticreplay';
 
-const orca = new Orca({ cwd: process.cwd() });
-const { unmatched, divergences } = await orca.replay('last');
-const timeline = await orca.show('last');
+const agenticreplay = new AgenticReplay({ cwd: process.cwd() });
+const { unmatched, divergences } = await agenticreplay.replay('last');
+const timeline = await agenticreplay.show('last');
 ```
 
 It never writes to your stdout and never calls `process.exit` — both asserted, because a library
@@ -757,29 +731,29 @@ that does either cannot be built on.
 ## Status
 
 Early. `v0` is the walking skeleton of the three commands above. Everything below is exercised by
-1,393 tests, the trace-format conformance check and a plugin-API neutrality check, on Node 20 and 22.
+The test suite, the trace-format conformance check and a plugin-API neutrality check run on Node 24 and 26.
 
 | Capability | State |
 |---|---|
 | Trace format v0 + JSON Schema | working |
 | Anthropic / OpenAI-compatible model capture | working |
 | OpenAI Responses API capture | working — the format the OpenAI Agents SDK and the Codex CLI default to. Records, replays offline and forks; a fork stays on the wire format the agent speaks |
-| Agents that read no base-URL variable | working — `orca record node -- <cmd>` writes a preload into the run directory and redirects `globalThis.fetch` for an allowlist of provider hosts. Node and Bun both, since Bun ignores `--require` in `NODE_OPTIONS`. Use this when the origin is compiled into source; ordinary `@ai-sdk/openai` clients that honour `OPENAI_BASE_URL` go through `generic-openai` instead |
-| A call orca cannot read | working — forwarded rather than refused, and recorded as `net.request` / `net.response`: evidence, not a replayable turn. A recording that captured nothing warns instead of exiting clean |
+| Agents that read no base-URL variable | working — `agenticreplay record node -- <cmd>` writes a preload into the run directory and redirects `globalThis.fetch` for an allowlist of provider hosts. Node and Bun both, since Bun ignores `--require` in `NODE_OPTIONS`. Use this when the origin is compiled into source; ordinary `@ai-sdk/openai` clients that honour `OPENAI_BASE_URL` go through `generic-openai` instead |
+| A call agenticreplay cannot read | working — forwarded rather than refused, and recorded as `net.request` / `net.response`: evidence, not a replayable turn. A recording that captured nothing warns instead of exiting clean |
 | Machine-readable output (`--json`) | working — one JSON document on stdout, diagnostics on stderr, failures as JSON |
-| Causal graph (`orca graph`) | working — what caused what, as a table or as JSON. Every edge says whether the trace recorded it or orca derived it just now, and names the rule either way. `--to N` narrows to the chain that produced one event |
-| Shareable cards | working — `orca export --card` draws one causal chain, `--graph-card` draws the whole run with that chain lit, and `compare --share` draws the verdict table. `.svg` always; `.png` and `.gif` when the optional render toolchain is installed, which `orca doctor` reports and `npm ci` never pulls in |
-| First run without an agent (`orca quickstart`) | working — the package carries a real recording and the project it was made against, and replays one over the other offline, so the first look costs no key, no network and no tokens |
-| MCP server (`orca mcp`) | working — six tools over stdio, so an agent can read, explain and replay its own runs |
-| Programmatic API (`Orca`) | working — the commands render what it returns, so the terminal is a view of one source of truth |
+| Causal graph (`agenticreplay graph`) | working — what caused what, as a table or as JSON. Every edge says whether the trace recorded it or agenticreplay derived it just now, and names the rule either way. `--to N` narrows to the chain that produced one event |
+| Shareable cards | working — `agenticreplay export --card` draws one causal chain, `--graph-card` draws the whole run with that chain lit, and `compare --share` draws the verdict table. `.svg` always; `.png` and `.gif` when the optional render toolchain is installed, which `agenticreplay doctor` reports and `npm ci` never pulls in |
+| First run without an agent (`agenticreplay quickstart`) | working — the package carries a real recording and the project it was made against, and replays one over the other offline, so the first look costs no key, no network and no tokens |
+| MCP server (`agenticreplay mcp`) | working — six tools over stdio, so an agent can read, explain and replay its own runs |
+| Programmatic API (`AgenticReplay`) | working — the commands render what it returns, so the terminal is a view of one source of truth |
 | Replaying a session you typed into | working, and approximate — [what that means](#replaying-a-session-you-typed-into) |
 | Exact replay with divergence reporting | working — restores the recorded filesystem over your working tree, then puts it back; `--worktree` for a scratch copy, `--in-place` to restore nothing. Writes a run of its own recording what the replay *discovered* — divergences, unmatched requests — and points at the parent for what it merely repeated; `--no-trace` to skip |
 | Fork replay from a checkpoint | working — a fork records its own filesystem snapshots, so it is a run you can fork again |
-| Compare across models | working — `orca setup` stores a gateway (OrcaRouter by default, any URL you name otherwise), key and model list, so `orca compare` needs no flags |
+| Compare across models | working — `agenticreplay setup` stores an explicitly selected gateway, key and model list, so `agenticreplay compare` needs no flags |
 | Filesystem snapshots and diffs | working |
 | Single-file HTML export | working |
 | MCP call recording | working — opt in with `--mcp-config <path>`. Replay and fork re-instrument from the config the recording used, so the layer does not stop at the fork point |
-| Post-hoc scrubbing (`orca scrub`) | working |
+| Post-hoc scrubbing (`agenticreplay scrub`) | working |
 | Shell capture (`PATH` shim) | working — exit codes, duration and the stdout/stderr split. `--no-shell` to skip |
 | Non-model network capture | working — opt in with `--tls-intercept`; mints a per-run CA the launched agent alone trusts, decrypts an allowlist of hosts, tunnels the rest unread, and deletes the key when the run ends |
 | Codex subscription model capture/replay | working — recognizes the `/backend-api/codex/responses` HTTPS fallback, decodes zstd request bodies for matching, and serves the recorded SSE response without opening the origin during replay |
@@ -788,10 +762,10 @@ Early. `v0` is the walking skeleton of the three commands above. Everything belo
 
 ## Replaying a session you typed into
 
-A run started as `orca record claude` and driven by hand has its prompts nowhere on the wire. Orca
+A run started as `agenticreplay record claude` and driven by hand has its prompts nowhere on the wire. AgenticReplay
 recovers them from the harness's own transcript and replays the session by handing them back
 without a terminal — which reproduces the conversation, and does not reproduce the run byte for
-byte. Two differences are inherent rather than defects, and orca names both rather than papering
+byte. Two differences are inherent rather than defects, and agenticreplay names both rather than papering
 over them:
 
 - **The harness makes calls for itself.** A quota probe before the first turn, a request to name
@@ -803,18 +777,18 @@ over them:
   same agent is driven without one. Their schemas are large, so a request carrying them can differ
   from the recorded one by enough to halt; the halt says which tools are missing and why.
 
-Recording with a prompt in argv — `orca record claude -- -p "…"` — has neither problem, because the
+Recording with a prompt in argv — `agenticreplay record claude -- -p "…"` — has neither problem, because the
 replay is started exactly the way the recording was. Use that for a run you intend to replay
-exactly. Reading a run is unaffected either way: `orca show` and the viewer are complete for both.
+exactly. Reading a run is unaffected either way: `agenticreplay show` and the viewer are complete for both.
 
 ## Install
 
 ```console
-npm i -g orcareplay
-orca doctor                       # checks node, git, and which agents it can find
+npm i -g agenticreplay
+agenticreplay doctor                       # checks node, git, and which agents it can find
 ```
 
-Node 20 or newer. No native dependencies, so there is nothing to compile and nothing fetched at
+Node 24 or newer. No native dependencies, so there is nothing to compile and nothing fetched at
 install time beyond the tarballs themselves.
 
 Every release from 0.1.1 onward is published by the tagged workflow in
@@ -824,42 +798,41 @@ built it — npm shows it on the package page, and `npm audit signatures` checks
 **From source**, to work on it or to run an unreleased commit:
 
 ```console
-git clone https://github.com/Continuum-AI-Corp/OrcaReplay && cd OrcaReplay
+git clone https://github.com/askdkc/AgenticReplay && cd AgenticReplay
 npm ci && npm run build
-npm install -g ./packages/cli     # puts `orca` (and `orcareplay`) on PATH
+npm install -g ./packages/cli     # puts `agenticreplay` (and `agenticreplay`) on PATH
 ```
 
 `npm install -g .` from the repository root installs nothing: the root is a workspace with no
-binary of its own, and `orca` lives in `packages/cli`.
+binary of its own, and `agenticreplay` lives in `packages/cli`.
 
-**Node 20+ to run it** (the CLI's own `engines` says `>=20.0.0`). Contributing needs `^20.19.0 ||
->=22.12.0`, because the test toolchain does; the root `package.json` declares that separately so
-`npm ci` tells you up front. No account, no signup, no API key changes.
+**Node 24+ to run it** (the CLI's `engines` says `>=24.0.0`). Development and CI use Node 24 or
+26. No account, no signup, no API key changes.
 
 On Windows, shell capture writes `.cmd` shims in front of `sh.exe` and `bash.exe` (Git for Windows
 provides both), and Windows runs a `.cmd` only through a shell. So it captures a shell started
 through cmd.exe or PowerShell, and not one an agent starts itself: a Node harness's
 `child_process.spawn('bash')` goes straight to the real `bash.exe`, and Claude Code finds its shell
-without consulting `PATH` at all. `orca doctor` says which of the two holds on the machine, and
-`orca record` warns `shell.ineffective` on any run whose tool calls ran commands the shim never
+without consulting `PATH` at all. `agenticreplay doctor` says which of the two holds on the machine, and
+`agenticreplay record` warns `shell.ineffective` on any run whose tool calls ran commands the shim never
 saw — record those with `--no-shell`. If no POSIX shell is on `PATH`, doctor warns and
 `--no-shell` is the way to record.
 
 ## Where your runs are kept
 
-Everything lands in **`.orca/runs/` inside the project you recorded in** — per-project, never a
+Everything lands in **`.agenticreplay/runs/` inside the project you recorded in** — per-project, never a
 global store, so a run travels with the checkout it belongs to. One run directory is one
 self-describing thing:
 
 ```
-.orca/
+.agenticreplay/
   .gitignore          # just `*` — the store excludes itself, so a trace cannot be committed by accident
   runs/run_d0a2ee7ce615/
     manifest.json     # who, when, which adapter, the git commit, counts, integrity digest
     events.jsonl      # the timeline, one JSON object per line, append-only
     blobs/            # content-addressed payloads over 4 KB, deduplicated
     fs/               # shadow git index: the workspace at every turn
-    shims/            # the PATH shims this run used; written by orca, read by nothing
+    shims/            # the PATH shims this run used; written by agenticreplay, read by nothing
     py/               # bootstrap for the agent-structure layer, when the agent is Python
     redactions.json   # what was removed, by rule and count — never by value
 ```
@@ -867,16 +840,16 @@ self-describing thing:
 Finding an old session:
 
 ```console
-orca list                       # every run here, newest first, with what it was forked from
-orca list --remote              # and what the gateway is holding, without opening a browser
-orca show run_d0a2ee7ce615      # the timeline in the terminal
-orca replay last                # `last` = newest recording (it skips replay traces)
-orca replay run_d0a2ee7ce615    # or name one outright
-orca gc --older-than 7d --dry-run   # what would be reclaimed, before anything is
+agenticreplay list                       # every run here, newest first, with what it was forked from
+agenticreplay list --remote              # and what the gateway is holding, without opening a browser
+agenticreplay show run_d0a2ee7ce615      # the timeline in the terminal
+agenticreplay replay last                # `last` = newest recording (it skips replay traces)
+agenticreplay replay run_d0a2ee7ce615    # or name one outright
+agenticreplay gc --older-than 7d --dry-run   # what would be reclaimed, before anything is
 ```
 
-`orca list` reads the run directories directly, so it works on a trace someone sent you: drop it in
-`.orca/runs/` and every command sees it. Nothing indexes, and there is no database to corrupt.
+`agenticreplay list` reads the run directories directly, so it works on a trace someone sent you: drop it in
+`.agenticreplay/runs/` and every command sees it. Nothing indexes, and there is no database to corrupt.
 `--remote` is the one exception, and it is not an index either: it asks the gateway and prints the
 answer, holding nothing.
 
@@ -890,11 +863,11 @@ Redaction is best-effort mitigation, not a guarantee. **Treat a trace as sensiti
 sensitive as a shell history plus a heap dump.
 
 ```console
-orca export last -o bug.html          # prints exactly what it is about to write
-orca scrub last --match my-hostname   # remove something after the fact
+agenticreplay export last -o bug.html          # prints exactly what it is about to write
+agenticreplay scrub last --match my-hostname   # remove something after the fact
 ```
 
-`orca scrub` rewrites `events.jsonl`, the manifest and every text blob, re-runs the standard
+`agenticreplay scrub` rewrites `events.jsonl`, the manifest and every text blob, re-runs the standard
 detectors, refreshes the integrity digest, and leaves binary blobs byte-identical.
 
 It cannot rewrite the filesystem snapshots. Git objects are addressed by the hash of their own
@@ -909,17 +882,12 @@ outright, at the cost of being able to fork the run.
 Always open, under Apache-2.0: the trace format, the core, the CLI, the viewer, the adapters, and
 the provider interface.
 
-OrcaReplay is built by the people who build [OrcaRouter](https://www.orcarouter.ai), and that shows
-up in two places, both of them things you asked for. `orca setup` suggests it when you do not name a
-gateway — a default you can see and overtype, on a question you chose to answer, not a route
-anything takes on its own. And an artefact you explicitly generate — an export, a `--share` card —
-signs itself "built by the OrcaRouter.ai team", the way a chart carries its source.
+AgenticReplay is a fork of [OrcaReplay](https://github.com/Continuum-AI-Corp/OrcaReplay).
+Original copyright notices and the Apache-2.0 license are retained. This fork uses its own package
+names, configuration and trace format, and does not promote or select a gateway by default.
 
-Every model path stays a plain URL you can point anywhere, there is no code path that treats that
-origin differently from any other, and a credit line routes nothing anywhere.
-
-What the vendor does *not* get is privilege. A plugin — OrcaRouter's included — may use only the
-public `Provider` interface in `@orcareplay/plugin-api`, with no private API behind it. No vendor
+Provider plugins use the public `Provider` interface in `@agenticreplay/plugin-api`.
+No vendor
 plugin exists yet, so the CI job that enforces this (`scripts/check-neutrality.mjs`) says so and
 passes as a no-op; it starts building against the published package rather than workspace source the
 moment one lands. If a plugin ever needs a capability, that capability goes into the public
@@ -935,7 +903,7 @@ interface first, with a second implementation showing it is not shaped around on
 
 **Reference:**
 
-- [`spec/orca-trace-v0.md`](spec/orca-trace-v0.md) — the normative trace format
+- [`spec/agenticreplay-trace-v0.md`](spec/agenticreplay-trace-v0.md) — the normative trace format
 - [`docs/integrations.md`](docs/integrations.md) — recording a framework, one command each, every number asserted in CI
 - [`docs/architecture.md`](docs/architecture.md) — how capture, replay and fork actually work
 - [`docs/validation.md`](docs/validation.md) — what broke the first time this met a real agent
@@ -961,8 +929,8 @@ already written down.
 - **Reimplement the reader.** The spec is CC BY 4.0 on purpose. There is already a Python reader;
   Go and Rust are open.
 - **Break the replay.** The matching ladder is the heart of this and the fastest way to improve it
-  is a real recording it gets wrong. Open an issue with `orca export last -o bug.html` attached — it
-  is one self-contained file, and `orca scrub` is there for anything you need out of it first.
+  is a real recording it gets wrong. Open an issue with `agenticreplay export last -o bug.html` attached — it
+  is one self-contained file, and `agenticreplay scrub` is there for anything you need out of it first.
 
 If it saved you an afternoon, a ⭐ helps other people find it.
 

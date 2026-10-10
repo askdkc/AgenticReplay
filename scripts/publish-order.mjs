@@ -4,7 +4,7 @@
  *
  * Internal dependencies are pinned to an exact version, which is right — a `*` resolves to whatever
  * happens to be latest, so a 0.1.0 CLI would silently pick up a 0.9.0 core. The cost is that order
- * now matters: publishing the CLI before `@orcareplay/core` fails, because the version it names does
+ * now matters: publishing the CLI before `@agenticreplay/core` fails, because the version it names does
  * not exist on the registry yet.
  *
  * Computed rather than written down, so adding a dependency cannot silently invalidate a hardcoded
@@ -26,7 +26,7 @@ for (const entry of await readdir(dir, { withFileTypes: true })) {
   packages.set(pkg.name, {
     dir: join('packages', entry.name),
     version: pkg.version,
-    deps: Object.keys({ ...pkg.dependencies }).filter((d) => d.startsWith('@orcareplay/')),
+    deps: Object.keys({ ...pkg.dependencies }).filter((d) => d.startsWith('@agenticreplay/')),
     ranges: { ...pkg.dependencies },
   });
 }

@@ -78,21 +78,26 @@ for (const name of entries) {
 }
 
 // The quickstart asset is a real recording that ships inside the npm package and is replayed on
-// every `orca quickstart`, so it is held to the format the same way the hand-written examples are.
+// every `agenticreplay quickstart`, so it is held to the format the same way the hand-written examples are.
 // It is not under examples/traces/ because it is not a fixture — it is the product's own demo.
 await checkTrace(join(root, 'packages', 'cli', 'quickstart', 'trace'), 'the quickstart trace');
 
 // A trace this repository's writer produced, checked by the same rules as the examples. Without
 // it the job could stay green while the writer emitted something the schema forbids.
-const scratch = await mkdtemp(join(tmpdir(), 'orca-conformance-'));
+const scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-conformance-'));
 try {
   const writer = await TraceWriter.create(scratch, {
     adapter: { id: 'generic-openai', version: '0.0.0' },
     argv: ['generic-openai'],
     cwd: scratch,
-    orcaVersion: '0.0.0',
+    agenticreplayVersion: '0.0.0',
   });
-  await writer.append({ type: 'run.start', actor: 'orca', turn: 0, attrs: { adapter: 'x' } });
+  await writer.append({
+    type: 'run.start',
+    actor: 'agenticreplay',
+    turn: 0,
+    attrs: { adapter: 'x' },
+  });
   await writer.append({
     type: 'model.request',
     actor: 'agent',
@@ -140,7 +145,7 @@ try {
     attrs: { server: 'files', kind: 'response', id: 1 },
     payload: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { tools: [] } }),
   });
-  // What a retriever put into a prompt, which `orca record` derives for real from any request
+  // What a retriever put into a prompt, which `agenticreplay record` derives for real from any request
   // carrying a `Context: … Question: …` structure — the shape every RAG template writes. Derived
   // rather than captured, like `tool.call`: the passages are in the request because putting them
   // there is what retrieval is for.
@@ -159,7 +164,7 @@ try {
       passages: ['Marie Curie was born in Warsaw in 1867.', 'She later moved to Paris.'],
     }),
   });
-  // The harness's own transcript, which `orca record` captures for real whenever the adapter
+  // The harness's own transcript, which `agenticreplay record` captures for real whenever the adapter
   // knows where the harness keeps one. It is the only record of what a hand-driven run was
   // *asked*, so a trace missing it cannot be replayed at all — worth a line here for the same
   // reason the MCP pair above is.
@@ -176,20 +181,20 @@ try {
     },
     payload: JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } }),
   });
-  // A fork and the divergence a fork reports. Both come out of `orca replay --from N --model X`.
+  // A fork and the divergence a fork reports. Both come out of `agenticreplay replay --from N --model X`.
   await writer.append({
     type: 'fork',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 1,
     attrs: { parent_run: 'run_000000000000', fork_point: 2, model: 'gpt-5.2' },
   });
   await writer.append({
     type: 'divergence',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 1,
     attrs: { level: 'minor', rung: 2, detail: 'trailing message differs', source_seq: 2 },
   });
-  // A routing decision, which a fork emits for real now: orca substituted the model, picked the
+  // A routing decision, which a fork emits for real now: agenticreplay substituted the model, picked the
   // dialect that serves it and picked the origin.
   await writer.append({
     type: 'route.decision',
@@ -204,7 +209,12 @@ try {
       reason: 'gpt-5.2 is served by openai, not the recorded anthropic',
     },
   });
-  await writer.append({ type: 'run.end', actor: 'orca', turn: 1, attrs: { exit_code: 0 } });
+  await writer.append({
+    type: 'run.end',
+    actor: 'agenticreplay',
+    turn: 1,
+    attrs: { exit_code: 0 },
+  });
   await writer.close(0);
   await checkTrace(writer.runDir, 'this writer, freshly recorded');
 } finally {

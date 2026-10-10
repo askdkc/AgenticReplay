@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { cardTarget, gifFrames, RENDER_DEPS, missingRenderDeps } from '../src/rasterize.js';
 
 describe('cardTarget', () => {
-  it('accepts the three formats orca can produce', () => {
+  it('accepts the three formats agenticreplay can produce', () => {
     expect(cardTarget('a.svg', '--card').format).toBe('svg');
     expect(cardTarget('a.png', '--card').format).toBe('png');
     expect(cardTarget('a.gif', '--card').format).toBe('gif');
@@ -59,7 +59,7 @@ describe('missingRenderDeps', () => {
   });
 });
 
-describe('orca doctor reports the raster toolchain', () => {
+describe('agenticreplay doctor reports the raster toolchain', () => {
   it('says whether a card can be written as a PNG or GIF', async () => {
     const { doctorCommand } = await import('../src/commands/doctor.js');
     const { parseArgs } = await import('../src/args.js');

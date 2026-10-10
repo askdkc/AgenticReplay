@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@orcareplay/core', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@orcareplay/core')>();
+vi.mock('@agenticreplay/core', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@agenticreplay/core')>();
   return {
     ...real,
     restrictToOwner: async (path: string, mode: 0o600 | 0o700) => {
@@ -23,8 +23,8 @@ describe.runIf(process.platform === 'win32')('config directory refusal', () => {
   });
 
   it('keeps the old config and writes no credential when its parent cannot be secured', async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-config-refusal-'));
-    const dir = join(root, 'orca');
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-config-refusal-'));
+    const dir = join(root, 'agenticreplay');
     await mkdir(dir);
     await writeFile(join(dir, 'config.json'), 'previous config');
     await expect(

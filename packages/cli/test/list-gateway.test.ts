@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
+import { TraceWriter } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output, stripAnsi, type LogEntry } from '../src/out.js';
 import { listCommand } from '../src/commands/inspect.js';
@@ -12,7 +12,7 @@ import { pullCommand, pushCommand } from '../src/commands/sync.js';
 import { writeConfig } from '../src/config.js';
 
 /**
- * `orca list --remote`, against a gateway stood up in-process.
+ * `agenticreplay list --remote`, against a gateway stood up in-process.
  *
  * The same shape as the push and pull tests and for the same reason: what a command talking to a
  * gateway gets wrong is the wire — which path, which query, which header carries the key, what a
@@ -24,7 +24,7 @@ import { writeConfig } from '../src/config.js';
  * the gateway's console in a browser — so the terminal could push a run but could not discover
  * one, and a run the gateway recorded ITSELF (most of them) was not reachable from here at all.
  */
-describe('orca list --remote', () => {
+describe('agenticreplay list --remote', () => {
   let home: string;
   let server: Server;
   let url: string;
@@ -99,7 +99,7 @@ describe('orca list --remote', () => {
     JSON.stringify({ success: true, data: { items } });
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-list-home-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-list-home-'));
     lines = [];
     logs = [];
     out = new Output({
@@ -134,8 +134,8 @@ describe('orca list --remote', () => {
 
   const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
     XDG_CONFIG_HOME: home,
-    ORCA_GATEWAY_URL: url,
-    ORCA_GATEWAY_KEY: 'sk-replay-test',
+    AGENTICREPLAY_GATEWAY_URL: url,
+    AGENTICREPLAY_GATEWAY_KEY: 'sk-replay-test',
     ...extra,
   });
 
@@ -160,7 +160,7 @@ describe('orca list --remote', () => {
     // For a pushed run `outcome` is its exit; a gateway recording reports `end_turn` or `error`.
     expect(rendered).toContain('exit 0');
     // The listing exists to be acted on, and pull is the only thing to do with a run not here yet.
-    expect(rendered).toContain('orca pull <run>');
+    expect(rendered).toContain('agenticreplay pull <run>');
   });
 
   /**
@@ -208,7 +208,7 @@ describe('orca list --remote', () => {
     await expect(
       listCommand(parseArgs(['list', '--remote']), out, home, {
         XDG_CONFIG_HOME: home,
-        ORCA_GATEWAY_URL: url,
+        AGENTICREPLAY_GATEWAY_URL: url,
       }),
     ).rejects.toThrow(/key/i);
     // Not "sent without the header" — not sent at all.
@@ -293,7 +293,7 @@ describe('orca list --remote', () => {
    * A ROW THAT IS NOT A RUN IS NOT A ROW.
    *
    * `items` was mapped straight through, so `null` in it read `run_key` off nothing and the user
-   * got `Cannot read properties of null (reading 'run_key')` with orca's name on it. A string or
+   * got `Cannot read properties of null (reading 'run_key')` with agenticreplay's name on it. A string or
    * a number in there fared no better: every field came out empty and the reader was shown a run
    * with no id, which is a run they cannot pull. Counted rather than dropped in silence — a
    * gateway sending these is broken, and the count is the only evidence the reader gets.
@@ -322,7 +322,7 @@ describe('orca list --remote', () => {
    * A 2xx THAT IS NOT JSON IS SOMEBODY ELSE ANSWERING. `refusal` already says as much about error
    * bodies — "a proxy in between may answer instead of the gateway" — and the success path had no
    * such thought, so a captive portal's login page surfaced as `Unexpected token '<'`, which
-   * reads as a bug in orca rather than as the network fact it is.
+   * reads as a bug in agenticreplay rather than as the network fact it is.
    */
   it('names a proxy or portal rather than reporting a JSON parse error', async () => {
     reply = { status: 200, body: '<html><body>502 Bad Gateway</body></html>' };
@@ -334,7 +334,7 @@ describe('orca list --remote', () => {
     expect(failed).not.toContain('Unexpected token');
   });
 
-  /** The shape `orca gc --keep` refuses, for the same reason: a count has to be one. */
+  /** The shape `agenticreplay gc --keep` refuses, for the same reason: a count has to be one. */
   it.each([['0'], ['-1'], ['2.5']])('refuses --limit %s rather than asking for it', async (n) => {
     await expect(
       listCommand(parseArgs(['list', '--remote', '--limit', n]), out, home, env()),
@@ -350,7 +350,7 @@ describe('orca list --remote', () => {
     );
     await listCommand(parseArgs(['list', '--remote', '--gateway', url]), out, home, {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_KEY: 'sk-replay-test',
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-replay-test',
     });
     expect(received).toHaveLength(1);
   });
@@ -361,7 +361,7 @@ describe('orca list --remote', () => {
    * `client_app` is not the operator's string alone — the gateway derives it from request headers
    * under its own Client App Identification rules, so anyone who can route traffic through the
    * workspace chooses part of what this prints. A newline in it used to split one row into two,
-   * and the invented second row carried a run key that `orca pull` would then be asked for.
+   * and the invented second row carried a run key that `agenticreplay pull` would then be asked for.
    */
   it('cannot be made to print a run the gateway did not list', async () => {
     const forged = `cc\nrun_deadbeefcafe0123456789ab  2026-09-20 10:00  gateway  trusted`;
@@ -400,8 +400,8 @@ describe('orca list --remote', () => {
   /**
    * `--json` IS A SECOND SINK FOR THE SAME COMMAND, NOT A DIFFERENT COMMAND.
    *
-   * `jsonMain` read `orca.list()` and never looked at `--remote`, so
-   * `orca list --remote --json` ran the LOCAL listing: from a directory with no runs it emitted
+   * `jsonMain` read `agenticreplay.list()` and never looked at `--remote`, so
+   * `agenticreplay list --remote --json` ran the LOCAL listing: from a directory with no runs it emitted
    * `[]` and exited 0, telling a script the gateway holds nothing while the same command without
    * `--json` printed what it holds. A wrong answer, in silence, to the reader least able to
    * notice — the one that is not a person.
@@ -459,7 +459,7 @@ describe('orca list --remote', () => {
     /**
      * The plain path refuses both of these before anything runs, over a comment saying a flag the
      * command does not have is an instruction that would be silently ignored. `--json` returned
-     * above that comment, so it ignored them — `orca show --worktre --json` did the opposite of
+     * above that comment, so it ignored them — `agenticreplay show --worktre --json` did the opposite of
      * what was typed and said nothing.
      */
     it.each([
@@ -481,7 +481,7 @@ describe('orca list --remote', () => {
    *
    * Adding `--gateway`, `--source` and `--limit` to `list`'s allowlist let them past
    * `assertKnownFlags` unconditionally, and then the local listing ran and dropped them. The worst
-   * of the three: `orca list --gateway <url>` printed THIS directory's runs to someone who had just
+   * of the three: `agenticreplay list --gateway <url>` printed THIS directory's runs to someone who had just
    * named a host, which reads as that host's answer.
    *
    * Driven through `main()`, because that is where flags are judged — a command function trusts the
@@ -597,8 +597,8 @@ describe('orca list --remote', () => {
    *
    * `created_at` is when the gateway stored the row; for a pushed run that is the push, and in
    * production it trails the run's first event by as long as you waited. Preferring it printed
-   * the push as STARTED — and the same run showed two start times, one in `orca list` and another
-   * in `orca list --remote`.
+   * the push as STARTED — and the same run showed two start times, one in `agenticreplay list` and another
+   * in `agenticreplay list --remote`.
    */
   it('dates a pushed run from its first event, not from the push', async () => {
     reply = { status: 200, body: holding(prodItem()) };
@@ -668,13 +668,13 @@ describe('orca list --remote', () => {
   });
 
   it('leaves the local listing alone when --remote is not given', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orca-list-local-'));
+    const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-list-local-'));
     try {
-      const run = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+      const run = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
         adapter: { id: 'claude-code', version: '0.0.0' },
         argv: ['claude-code'],
         cwd: dir,
-        orcaVersion: '0.0.0',
+        agenticreplayVersion: '0.0.0',
       });
       await run.close(0);
 
@@ -706,8 +706,8 @@ describe('gateway refusals name the operation they are refusing', () => {
   let out: Output;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-refusal-home-'));
-    workspace = await mkdtemp(join(tmpdir(), 'orca-refusal-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-refusal-home-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-refusal-'));
     out = new Output({ write: () => {}, isTTY: false });
   });
 
@@ -726,7 +726,7 @@ describe('gateway refusals name the operation they are refusing', () => {
 
   const noKey = (): NodeJS.ProcessEnv => ({
     XDG_CONFIG_HOME: home,
-    ORCA_GATEWAY_URL: 'https://gateway.example.internal',
+    AGENTICREPLAY_GATEWAY_URL: 'https://gateway.example.internal',
   });
 
   const thrown = async (run: Promise<unknown>): Promise<string> => {

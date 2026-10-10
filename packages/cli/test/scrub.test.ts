@@ -13,14 +13,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
-import { validateEvent, validateManifest } from '@orcareplay/schema';
+import { TraceWriter } from '@agenticreplay/core';
+import { validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { scrubCommand } from '../src/commands/scrub.js';
 
 /**
- * `orca scrub` is the second line of defence behind write-path redaction, and it is a promise
+ * `agenticreplay scrub` is the second line of defence behind write-path redaction, and it is a promise
  * made in SECURITY.md and in the bug-report template. It has to actually remove things.
  */
 describe('scrub', () => {
@@ -29,7 +29,7 @@ describe('scrub', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -39,17 +39,22 @@ describe('scrub', () => {
   });
 
   async function makeRun(payloads: unknown[]): Promise<string> {
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     for (const payload of payloads) {
-      await writer.append({ type: 'note', actor: 'orca', turn: 1, payload: payload as never });
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn: 1,
+        payload: payload as never,
+      });
     }
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 1 });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 1 });
     await writer.close(0);
     return writer.runDir;
   }
@@ -189,7 +194,7 @@ describe('scrub', () => {
     const runDir = await makeRun(['remove ME-PLEASE now']);
     await scrubCommand(parseArgs(['scrub', 'last', '--match', 'ME-PLEASE']), out, cwd);
 
-    const { TraceReader } = await import('@orcareplay/core');
+    const { TraceReader } = await import('@agenticreplay/core');
     const reader = await TraceReader.open(runDir);
     const integrity = await reader.verifyIntegrity();
     expect(integrity.ok, 'a scrubbed trace that fails its own integrity check is unusable').toBe(
@@ -230,18 +235,18 @@ describe('scrub', () => {
 
 describe('scrub — binary safety', () => {
   it('leaves a binary blob byte-identical even when it contains the literal', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-bin-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-bin-'));
     const out = new Output({ write: () => {}, isTTY: false });
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     await writer.close(0);
 
-    const { BlobStore } = await import('@orcareplay/core');
+    const { BlobStore } = await import('@agenticreplay/core');
     const store = new BlobStore(join(writer.runDir, 'blobs'));
     // Contains the literal AND a NUL byte. Without the binary guard the scrubber would rewrite
     // this as UTF-8 text and silently corrupt every byte after the replacement.
@@ -259,18 +264,18 @@ describe('scrub — binary safety', () => {
   });
 
   it('still scrubs a text blob containing the same literal', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-txt-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-txt-'));
     const out = new Output({ write: () => {}, isTTY: false });
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     await writer.close(0);
 
-    const { BlobStore } = await import('@orcareplay/core');
+    const { BlobStore } = await import('@agenticreplay/core');
     const store = new BlobStore(join(writer.runDir, 'blobs'));
     await store.put(`prose with NEEDLE inside ${'z'.repeat(100)}`);
 
@@ -293,7 +298,7 @@ describe('scrub — binary safety', () => {
  * content already held is recognised by its path existing, and the file is then not written at
  * all. Scrubbing a blob in place left a store where that no longer held, so the next `put` of the
  * original material would conclude it was already stored and hand back a reference to scrubbed
- * content. `orca scrub` says as much already about the workspace snapshots it declines to rewrite
+ * content. `agenticreplay scrub` says as much already about the workspace snapshots it declines to rewrite
  * -- git objects are addressed by their own contents. So are these.
  */
 describe('scrub — the blob store stays content-addressed', () => {
@@ -302,7 +307,7 @@ describe('scrub — the blob store stays content-addressed', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-addr-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-addr-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -313,15 +318,15 @@ describe('scrub — the blob store stays content-addressed', () => {
 
   /** A payload over the 4096-byte inline limit, which is the only way to reach a blob at all. */
   async function runWithSpilledPayload(text: string): Promise<string> {
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
-    await writer.append({ type: 'note', actor: 'orca', turn: 1, payload: text as never });
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 1 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
+    await writer.append({ type: 'note', actor: 'agenticreplay', turn: 1, payload: text as never });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 1 });
     await writer.close(0);
     return writer.runDir;
   }
@@ -357,17 +362,27 @@ describe('scrub — the blob store stays content-addressed', () => {
     // Content addressing means one file, two references: every model turn resends the whole
     // conversation, so identical content arriving twice is the ordinary case rather than a corner
     // -- and moving the file while updating one of them would leave the other pointing nowhere.
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
     const shared = `NEEDLE and then ${'z'.repeat(5000)}`;
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
-    await writer.append({ type: 'note', actor: 'orca', turn: 1, payload: shared as never });
-    await writer.append({ type: 'note', actor: 'orca', turn: 2, payload: shared as never });
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 2 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
+    await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      turn: 1,
+      payload: shared as never,
+    });
+    await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      turn: 2,
+      payload: shared as never,
+    });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 2 });
     await writer.close(0);
     expect(await blobFiles(writer.runDir)).toHaveLength(1);
 
@@ -467,7 +482,7 @@ async function blobFiles(
 
 /**
  * The failure mode that matters for a scrubber is not "removed too little" — it is "reported a
- * clean trace it never searched". Each of these pins one way `orca scrub` used to do exactly that.
+ * clean trace it never searched". Each of these pins one way `agenticreplay scrub` used to do exactly that.
  */
 describe('scrub — false all-clears', () => {
   let cwd: string;
@@ -475,7 +490,7 @@ describe('scrub — false all-clears', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-clear-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-clear-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -485,17 +500,22 @@ describe('scrub — false all-clears', () => {
   });
 
   async function makeRun(payloads: unknown[]): Promise<string> {
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     for (const payload of payloads) {
-      await writer.append({ type: 'note', actor: 'orca', turn: 1, payload: payload as never });
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn: 1,
+        payload: payload as never,
+      });
     }
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 1 });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 1 });
     await writer.close(0);
     return writer.runDir;
   }
@@ -653,17 +673,17 @@ describe('scrub — false all-clears', () => {
 
 /**
  * `manifest.json` is where the operator is named: `cwd` and `argv` carry the checkout path, and
- * `env_allowlisted` carries HOME, PATH and USER verbatim. `orca scrub last --match my-hostname`
+ * `env_allowlisted` carries HOME, PATH and USER verbatim. `agenticreplay scrub last --match my-hostname`
  * is the README's own example, so the manifest has to go through the same detectors as the rest.
  */
 describe('scrub — the manifest', () => {
-  const ENV_KEY = 'ORCA_SCRUB_TEST_HOST';
+  const ENV_KEY = 'AGENTICREPLAY_SCRUB_TEST_HOST';
   let cwd: string;
   let out: Output;
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-manifest-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-manifest-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -675,15 +695,15 @@ describe('scrub — the manifest', () => {
 
   async function makeRun(host = 'prod-db-7.internal.example.com'): Promise<string> {
     process.env[ENV_KEY] = `/home/${host}/checkout`;
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['claude', '--project', `/srv/${host}`],
       cwd: `/srv/${host}`,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
       envAllowlist: [ENV_KEY],
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 0 });
     await writer.close(0);
     return writer.runDir;
   }
@@ -740,7 +760,7 @@ describe('scrub — the manifest', () => {
     const result = validateManifest(parsed);
     expect(result.valid, result.errors.join(', ')).toBe(true);
 
-    const { TraceReader } = await import('@orcareplay/core');
+    const { TraceReader } = await import('@agenticreplay/core');
     await expect((await TraceReader.open(runDir)).verifyIntegrity()).resolves.toMatchObject({
       ok: true,
     });
@@ -797,7 +817,7 @@ describe('scrub — the shadow filesystem store', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-fs-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-fs-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -809,23 +829,23 @@ describe('scrub — the shadow filesystem store', () => {
   /** A run whose shadow store holds one workspace file containing `contents`. */
   async function makeRunWithSnapshot(contents: string): Promise<{ runDir: string; tree: string }> {
     await writeFile(join(cwd, 'config.ts'), contents, 'utf8');
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
-    const { FsCapture } = await import('@orcareplay/fs-capture');
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
+    const { FsCapture } = await import('@agenticreplay/fs-capture');
     const capture = await FsCapture.start({ runDir: writer.runDir, cwd });
     const snapshot = await capture.snapshotTurn(0);
     await writer.append({
       type: 'fs.snapshot',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 0,
       attrs: { tree: snapshot.tree },
     });
-    await writer.append({ type: 'run.end', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', turn: 0 });
     await writer.close(0);
     return { runDir: writer.runDir, tree: snapshot.tree };
   }
@@ -850,8 +870,8 @@ describe('scrub — the shadow filesystem store', () => {
     const { runDir, tree } = await makeRunWithSnapshot(`export const host = '${NEEDLE}';\n`);
     await scrubCommand(parseArgs(['scrub', 'last', '--match', NEEDLE]), out, cwd);
 
-    const dest = await mkdtemp(join(tmpdir(), 'orca-scrub-fs-restore-'));
-    const { ShadowIndex } = await import('@orcareplay/fs-capture');
+    const dest = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-fs-restore-'));
+    const { ShadowIndex } = await import('@agenticreplay/fs-capture');
     const shadow = await ShadowIndex.create({ gitDir: join(runDir, 'fs'), workTree: cwd });
     await shadow.materialize(tree, dest);
     expect(await readFile(join(dest, 'config.ts'), 'utf8')).toContain(NEEDLE);
@@ -891,16 +911,16 @@ describe('scrub — the shadow filesystem store', () => {
 /** A store that is present but unreadable is the one case where "0 matches" proves nothing. */
 describe('scrub — an unreadable shadow store', () => {
   it('says it could not check, rather than reporting a clean trace', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'orca-scrub-fs-bad-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-fs-bad-'));
     const lines: string[] = [];
     const out = new Output({ write: (s) => void lines.push(s), isTTY: false });
-    const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
       adapter: { id: 'test' },
       argv: ['test'],
       cwd,
-      orcaVersion: '0.1.0',
+      agenticreplayVersion: '0.1.0',
     });
-    await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     await writer.close(0);
     // Present, but not an object database git can open.
     await mkdir(join(writer.runDir, 'fs'), { recursive: true });

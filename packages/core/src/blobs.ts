@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BlobRef } from '@orcareplay/schema';
+import type { BlobRef } from '@agenticreplay/schema';
 
 /** Traces are sensitive material (design §7), so nothing is group- or world-readable. */
 const FILE_MODE = 0o600;
@@ -55,8 +55,12 @@ export class BlobStore {
     await mkdir(shard, { recursive: true, mode: DIR_MODE });
     // Write then rename so a reader never sees a half-written blob under its final digest.
     const tmp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
-    await writeFile(tmp, bytes, { mode: FILE_MODE });
-    await rename(tmp, path);
+    try {
+      await writeFile(tmp, bytes, { mode: FILE_MODE, flag: 'wx' });
+      await rename(tmp, path);
+    } finally {
+      await rm(tmp, { force: true });
+    }
     return ref;
   }
 

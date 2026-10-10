@@ -1,4 +1,4 @@
-# Captures stay local. The request bodies carry session and message ids, the raw orca runs carry
+# Captures stay local. The request bodies carry session and message ids, the raw agenticreplay runs carry
 # account and device ids, and none of it is needed to use the tool. Only the script, the
 # documents and the scrubbed prompts under ../prompt/ are committed.
 */

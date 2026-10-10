@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { TraceWriter } from '@orcareplay/core';
-import type { TraceEvent } from '@orcareplay/schema';
+import type { TraceWriter } from '@agenticreplay/core';
+import type { TraceEvent } from '@agenticreplay/schema';
 import {
   DEFAULT_MAX_CAPTURED_BYTES,
   HostPolicy,
@@ -9,24 +9,26 @@ import {
   resolveTlsHosts,
   type InterceptFailure,
   type NetExchange,
+  type NetRequest,
   type TlsInterceptInfo,
   type TunnelRecord,
-} from '@orcareplay/proxy';
+} from '@agenticreplay/proxy';
 import type { ParsedArgs } from './args.js';
 import type { Output } from './out.js';
 import type { SerialQueue } from './serial.js';
+import { captureLimits } from './capture-limits.js';
 
 /**
  * TLS interception, shared by every command that runs an agent live.
  *
- * This lived inside `orca record` and nowhere else, which made `--tls-intercept` a flag the parser
- * accepted and `orca replay --model`, `orca fork` and `orca compare` silently discarded — the three
+ * This lived inside `agenticreplay record` and nowhere else, which made `--tls-intercept` a flag the parser
+ * accepted and `agenticreplay replay --model`, `agenticreplay fork` and `agenticreplay compare` silently discarded — the three
  * commands that also launch a real agent, and so the three where a harness talking to its own
  * backend over TLS is just as invisible. A flag that is accepted and ignored is worse than one that
  * is rejected: the operator believes they captured the traffic.
  *
  * Everything that can be rejected is rejected before anything is minted, so a run that is not going
- * to happen — `--tls-hosts '*'`, an unreadable `ORCA_TLS_UPSTREAM_CA` — leaves no private key on
+ * to happen — `--tls-hosts '*'`, an unreadable `AGENTICREPLAY_TLS_UPSTREAM_CA` — leaves no private key on
  * disk at all. The caller owns the CA's lifetime and must dispose it on every exit path.
  */
 
@@ -44,9 +46,8 @@ export interface TlsCaptureRequest {
   runDir?: string;
   writes: SerialQueue;
   /**
-   * The turn a frame belongs to, read when the frame is persisted rather than when capture is set
-   * up: out-of-band traffic is attributed to whichever turn was in progress at the time, and the
-   * caller's turn counter moves under us.
+   * Snapshot the current turn at request start. The request ID retains that assignment through
+   * concurrent completion. Tunnel-only evidence has no HTTP request and uses its observation time.
    */
   turn: () => number;
   /**
@@ -55,6 +56,8 @@ export interface TlsCaptureRequest {
    * its own tally as before.
    */
   unclaimed?: UnclaimedPaths;
+  onRequestStart?: (request: NetRequest) => Promise<void>;
+  onNetExchange?: (exchange: NetExchange) => void;
 }
 
 export interface TlsCapture {
@@ -74,7 +77,7 @@ export interface TlsCapture {
  *
  * `extraOriginRoots` is here for the second reason and not the first. It reads files, so it was
  * left out of a function whose whole point was to decide from the arguments alone — but that made
- * this only *most* of what `setupTlsCapture` refuses, and an unreadable `ORCA_TLS_UPSTREAM_CA`
+ * this only *most* of what `setupTlsCapture` refuses, and an unreadable `AGENTICREPLAY_TLS_UPSTREAM_CA`
  * went on failing late, past the restore. The roots are read again below, microseconds later and
  * on a path the run was going to read anyway.
  */
@@ -82,6 +85,7 @@ export async function planTlsCapture(
   args: ParsedArgs,
   recordedHosts?: readonly string[],
 ): Promise<void> {
+  captureLimits(args);
   if (!interceptionRequested(args, recordedHosts)) return;
   HostPolicy.from([...resolveTlsHosts(args.list('tls-hosts'), recordedHosts)]);
   await extraOriginRoots();
@@ -95,7 +99,7 @@ export async function planTlsCapture(
  * proxy never sees the request at all: it tunnels the CONNECT to an origin that is offline or,
  * worse, live. That failed as `reused=0/n` — which reads as a broken recording rather than as a
  * missing flag, and the flag is one nobody thinks to repeat when the command they type is
- * `orca replay last`.
+ * `agenticreplay replay last`.
  *
  * So the recording decides. It already knows: every intercepted run writes a `tls_intercept` note
  * naming the hosts it decrypted. Nothing is inferred and nothing is widened — an operator who
@@ -105,7 +109,7 @@ export async function planTlsCapture(
 function interceptionRequested(args: ParsedArgs, recordedHosts?: readonly string[]): boolean {
   const askedFor = args.bool('tls-intercept');
   // `--no-tls-intercept` is the only way to tell "left unset" apart from "explicitly refused", and
-  // the difference matters: absence means orca may decide, refusal means it may not.
+  // the difference matters: absence means agenticreplay may decide, refusal means it may not.
   const refused = args.has('tls-intercept') && !askedFor;
   return askedFor || (!refused && recordedHosts !== undefined);
 }
@@ -117,11 +121,12 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
   const interceptTls = interceptionRequested(args, recordedHosts);
 
   // Naming hosts without asking for interception captures nothing and says nothing, which reads
-  // as "orca ignored my traffic" rather than as "orca ignored my flag".
+  // as "agenticreplay ignored my traffic" rather than as "agenticreplay ignored my flag".
   if (!interceptTls && tlsHosts.length > 0) {
     out.warn('tls.hosts_ignored', { hosts: tlsHosts.join(','), next: 'add --tls-intercept' });
   }
-  if (!interceptTls) return { proxyOptions: {} };
+  const limits = captureLimits(args);
+  if (!interceptTls) return { proxyOptions: limits };
 
   // Resolved before anything is minted, so a contradictory list — one that both replaces the
   // defaults and adds to them — fails while the run directory still holds no private key.
@@ -134,26 +139,75 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
 
   // One line per path, not per call: an agent that posts to the same endpoint every turn would
   // otherwise bury the run in a warning the operator already read.
-  const unclaimed = req.unclaimed ?? new UnclaimedPaths();
+  const unclaimed = req.unclaimed ?? new UnclaimedPaths(limits.maxCapturedBytes);
+  const requestTurns = new Map<string, number>();
 
   return {
     ca,
     proxyOptions: {
+      ...limits,
       tls: {
+        ...limits,
         ca,
         hosts: [...hosts],
         trustedOriginCerts,
+        onRequestStart: async (request: NetRequest) => {
+          if (req.onRequestStart) return req.onRequestStart(request);
+          const turn = req.turn();
+          requestTurns.set(request.requestId, turn);
+          if (writer) await persistNetRequestStart(writer, turn, request);
+        },
         onNetExchange: (exchange: NetExchange) => {
+          if (req.onNetExchange) return req.onNetExchange(exchange);
           unclaimed.note(out, exchange);
-          if (writer) writes.push(() => persistNetExchange(writer, req.turn(), exchange));
+          const turn = requestTurns.get(exchange.requestId) ?? req.turn();
+          requestTurns.delete(exchange.requestId);
+          if (writer) writes.push(() => persistNetExchange(writer, turn, exchange));
         },
         onTunnel: (tunnel: TunnelRecord) => {
           if (writer) writes.push(() => persistTunnel(writer, req.turn(), tunnel));
         },
-        onFailure: (failure: InterceptFailure) => reportInterceptFailure(out, failure),
+        onFailure: (failure: InterceptFailure) => {
+          writer?.markCaptureIncomplete('transport_interception_failed');
+          if (writer)
+            writes.push(async () => {
+              await writer.append({
+                type: 'note',
+                actor: 'agenticreplay',
+                turn: req.turn(),
+                attrs: { rule: 'transport_interception_failed', ...failure },
+              });
+            });
+          reportInterceptFailure(out, failure);
+        },
       },
     },
   };
+}
+
+export async function persistNetRequestStart(
+  writer: TraceWriter,
+  turn: number,
+  request: NetRequest,
+): Promise<void> {
+  await writer.append({
+    type: 'net.request',
+    actor: 'agent',
+    turn,
+    occurredAt: new Date(request.requestStartedAt),
+    attrs: {
+      phase: 'start',
+      request_id: request.requestId,
+      boundary: 'tls-intercept',
+      host: request.host,
+      port: request.port,
+      method: request.method,
+      path: request.path,
+      headers: request.requestHeaders,
+      bytes: request.requestBytes.byteLength,
+      truncated: request.requestTruncated,
+    },
+  });
 }
 
 /**
@@ -172,10 +226,11 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
 export class UnclaimedPaths {
   readonly #reported = new Set<string>();
   readonly #paths = new Set<string>();
+  constructor(private readonly bodyLimit = DEFAULT_MAX_CAPTURED_BYTES) {}
 
   /** Warn about this exchange if it is the first on its path, and remember the path. */
   note(out: Output, exchange: NetExchange): void {
-    warnUnclaimed(out, this.#reported, this.#paths, exchange);
+    warnUnclaimed(out, this.#reported, this.#paths, exchange, this.bodyLimit);
   }
 
   /** The distinct paths seen, in the order they were first seen. */
@@ -191,7 +246,7 @@ export class UnclaimedPaths {
 /**
  * A call that looked like a model request and was not understood.
  *
- * Traffic on a path no dialect claims is recorded as `net.*`: orca holds the bytes but not their
+ * Traffic on a path no dialect claims is recorded as `net.*`: agenticreplay holds the bytes but not their
  * meaning, so it can neither match the request on replay nor rewrite its model on a fork. Strict
  * replay says so plainly — and says it one command too late, after the agent has finished and the
  * chance to record the run properly has gone. This is the same fact, delivered while it is still
@@ -205,13 +260,14 @@ function warnUnclaimed(
   reported: Set<string>,
   paths: Set<string>,
   exchange: NetExchange,
+  bodyLimit: number,
 ): void {
   if (exchange.method !== 'POST') return;
   // A retrieval rule claimed it, so every word of the warning below is false about this call: it
   // is not unclaimed, it does replay, and there is no dialect to go and write. Recording an
   // index build printed one of these per endpoint and told the operator the run could not be
-  // reproduced, at the moment orca had just made sure it could.
-  if (exchange.rule !== undefined) return;
+  // reproduced, at the moment agenticreplay had just made sure it could.
+  if (exchange.rule !== undefined || exchange.modelDialect !== undefined) return;
   // No response ever arrived, so this one is not evidence that a path went unrecognised. It is
   // kept as network traffic because an exchange with nothing to replay cannot be a model exchange
   // whatever dialect exists -- and telling the operator to write one would not change that. A
@@ -227,7 +283,7 @@ function warnUnclaimed(
       const parsed: unknown = JSON.parse(body);
       if (typeof parsed !== 'object' || parsed === null) return;
     } catch {
-      // A body orca could not even parse is not a model call it failed to recognise.
+      // A body agenticreplay could not even parse is not a model call it failed to recognise.
       return;
     }
   }
@@ -250,10 +306,10 @@ function warnUnclaimed(
     out.warn(`${rule}.request_too_large`, {
       host: exchange.host,
       path: exchange.path,
-      limit_bytes: DEFAULT_MAX_CAPTURED_BYTES,
+      limit_bytes: bodyLimit,
       detail: 'the request body was cut at the capture limit, so no dialect could read it',
-      consequence: 'it replays as opaque network traffic and cannot be forked to another model',
-      next: 'orca show <run> reads the prefix that was kept',
+      consequence: 'capture is incomplete; the omitted body is not eligible for replay',
+      next: 'increase --max-body-bytes and record again',
     });
     return;
   }
@@ -296,7 +352,7 @@ export function recordedTlsHosts(events: readonly TraceEvent[]): readonly string
  * What the launched agent needs in its environment to be intercepted, and the disclosure the
  * operator needs before it happens.
  *
- * Lived in `orca record` alongside the setup, so a fork that minted a CA would have decrypted
+ * Lived in `agenticreplay record` alongside the setup, so a fork that minted a CA would have decrypted
  * nothing: the child was never pointed at the proxy and never told to trust the root. Interception
  * is only two halves working together, so both halves belong in one place.
  */
@@ -308,14 +364,17 @@ export async function trustRunCa(
   out: Output,
 ): Promise<void> {
   // The child trusts the run CA through its own environment and through nothing else. Nothing here
-  // touches a system or browser trust store, and orca will not offer to: interception ends when
+  // touches a system or browser trust store, and agenticreplay will not offer to: interception ends when
   // this process does, which is the property that makes it defensible at all.
   env.HTTPS_PROXY = proxyUrl;
   env.https_proxy = proxyUrl;
   // NODE_EXTRA_CA_CERTS *adds* to Node's trust store. The rest of these *replace* an OpenSSL
   // client's store outright, so they get the bundle — the run CA plus the public roots — or the
-  // child would lose its ability to reach every host orca deliberately does not intercept.
+  // child would lose its ability to reach every host agenticreplay deliberately does not intercept.
   env.NODE_EXTRA_CA_CERTS = proxyTls.caCertPath;
+  // Python OS truststore clients may ignore SSL_CERT_FILE. The process-local bootstrap
+  // adds this CA to their contexts while retaining platform roots and verification.
+  env.AGENTICREPLAY_TLS_CA = proxyTls.caCertPath;
   for (const variable of [
     'SSL_CERT_FILE',
     'REQUESTS_CA_BUNDLE',
@@ -339,7 +398,9 @@ export async function trustRunCa(
   });
   out.plain('  TLS interception is on for this run. Traffic to the hosts above is decrypted,');
   out.plain('  recorded and re-encrypted; everything else is tunnelled unread. The certificate');
-  out.plain('  authority is unique to this run, trusted only by the agent orca launches, and');
+  out.plain(
+    '  authority is unique to this run, trusted only by the agent agenticreplay launches, and',
+  );
   out.plain('  deleted when the run ends. It is not installed anywhere.');
 
   // A digest, never the certificate and never the key. The CA is deleted when the run ends, so
@@ -348,15 +409,20 @@ export async function trustRunCa(
   if (writer) {
     await writer.append({
       type: 'note',
-      actor: 'orca',
+      actor: 'agenticreplay',
       turn: 0,
-      attrs: { rule: 'tls_intercept', hosts: proxyTls.hosts, ca_sha256: proxyTls.fingerprint },
+      attrs: {
+        rule: 'tls_intercept',
+        hosts: proxyTls.hosts,
+        ca_sha256: proxyTls.fingerprint,
+        python_trust: 'process-local truststore CA addition; verification remains enabled',
+      },
     });
   }
 }
 
 /**
- * One decrypted HTTP exchange orca did not recognise as a model call.
+ * One decrypted HTTP exchange agenticreplay did not recognise as a model call.
  *
  * `net.request` / `net.response` have been in the spec since v0 and nothing has ever emitted them;
  * this is what makes them real. The pair is deliberately shaped like `model.request` /
@@ -367,13 +433,33 @@ export async function persistNetExchange(
   turn: number,
   exchange: NetExchange,
 ): Promise<void> {
+  const failedBeforeHeaders =
+    exchange.status === 0 && Boolean(exchange.responseError) && exchange.responseBytes === 0;
+  const incomplete =
+    exchange.requestTruncated ||
+    exchange.responseTruncated ||
+    (!exchange.responseComplete && !failedBeforeHeaders) ||
+    Boolean(exchange.abandoned);
+  if (incomplete) writer.markCaptureIncomplete('incomplete_transport_body');
+  const requestChanges = (exchange.transformations ?? []).filter((t) =>
+    t.location.startsWith('request'),
+  );
+  const responseChanges = (exchange.transformations ?? []).filter((t) =>
+    t.location.startsWith('response'),
+  );
+  const translated = responseChanges.some((t) => t.rule === 'provider-protocol-translation');
   const request = await writer.append({
     type: 'net.request',
     // The agent made the call. No actor names "some server on the internet", so the reply is
-    // attributed to orca, which is the only party that witnessed it.
+    // attributed to agenticreplay, which is the only party that witnessed it.
     actor: 'agent',
     turn,
+    occurredAt: new Date(exchange.requestStartedAt),
     attrs: {
+      phase: 'body',
+      request_id: exchange.requestId,
+      boundary: exchange.intercepted === false ? 'http-proxy' : 'tls-proxy',
+      capture_incomplete: exchange.requestTruncated,
       host: exchange.host,
       port: exchange.port,
       method: exchange.method,
@@ -385,35 +471,65 @@ export async function persistNetExchange(
       // The two fields that make a `net.*` pair replayable rather than merely recorded: which
       // rule claimed the call, and what a later run looks it up by. Purely additive — a reader
       // that does not know about them sees the same pair it always did, and their absence means
-      // what it has always meant: orca holds these bytes and not their meaning.
+      // what it has always meant: agenticreplay holds these bytes and not their meaning.
       ...(exchange.rule === undefined ? {} : { rule: exchange.rule }),
+      ...(exchange.modelDialect === undefined ? {} : { model_dialect: exchange.modelDialect }),
+      ...(translated
+        ? {
+            replay_eligible: false,
+            replay_ineligible_reason: 'origin_response_translated_for_client',
+          }
+        : {}),
       ...(exchange.replayKey === undefined ? {} : { replay_key: exchange.replayKey }),
       ...(exchange.batchKey === undefined ? {} : { batch_key: exchange.batchKey }),
       headers: exchange.requestHeaders,
+      bytes: exchange.requestBytes,
       truncated: exchange.requestTruncated,
     },
-    payload: exchange.requestBody as never,
+    ...(exchange.requestTruncated
+      ? {
+          transformations: [
+            ...requestChanges,
+            {
+              kind: 'omission' as const,
+              location: 'request.body',
+              rule: 'capture_limit',
+              count: 1,
+              reason: 'body exceeds capture resource limit',
+            },
+          ],
+        }
+      : { payload: exchange.requestBody, transformations: requestChanges }),
   });
   await writer.append({
     type: 'net.response',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn,
     causes: [request.seq],
     attrs: {
+      request_id: exchange.requestId,
+      capture_incomplete: incomplete,
+      response_complete: exchange.responseComplete,
+      transport_outcome: exchange.abandoned
+        ? 'client_aborted'
+        : exchange.responseError
+          ? 'origin_error'
+          : 'completed',
+      ...(exchange.responseError ? { error: exchange.responseError } : {}),
       host: exchange.host,
       port: exchange.port,
       status: exchange.status,
       intercepted: exchange.intercepted ?? true,
       headers: exchange.responseHeaders,
       bytes: exchange.responseBytes,
-      // What orca decompressed, next to the header set that no longer describes it. `bytes` is
+      // What agenticreplay decompressed, next to the header set that no longer describes it. `bytes` is
       // still the wire count, so the two together say how much the encoding was worth.
       ...(exchange.responseDecodedFrom === undefined
         ? {}
         : { decoded_from: exchange.responseDecodedFrom }),
       truncated: exchange.responseTruncated,
       // Only when it happened, so a normal exchange carries no field saying it was normal. It
-      // reads differently from `truncated`: the agent stopped reading, orca did not stop keeping.
+      // reads differently from `truncated`: the agent stopped reading, agenticreplay did not stop keeping.
       ...(exchange.abandoned ? { abandoned: true } : {}),
       ...(exchange.rule === undefined ? {} : { rule: exchange.rule }),
       ...(exchange.replayKey === undefined ? {} : { replay_key: exchange.replayKey }),
@@ -427,16 +543,29 @@ export async function persistNetExchange(
           }),
       duration_ms: exchange.durationMs,
     },
-    payload: exchange.responseBody as never,
+    ...(exchange.responseTruncated
+      ? {
+          transformations: [
+            ...responseChanges,
+            {
+              kind: 'omission' as const,
+              location: 'response.body',
+              rule: 'capture_limit',
+              count: 1,
+              reason: 'body exceeds capture resource limit',
+            },
+          ],
+        }
+      : { payload: exchange.responseBody, transformations: responseChanges }),
   });
 }
 
 /**
- * A connection orca refused to decrypt.
+ * A connection agenticreplay refused to decrypt.
  *
  * Recorded because the refusal is itself the evidence — and because an operator whose harness talks
  * to an endpoint nobody predicted finds it here, in a line naming the host and nothing else, rather
- * than by guessing. No path, no headers, no payload: there is nothing to write, because orca never
+ * than by guessing. No path, no headers, no payload: there is nothing to write, because agenticreplay never
  * held the plaintext.
  */
 async function persistTunnel(
@@ -444,6 +573,7 @@ async function persistTunnel(
   turn: number,
   tunnel: TunnelRecord,
 ): Promise<void> {
+  writer.markCaptureIncomplete('unobserved_tunnel_body');
   const request = await writer.append({
     type: 'net.request',
     actor: 'agent',
@@ -453,11 +583,21 @@ async function persistTunnel(
       port: tunnel.port,
       intercepted: false,
       reason: 'host not in the TLS interception allowlist',
+      capture_incomplete: true,
     },
+    transformations: [
+      {
+        kind: 'omission',
+        location: 'request.body',
+        rule: 'unsupported_transport',
+        count: 1,
+        reason: 'TLS tunnel was forwarded without body interception',
+      },
+    ],
   });
   await writer.append({
     type: 'net.response',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn,
     causes: [request.seq],
     attrs: {
@@ -480,7 +620,7 @@ async function persistTunnel(
  * does not ship, and the run fails at the first request with an opaque certificate error.
  */
 async function extraOriginRoots(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
-  const configured = env.ORCA_TLS_UPSTREAM_CA;
+  const configured = env.AGENTICREPLAY_TLS_UPSTREAM_CA;
   if (!configured) return [];
   const roots: string[] = [];
   for (const path of configured
@@ -500,7 +640,7 @@ async function extraOriginRoots(env: NodeJS.ProcessEnv = process.env): Promise<s
  * an operator most needs to recognise: the client refusing OUR certificate.
  *
  * That last one is why the name mattered. It is reported on the client side of the proxy, but
- * "handshake failed" with an `h2 session:` prefix reads as a problem between orca and the origin —
+ * "handshake failed" with an `h2 session:` prefix reads as a problem between agenticreplay and the origin —
  * so the operator goes looking at the network, the upstream, the proxy variables. The fix is on the
  * other side of the connection entirely: the run CA is not in the agent's trust store. Meanwhile
  * nothing from that host is recorded, and the trace looks merely quiet rather than broken.
@@ -514,16 +654,16 @@ export function reportInterceptFailure(out: Output, failure: InterceptFailure): 
       out.warn('tls.handshake_failed', {
         ...fields,
         cause:
-          'the agent refused the certificate orca presented — this run’s CA is not in its trust store',
+          'the agent refused the certificate agenticreplay presented — this run’s CA is not in its trust store',
         effect: `nothing from ${failure.host} is being recorded; the trace will simply be missing it`,
-        next: 'trust the run CA in the agent: NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, SSL_CERT_FILE, or the language runtime’s own store — `orca record --tls-intercept` prints the path',
+        next: 'trust the run CA in the agent: NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, SSL_CERT_FILE, or the language runtime’s own store — `agenticreplay record --tls-intercept` prints the path',
       });
       return;
     case 'upstream_session':
       out.warn('tls.upstream_failed', {
         ...fields,
-        cause: 'orca could not establish or keep the TLS session to the origin',
-        next: 'check the host is reachable from this machine, and that any corporate root it needs is in ORCA_TLS_UPSTREAM_CA',
+        cause: 'agenticreplay could not establish or keep the TLS session to the origin',
+        next: 'check the host is reachable from this machine, and that any corporate root it needs is in AGENTICREPLAY_TLS_UPSTREAM_CA',
       });
       return;
     case 'body_opaque':

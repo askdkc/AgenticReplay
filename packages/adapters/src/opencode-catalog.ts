@@ -36,7 +36,9 @@ export async function refreshOpenCodeApiBases(
     return [...new Set([...fallback, ...bases])];
   } catch {
     // Do not print URLs/error bodies: a custom fetch implementation may include credentials.
-    console.warn('[orca] OpenCode API catalog unavailable; using bundled capture endpoints.');
+    console.warn(
+      '[agenticreplay] OpenCode API catalog unavailable; using bundled capture endpoints.',
+    );
     return fallback;
   }
 }

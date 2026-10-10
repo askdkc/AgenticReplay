@@ -15,7 +15,7 @@ describe('a failure prints as the lines it was written in', () => {
   const real = { out: process.stdout.write, err: process.stderr.write };
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-failure-lines-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-failure-lines-'));
     printed = [];
     const capture = ((s: string | Uint8Array) => (
       printed.push(String(s)),

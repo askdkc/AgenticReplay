@@ -1,11 +1,11 @@
 {
-  "name": "@orcareplay/viewer",
+  "name": "@agenticreplay/viewer",
   "version": "0.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay.git",
+    "url": "https://github.com/askdkc/AgenticReplay.git",
     "directory": "packages/viewer"
   },
   "main": "./dist/index.js",
@@ -17,6 +17,9 @@
     "dist"
   ],
   "dependencies": {
-    "@orcareplay/schema": "0.5.0"
+    "@agenticreplay/schema": "0.5.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

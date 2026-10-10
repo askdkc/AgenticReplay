@@ -1,11 +1,11 @@
 {
-  "name": "@orcareplay/adapters",
+  "name": "@agenticreplay/adapters",
   "version": "0.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay.git",
+    "url": "https://github.com/askdkc/AgenticReplay.git",
     "directory": "packages/adapters"
   },
   "main": "./dist/index.js",
@@ -17,10 +17,13 @@
     "dist"
   ],
   "dependencies": {
-    "@orcareplay/core": "0.5.0",
-    "@orcareplay/node-instrument": "0.5.0",
-    "@orcareplay/plugin-api": "0.5.0",
-    "@orcareplay/proxy": "0.5.0",
-    "@orcareplay/shell-shim": "0.5.0"
+    "@agenticreplay/core": "0.5.0",
+    "@agenticreplay/node-instrument": "0.5.0",
+    "@agenticreplay/plugin-api": "0.5.0",
+    "@agenticreplay/proxy": "0.5.0",
+    "@agenticreplay/shell-shim": "0.5.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

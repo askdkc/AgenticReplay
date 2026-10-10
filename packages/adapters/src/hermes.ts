@@ -1,8 +1,8 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
 
 /**
- * Hermes, Nous Research's agent — the first Python harness orca records.
+ * Hermes, Nous Research's agent — the first Python harness agenticreplay records.
  *
  * Every other adapter here fronts a Node harness, and that difference is the whole reason this
  * one exists. Nothing is redirected: `OPENAI_BASE_URL` is not a route into Hermes. Its origin
@@ -16,14 +16,10 @@ import { detectAgent } from './detect.js';
  * proxy that logs CONNECT targets, a single question sends two of them to the model origin, the
  * model-catalogue read and the completion -- so `--tls-intercept` reaches it.
  *
- * The trust store needs no special handling, which is worth saying because it looks as though it
- * would. Hermes makes those two calls with two different HTTP libraries -- `requests` for the
- * catalogue and httpx under the OpenAI SDK for the completion -- and httpx pins certifi, so the
- * usual `SSL_CERT_FILE` should not reach it. Hermes resolves that client's CA itself, and the
- * chain in `agent/ssl_verify.py` reads `HERMES_CA_BUNDLE`, then `SSL_CERT_FILE`, then
- * `REQUESTS_CA_BUNDLE`, then `CURL_CA_BUNDLE`. orca already sets the second, so the run CA is
- * trusted by both clients with nothing added. Checked by removing the vendor variable and
- * recording again: same one model exchange, status 200, 10,615 input tokens.
+ * TLS trust is process-local. Standard Python clients use SSL_CERT_FILE; current Hermes
+ * additionally uses OS-backed truststore contexts that ignore that variable. The recording
+ * bootstrap adds the run CA to those contexts, preserving platform roots and certificate
+ * verification. No system trust store or Hermes configuration is modified.
  *
  * `inference-api.nousresearch.com` is in `DEFAULT_TLS_HOSTS`, so Hermes on Nous' own models needs
  * no extra `--tls-hosts`. Deliberately not in that list: `portal.nousresearch.com`, which is
@@ -35,7 +31,7 @@ import { detectAgent } from './detect.js';
  * `api.xiaomimimo.com` it is a website as much as a gateway, and a default that decrypted it would
  * decrypt whatever else is served there.
  *
- *     orca record hermes --tls-intercept --tls-hosts '+opencode.ai' -- \
+ *     agenticreplay record hermes --tls-intercept --tls-hosts '+opencode.ai' -- \
  *       --provider opencode-free -m nemotron-3.5-lightning-free -z 'your question'
  *
  * `-z` is the non-interactive flag; without it Hermes opens a session and waits.
@@ -43,10 +39,10 @@ import { detectAgent } from './detect.js';
  * Three things about a Hermes recording that are worth knowing before reading one, all measured
  * against v0.21.0 rather than reasoned about:
  *
- * **It does not work in the directory orca launched it in.** `_restore_session_cwd` in Hermes'
+ * **It does not work in the directory agenticreplay launched it in.** `_restore_session_cwd` in Hermes'
  * own CLI chdirs to the cwd stored in its session metadata, so a run started in a project reports
  * the home directory when asked, and writes land there. Per-turn filesystem diffs are taken of
- * the directory orca recorded from, so they read `0 changed` on a run that did change files --
+ * the directory agenticreplay recorded from, so they read `0 changed` on a run that did change files --
  * the evidence is still in the trace, as the absolute path inside the `write_file` tool call.
  * `TERMINAL_CWD` is the lever, and the adapter deliberately does not pull it: forcing it would
  * make a recorded run write somewhere different from the same command uninstrumented, which is

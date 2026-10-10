@@ -6,7 +6,7 @@ later beats one you must support forever.
 ## Adapter — how to launch and instrument one agent
 
 ```ts
-import type { Adapter, RecordContext, Launch } from '@orcareplay/plugin-api';
+import type { Adapter, RecordContext, Launch } from '@agenticreplay/plugin-api';
 
 export const myAgent: Adapter = {
   id: 'my-agent',
@@ -47,7 +47,7 @@ are three capture mechanisms, and an adapter picks whichever the harness allows:
 If it reads an unusual variable, the generic OpenAI adapter probably already covers you: it sets
 `OPENAI_BASE_URL`, `OPENAI_API_BASE` and `ANTHROPIC_BASE_URL` at once and takes the command from
 argv. If it reads none and is not JavaScript — a bot with its origin typed into its source, a Go
-binary, an editor that spawns the agent as a child — `orca record exec --tls-intercept -- <cmd>`
+binary, an editor that spawns the agent as a child — `agenticreplay record exec --tls-intercept -- <cmd>`
 records it with no adapter at all, and an adapter is only worth writing if you want a name for it.
 
 An adapter that relies on interception must say so with `capture: 'transport'`. It redirects
@@ -68,7 +68,7 @@ artifacts: {
   capture: ['cache', 'vector_store', 'dataset'],
   /** Delete these before a replay launches the harness. Whole paths, never "the valid parts". */
   resetBeforeReplay: ['cache', 'vector_store'],
-  /** The flag `orca replay --serialize` reaches for. Declared; never applied on its own. */
+  /** The flag `agenticreplay replay --serialize` reaches for. Declared; never applied on its own. */
   concurrencyFlag: { flag: '--concurrency', serialValue: '1' },
 }
 ```
@@ -84,13 +84,13 @@ Three things worth knowing before you use it:
   another machine, then starts with nothing to read and reproduces nothing.
 - **`resetBeforeReplay` deletes whole paths.** A pipeline that resumes skips by item id *including
   items it recorded as failures*, so keeping what looks valid promotes the last run's failures to
-  completed work. Orca deletes only where it restores the tree afterwards; under `--in-place` it
+  completed work. AgenticReplay deletes only where it restores the tree afterwards; under `--in-place` it
   warns and leaves them alone.
 
 ### `replayArgs` — argv for a harness with no prompt
 
 `driveArgs` answers "what makes the agent ask the recorded question again", and it only applies to
-a harness with a transcript orca can read. A pipeline has neither: its argv *is* the whole
+a harness with a transcript agenticreplay can read. A pipeline has neither: its argv *is* the whole
 instruction. `replayArgs(recorded)` is consulted before the transcript, so such an adapter can
 still adjust what a replay runs; return `undefined` to leave the recorded argv exactly as it was.
 
@@ -111,7 +111,7 @@ const myEmbeddings: RetrievalRule = {
 
 `forkable` is `false` and typed as the literal, not left off: changing an embedding model changes
 the vector space the index was built in, which is a rebuild rather than a fork. Keeping retrieval
-on the recording is precisely what makes `orca replay <run> --from N --model <other>` mean
+on the recording is precisely what makes `agenticreplay replay <run> --from N --model <other>` mean
 something — the chat model changes, the index does not.
 
 An optional `batch` handles the case where the same texts arrive in a different order on every run
@@ -129,7 +129,7 @@ empty. `checkAdapterContract` is the guard against that, and it runs against any
 yours:
 
 ```ts
-import { checkAdapterContract, formatContractResult } from '@orcareplay/adapters';
+import { checkAdapterContract, formatContractResult } from '@agenticreplay/adapters';
 import { myAgent } from './my-agent.js';
 
 const result = await checkAdapterContract(myAgent);
@@ -148,7 +148,7 @@ adapter above declares `>=1.2.0 <2`, so it gets nine.
 
 Each check is here because breaking it fails *silently*:
 
-- **`id-format`** — lowercase kebab-case. The id is what a user types after `orca record` and what
+- **`id-format`** — lowercase kebab-case. The id is what a user types after `agenticreplay record` and what
   the trace records; mixed case and underscores turn into support questions.
 - **`detect-resolves`** — `detect()` must resolve, for a real directory and for a path that does not
   exist. The registry reads a throwing detector as "no", so yours would silently never match, and
@@ -163,7 +163,7 @@ Each check is here because breaking it fails *silently*:
   `passKey()` where the harness refuses to start without one — it substitutes an obviously-fake
   placeholder — and `passThrough()` for a second provider. Harnesses pick a provider from the
   credentials they can see, so an invented key can change which model the run calls.
-- **`no-ctx-mutation`** — `orca record` hands you `process.env` itself as `ctx.env` and the parsed
+- **`no-ctx-mutation`** — `agenticreplay record` hands you `process.env` itself as `ctx.env` and the parsed
   argv as `ctx.userArgs`. Mutating them edits the recorder's own environment and the argv written
   into the manifest. Copy: `args: [...ctx.userArgs]`.
 - **`deterministic`** — two `prepare()` calls on the same context must agree. Replay prepares that
@@ -197,11 +197,11 @@ nobody has to touch only records what the adapter used to do.
 
 ## Provider — a published interface with no caller yet
 
-**Read this first.** `Provider` is exported from `@orcareplay/plugin-api` and nothing in OrcaReplay
+**Read this first.** `Provider` is exported from `@agenticreplay/plugin-api` and nothing in AgenticReplay
 calls it. When a replay cursor goes live the proxy forwards the agent's own request bytes to a
 configured upstream, translating only where a fork changed the model — routing that through a
-`Provider` would mean re-serialising a request orca already holds verbatim, which loses fidelity for
-no gain. To point orca at a different model API today, use `orca setup`, or `--upstream-anthropic` /
+`Provider` would mean re-serialising a request agenticreplay already holds verbatim, which loses fidelity for
+no gain. To point agenticreplay at a different model API today, use `agenticreplay setup`, or `--upstream-anthropic` /
 `--upstream-openai` per run.
 
 The repo used to ship live `Provider` clients and a registry to resolve them. They were deleted:
@@ -210,11 +210,11 @@ docstring claiming the live path went through them. The *interface* stays, becau
 interface are cheap to publish and a wrong implementation is not.
 
 So implement this to be *ready* for a future live path, or to reuse the shape in your own tooling —
-not because registering one changes what `orca replay --model` does. It does not, yet.
+not because registering one changes what `agenticreplay replay --model` does. It does not, yet.
 
 
 ```ts
-import type { Provider, CanonicalRequest, CanonicalChunk } from '@orcareplay/plugin-api';
+import type { Provider, CanonicalRequest, CanonicalChunk } from '@agenticreplay/plugin-api';
 
 export class MyProvider implements Provider {
   id = 'my-provider';
@@ -242,9 +242,9 @@ cannot be replayed exactly, which is the whole point of the tool.
 
 ## Neutrality
 
-Plugins get no privileged API. A vendor plugin imports `@orcareplay/plugin-api` and nothing else,
+Plugins get no privileged API. A vendor plugin imports `@agenticreplay/plugin-api` and nothing else,
 and `scripts/check-neutrality.mjs` fails CI if that stops being true.
 
 If your plugin needs a capability the interface lacks, propose it for the public interface — with a
 second implementation showing it is not shaped around one vendor. That rule applies to the
-maintainers' own OrcaRouter plugin exactly as it applies to yours.
+the maintainers' own provider plugin exactly as it applies to yours.

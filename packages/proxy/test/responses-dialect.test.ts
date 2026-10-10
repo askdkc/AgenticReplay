@@ -11,7 +11,7 @@ afterEach(async () => {
 /**
  * The Responses API is the default wire format for the OpenAI Agents SDK and the Codex CLI.
  * Before this dialect existed the proxy claimed exactly two shapes — `/v1/messages` and anything
- * ending `/chat/completions` — and answered `404` to everything else, so `orca record codex`
+ * ending `/chat/completions` — and answered `404` to everything else, so `agenticreplay record codex`
  * killed the agent on its first turn rather than merely failing to capture it.
  */
 

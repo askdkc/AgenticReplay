@@ -1,7 +1,7 @@
 """A retrieval pipeline in miniature: index with embeddings, then answer with chat.
 
 Not a toy of a framework but a reduction of one. Every index-building RAG stack — IndexRAG,
-LlamaIndex, Microsoft GraphRAG, LightRAG — has this shape, and it is the shape orca had no answer
+LlamaIndex, Microsoft GraphRAG, LightRAG — has this shape, and it is the shape agenticreplay had no answer
 for: a batch of concurrent chat calls whose varying part is the *system* prompt, followed by an
 embedding call that no wire dialect claims, followed by a question answered over what came back.
 

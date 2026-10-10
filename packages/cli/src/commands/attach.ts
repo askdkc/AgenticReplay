@@ -1,29 +1,41 @@
 import { once } from 'node:events';
-import { TraceReader, TraceWriter, ensureRunsDir, resolveRunSelector } from '@orcareplay/core';
-import { createProxy, type RecordedExchange, type RunCa } from '@orcareplay/proxy';
-import { defaultAdapters } from '@orcareplay/adapters';
+import { TraceReader, TraceWriter, ensureRunsDir, resolveRunSelector } from '@agenticreplay/core';
+import {
+  createProxy,
+  type RecordedExchange,
+  type RunCa,
+  type NetRequest,
+  type NetExchange,
+} from '@agenticreplay/proxy';
+import { defaultAdapters } from '@agenticreplay/adapters';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 import { advertisedUrl, attachExports, attachInstructions } from '../attach.js';
 import { ExchangeEventDeriver, appendDerivedEvents } from '../exchange-events.js';
 import { SerialQueue } from '../serial.js';
-import { planTlsCapture, recordedTlsHosts, setupTlsCapture } from '../tls-capture.js';
+import {
+  planTlsCapture,
+  recordedTlsHosts,
+  setupTlsCapture,
+  persistNetRequestStart,
+  persistNetExchange,
+} from '../tls-capture.js';
 import { loadExchanges } from './replay.js';
 import { upstreamPlan } from '../upstream.js';
-import { ORCA_VERSION } from '../version.js';
+import { AGENTICREPLAY_VERSION } from '../version.js';
 
 /**
- * `orca attach` — record an agent this machine did not start.
+ * `agenticreplay attach` — record an agent this machine did not start.
  *
- * Everything else here launches the agent: an adapter builds an environment, orca spawns the
+ * Everything else here launches the agent: an adapter builds an environment, agenticreplay spawns the
  * process, and capture follows from that. It is a good design with one boundary it cannot cross —
  * an agent that is not on this machine. A bot on a VPS, an agent inside a dev container or a cloud
  * sandbox, a harness in someone else's CI: there is no process to spawn, so there is no
- * environment to build and no way to say `orca record` at all.
+ * environment to build and no way to say `agenticreplay record` at all.
  *
- * So this inverts it. Orca holds the proxy open, prints exactly what to export on the far side,
+ * So this inverts it. AgenticReplay holds the proxy open, prints exactly what to export on the far side,
  * and records whatever arrives until it is stopped. The recording that comes out is not a lesser
- * one: same matcher, same events, same `orca replay`.
+ * one: same matcher, same events, same `agenticreplay replay`.
  *
  * The adapters are still what produce the variables — `--for claude` prints what the Claude Code
  * adapter would have set, pointed at the advertised address instead of a loopback one. That keeps
@@ -41,11 +53,8 @@ export interface AttachResult {
   reused: number;
   unmatched: number;
   /**
-   * Non-zero only when a replay session could not answer something the agent asked for.
-   *
-   * A recording session cannot fail this way: it ends because the operator stopped it, which is
-   * how it is meant to end. Whether it captured anything is reported by `capture.empty`, because
-   * an empty capture is a mistake to point at rather than an error to exit on.
+   * Non-zero when replay cannot answer a request or recording coverage is incomplete.
+   * An operator stopping the session is normal; missing transport evidence still returns exit 2.
    */
   exitCode: number;
 }
@@ -89,7 +98,7 @@ async function runAttached(
 
   // Resolved before the run directory is made, so an invocation that cannot work — a wildcard bind
   // with nothing to advertise — leaves nothing behind to clean up. The port is not known yet when
-  // orca is choosing one, and does not need to be: only the host can make this fail.
+  // agenticreplay is choosing one, and does not need to be: only the host can make this fail.
   advertisedUrl({
     bind,
     port: requestedPort === 0 ? 1 : requestedPort,
@@ -99,7 +108,7 @@ async function runAttached(
   /**
    * Serving a recording back instead of recording a new one.
    *
-   * `orca replay` launches the agent, which is right for a run orca recorded by launching it and
+   * `agenticreplay replay` launches the agent, which is right for a run agenticreplay recorded by launching it and
    * impossible for one that came from a sandbox — the agent may not exist on this machine at all.
    * So replay attaches too: same proxy, same matcher, same blocked egress, and the operator points
    * the same remote agent at it.
@@ -109,7 +118,7 @@ async function runAttached(
   // *recording* session against the live provider. That is the worst direction to fail in.
   if (args.has('replay') && args.str('replay') === undefined) {
     throw new Error(
-      '--replay needs the run to serve: orca attach --replay <run>, or --replay last',
+      '--replay needs the run to serve: agenticreplay attach --replay <run>, or --replay last',
     );
   }
   const replaySelector = args.str('replay');
@@ -128,7 +137,7 @@ async function runAttached(
     : undefined;
 
   /**
-   * `exec` is the honest default for a fresh session: orca does not know what will connect, and
+   * `exec` is the honest default for a fresh session: agenticreplay does not know what will connect, and
    * detecting an agent from this directory would be a guess about a machine it cannot see. For a
    * replay it is the wrong default and a useless one — `exec` sets no variables, so the block the
    * operator is meant to paste comes out empty. The recording names the harness, so use it.
@@ -139,21 +148,25 @@ async function runAttached(
   // The last thing that can refuse the run, and it runs before the trace exists: a writer created
   // first and abandoned by a throw leaves an unsealed run directory behind, which then wins `last`
   // — so the next command someone types operates on the session that never happened. Awaited
-  // since it grew the one refusal that needs the disk, an `ORCA_TLS_UPSTREAM_CA` that cannot be
+  // since it grew the one refusal that needs the disk, an `AGENTICREPLAY_TLS_UPSTREAM_CA` that cannot be
   // read; the guarantee here is unchanged, it just covers one more way to fail.
   await planTlsCapture(args, replaying?.hosts);
 
   // Before the run directory exists, because this refuses an upstream that is not an origin: resolved after it, a
-  // typo in `--upstream-*` left an empty run behind for `orca list` to show. It depends on nothing
+  // typo in `--upstream-*` left an empty run behind for `agenticreplay list` to show. It depends on nothing
   // but the arguments and the environment, so there is no reason for it to run any later.
   const plan = await upstreamPlan(args);
 
   const dir = await ensureRunsDir(cwd);
   const writer = await TraceWriter.create(dir, {
-    adapter: { id: adapter.id, version: ORCA_VERSION, harness_version: adapter.harnessVersions },
+    adapter: {
+      id: adapter.id,
+      version: AGENTICREPLAY_VERSION,
+      harness_version: adapter.harnessVersions,
+    },
     argv: [adapterName],
     cwd,
-    orcaVersion: ORCA_VERSION,
+    agenticreplayVersion: AGENTICREPLAY_VERSION,
   });
 
   let modelExchanges = 0;
@@ -161,6 +174,18 @@ async function runAttached(
   let unmatched = 0;
 
   const writes = new SerialQueue();
+  const attempts = new Map<string, number>();
+  let terminalAttempts = 0;
+  async function start(request: NetRequest): Promise<void> {
+    attempts.set(request.requestId, ++turn);
+    await persistNetRequestStart(writer, turn, request);
+  }
+  function finish(exchange: NetExchange): void {
+    terminalAttempts++;
+    const at = attempts.get(exchange.requestId);
+    if (at === undefined) writer.markCaptureIncomplete('missing_request_correlation');
+    writes.push(() => persistNetExchange(writer, at ?? 0, exchange));
+  }
   const tls = await setupTlsCapture({
     args,
     out,
@@ -170,6 +195,8 @@ async function runAttached(
     // Out-of-band traffic belongs to whichever turn was in progress when it happened, exactly as in
     // a launched recording. A fixed 0 filed every net.* event against the start of the session.
     turn: () => turn,
+    onRequestStart: start,
+    onNetExchange: finish,
   });
   if (tls.ca) minted.push(tls.ca);
   // Read before the proxy closes: `stats()` is a snapshot of a live object, and the teardown in
@@ -188,13 +215,13 @@ async function runAttached(
   // not read by anything; the adapter and the cwd are what a reader needs.
   await writer.append({
     type: 'run.start',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn: 0,
     attrs: { adapter: adapter.id, cwd, attached: true },
   });
 
   const proxy = await createProxy({
-    // A replay session serves the recording and blocks egress, exactly as `orca replay` does. The
+    // A replay session serves the recording and blocks egress, exactly as `agenticreplay replay` does. The
     // only difference is which side starts the agent, and that is not a difference the proxy has.
     mode: replaying ? 'replay' : 'record',
     ...(replaying ? { exchanges: replaying.exchanges, loose: args.bool('loose') } : {}),
@@ -204,13 +231,14 @@ async function runAttached(
     upstreamHeaders: plan.headers,
     upstreamHeadersOrigin: plan.headersOrigin,
     ...tls.proxyOptions,
+    onRequestStart: start,
+    onNetExchange: finish,
     onUnmatched: () => {
       unmatched += 1;
     },
     onExchange: (exchange: RecordedExchange) => {
       modelExchanges += 1;
-      turn += 1;
-      const at = turn;
+      const at = exchange.requestId ? (attempts.get(exchange.requestId) ?? 0) : 0;
       writes.push(() => appendDerivedEvents(writer, deriver, exchange, at));
     },
   });
@@ -237,7 +265,7 @@ async function runAttached(
       env: process.env,
     });
 
-    const remoteCaPath = args.str('remote-ca-path') ?? '/tmp/orca-ca.crt';
+    const remoteCaPath = args.str('remote-ca-path') ?? '/tmp/agenticreplay-ca.crt';
     const instructions = attachInstructions({
       proxyUrl,
       adapterEnv: launch.env,
@@ -257,7 +285,7 @@ async function runAttached(
         ? {
             serving: replaySelector,
             exchanges: replaying.exchanges.length,
-            // Same flag, same reason as `orca replay`: attach takes `--loose` too and passes it
+            // Same flag, same reason as `agenticreplay replay`: attach takes `--loose` too and passes it
             // to the same proxy, so the label has to come from it rather than be assumed.
             egress: args.bool('loose') ? 'live-on-unmatched' : 'blocked',
           }
@@ -270,7 +298,7 @@ async function runAttached(
       });
       await writer.append({
         type: 'note',
-        actor: 'orca',
+        actor: 'agenticreplay',
         turn: 0,
         attrs: {
           rule: 'tls_intercept',
@@ -301,7 +329,7 @@ async function runAttached(
       });
     }
     // A path under the run directory exists on this machine and nowhere else. The fetch hook is
-    // the live example: `--for node` names a preload orca just wrote here, so the block would
+    // the live example: `--for node` names a preload agenticreplay just wrote here, so the block would
     // instrument nothing over there while looking exactly as though it had.
     const local = Object.entries(exported)
       .filter(([, value]) => value.includes(writer.runDir))
@@ -328,10 +356,8 @@ async function runAttached(
     await (options.until ?? firstInterrupt());
   } finally {
     stats = proxy.stats();
-    await writes.drain();
-    // The proxy closes after the writes drain, for the same reason recording does: a tunnel record
-    // arriving after the writer shut would have nowhere to go.
     await proxy.close();
+    await writes.drain().catch(() => writer.markCaptureIncomplete('storage_failure'));
     await tls.ca?.dispose();
   }
 
@@ -348,10 +374,23 @@ async function runAttached(
     });
   }
 
+  if (!replaying)
+    writer.setCaptureSummary({
+      status:
+        terminalAttempts > 0 && terminalAttempts === attempts.size ? 'complete' : 'incomplete',
+      issues:
+        terminalAttempts === 0
+          ? ['no_requests_observed']
+          : terminalAttempts !== attempts.size
+            ? ['unfinalized_request']
+            : [],
+      requests: attempts.size,
+      responses: terminalAttempts,
+    });
   // The other half of the bracket. `close` seals the manifest; it does not write the event.
   await writer.append({
     type: 'run.end',
-    actor: 'orca',
+    actor: 'agenticreplay',
     turn,
     attrs: { exchanges: modelExchanges },
   });
@@ -379,14 +418,20 @@ async function runAttached(
     runDir: writer.runDir,
     modelExchanges,
     events: manifest.counts?.events ?? 0,
-    // The address the agent should use, not the one orca bound — a caller reading this from
+    // The address the agent should use, not the one agenticreplay bound — a caller reading this from
     // `--json` needs something it can connect to, which a wildcard bind is not.
     proxyUrl: advertised,
     // Exact plus inexact: both were served from the recording, which is what "reused" means here.
     // The distinction between them is a divergence, and divergences are reported on their own.
     reused: replaying ? stats.matchedExact + stats.matchedInexact : 0,
     unmatched: replaying ? stats.unmatched : unmatched,
-    exitCode: replaying && stats.unmatched > 0 ? 1 : 0,
+    exitCode: replaying
+      ? stats.unmatched > 0
+        ? 1
+        : 0
+      : manifest.capture?.status === 'incomplete'
+        ? 2
+        : 0,
   };
 }
 

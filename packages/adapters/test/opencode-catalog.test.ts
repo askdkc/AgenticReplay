@@ -159,11 +159,11 @@ describe('catalog final fetch capture', () => {
   });
 
   it('ignores invalid bases and unexpanded variables instead of using wildcard matches', async () => {
-    vi.stubEnv('ORCA_MISSING_CATALOG_TEST', undefined);
+    vi.stubEnv('AGENTICREPLAY_MISSING_CATALOG_TEST', undefined);
     const original = vi.fn(async () => new Response('ok'));
     vi.stubGlobal('fetch', original);
     installOpenCodeCapture(PROXY, [
-      'https://${ORCA_MISSING_CATALOG_TEST}.test/v1',
+      'https://${AGENTICREPLAY_MISSING_CATALOG_TEST}.test/v1',
       'not a URL',
       'ftp://fixture.test/v1',
       'https://user:pass@fixture.test/v1',

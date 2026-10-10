@@ -2,7 +2,7 @@
  * A CONNECT-then-TLS call through `HTTPS_PROXY`, shared by the fixture agents.
  *
  * Node's own client does not honour proxy environment variables before v24, so the CONNECT is
- * written by hand — which is also what makes this a test of orca's proxy rather than of Node's.
+ * written by hand — which is also what makes this a test of agenticreplay's proxy rather than of Node's.
  * It lives here because two fixtures need it: the harness that only speaks TLS, and the ordinary
  * agent that has to make one side-call so a *fork* can be checked for interception too.
  */
@@ -14,7 +14,7 @@ import { connect as tlsConnect } from 'node:tls';
 /** The roots this child was given, which is the only trust an intercepted child ever has. */
 export function trustFromEnv() {
   const trust = [];
-  for (const path of [process.env.NODE_EXTRA_CA_CERTS, process.env.ORCA_TEST_ORIGIN_CA]) {
+  for (const path of [process.env.NODE_EXTRA_CA_CERTS, process.env.AGENTICREPLAY_TEST_ORIGIN_CA]) {
     if (path && existsSync(path)) trust.push(readFileSync(path, 'utf8'));
   }
   return trust;
@@ -88,9 +88,11 @@ export async function callThroughProxy(target, trust = trustFromEnv()) {
   });
 }
 
-/** Every target in `ORCA_TEST_TARGETS`, attempted in order, errors captured rather than thrown. */
+/** Every target in `AGENTICREPLAY_TEST_TARGETS`, attempted in order, errors captured rather than thrown. */
 export async function callConfiguredTargets(trust = trustFromEnv()) {
-  const targets = process.env.ORCA_TEST_TARGETS ? JSON.parse(process.env.ORCA_TEST_TARGETS) : [];
+  const targets = process.env.AGENTICREPLAY_TEST_TARGETS
+    ? JSON.parse(process.env.AGENTICREPLAY_TEST_TARGETS)
+    : [];
   const results = [];
   for (const target of targets) {
     try {

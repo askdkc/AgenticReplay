@@ -6,7 +6,7 @@
  * same drift protection as codegen without a build step that can silently break.
  */
 
-export const SCHEMA_VERSION = '0.3.0';
+export const SCHEMA_VERSION = '0.4.0';
 
 export const EVENT_TYPES = [
   'run.start',
@@ -38,7 +38,15 @@ export const EVENT_TYPES = [
   'note',
 ] as const;
 
-export const ACTORS = ['agent', 'harness', 'model', 'orca', 'gateway', 'tool', 'user'] as const;
+export const ACTORS = [
+  'agent',
+  'harness',
+  'model',
+  'agenticreplay',
+  'gateway',
+  'tool',
+  'user',
+] as const;
 
 export const DIVERGENCE_LEVELS = ['minor', 'major'] as const;
 

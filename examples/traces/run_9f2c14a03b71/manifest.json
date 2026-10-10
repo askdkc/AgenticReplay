@@ -1,9 +1,9 @@
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "run_id": "run_9f2c14a03b71",
   "created_at": "2026-08-29T10:13:38.000Z",
   "ended_at": "2026-08-29T10:18:29.000Z",
-  "orca_version": "0.1.0",
+  "agenticreplay_version": "0.1.0",
   "adapter": {
     "id": "claude-code",
     "version": "0.1.0",
@@ -40,7 +40,7 @@
   },
   "exit_code": 1,
   "integrity": {
-    "events_sha256": "07aa293d6af485d1637a64e0004453282bcca43f2b4cb32970eda4cabbdbd0de",
+    "events_sha256": "521e28d9e4662248759797a0e05224170879bd1e64232cf6d2ee8217d6ff038e",
     "blob_count": 5
   }
 }

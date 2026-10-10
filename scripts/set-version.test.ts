@@ -18,7 +18,7 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
  * help: it moves each package's own `version` and leaves its dependents pointing at the old one.
  *
  * The failure this guards is not a red test later. A pin left behind publishes
- * `orcareplay@0.2.4` depending on `@orcareplay/core@0.2.3`, and npm never allows a version to be
+ * `agenticreplay@0.2.4` depending on `@agenticreplay/core@0.2.3`, and npm never allows a version to be
  * re-published — so it is wrong on the registry permanently. `publish-order.mjs` is the other half
  * of the guard and every release runs it; this pins the shape it is checking.
  */
@@ -27,7 +27,7 @@ describe('set-version', () => {
 
   /** A copy of the real manifests, so the assertions are about this repository's actual graph. */
   beforeEach(async () => {
-    work = await mkdtemp(join(tmpdir(), 'orca-setver-'));
+    work = await mkdtemp(join(tmpdir(), 'agenticreplay-setver-'));
     await cp(join(repo, 'package.json'), join(work, 'package.json'));
     await mkdir(join(work, 'scripts'), { recursive: true });
     await cp(join(repo, 'scripts', 'set-version.mjs'), join(work, 'scripts', 'set-version.mjs'));
@@ -61,7 +61,7 @@ describe('set-version', () => {
     expect(cli.version).toBe('1.2.3');
     // The pins are the half `npm version` leaves behind.
     for (const [name, range] of Object.entries(cli.dependencies ?? {})) {
-      if (!name.startsWith('@orcareplay/')) continue;
+      if (!name.startsWith('@agenticreplay/')) continue;
       expect(range, `${name} was left naming the old version`).toBe('1.2.3');
     }
     expect((await manifest('packages/core/package.json')).version).toBe('1.2.3');
@@ -69,12 +69,12 @@ describe('set-version', () => {
   });
 
   it('leaves a third-party dependency alone', async () => {
-    // `@orcareplay/schema` rather than the CLI: the CLI ships with no runtime dependency at all,
+    // `@agenticreplay/schema` rather than the CLI: the CLI ships with no runtime dependency at all,
     // so it cannot show that an outside range survives. Both the root's devDependencies and
     // schema's `ajv` are checked, because the fields are walked separately.
     const schema = 'packages/schema/package.json';
     const before = (await manifest(schema)).dependencies ?? {};
-    const outside = Object.entries(before).filter(([n]) => !n.startsWith('@orcareplay/'));
+    const outside = Object.entries(before).filter(([n]) => !n.startsWith('@agenticreplay/'));
     expect(outside.length, 'schema has no external dependency to check').toBeGreaterThan(0);
     const rootDev = (
       JSON.parse(await readFile(join(work, 'package.json'), 'utf8')) as {
@@ -108,9 +108,9 @@ describe('set-version', () => {
   it('accepts a prerelease, because that is what the next channel publishes', async () => {
     await setVersion('0.2.4-main.90fc463');
     expect((await manifest('packages/cli/package.json')).version).toBe('0.2.4-main.90fc463');
-    expect((await manifest('packages/cli/package.json')).dependencies?.['@orcareplay/core']).toBe(
-      '0.2.4-main.90fc463',
-    );
+    expect(
+      (await manifest('packages/cli/package.json')).dependencies?.['@agenticreplay/core'],
+    ).toBe('0.2.4-main.90fc463');
   });
 
   it('refuses a range, and build metadata, rather than publishing something unfixable', async () => {
@@ -156,7 +156,7 @@ describe('set-version', () => {
    * The lockfile half, asserted on what is committed rather than on a re-resolve.
    *
    * An internal dependency must appear in `package-lock.json` as a link to the workspace, never as
-   * something to fetch. 0.2.1 shipped with two entries resolving `@orcareplay/*` from the registry,
+   * something to fetch. 0.2.1 shipped with two entries resolving `@agenticreplay/*` from the registry,
    * because `npm version` writes the lockfile at the one moment when the versions have moved and
    * the pins have not — so npm stopped seeing them as satisfiable workspace links and recorded the
    * *previous release* instead. Those copies then shadow the source and `tsc` checks the CLI
@@ -168,7 +168,7 @@ describe('set-version', () => {
    */
   it('the committed lockfile links internal packages instead of fetching them', async () => {
     const lock = await readFile(join(repo, 'package-lock.json'), 'utf8');
-    const fetched = [...lock.matchAll(/registry\.npmjs\.org\/(@orcareplay\/[\w-]+)/g)].map(
+    const fetched = [...lock.matchAll(/registry\.npmjs\.org\/(@agenticreplay\/[\w-]+)/g)].map(
       (m) => m[1],
     );
     expect(
@@ -204,13 +204,13 @@ describe('set-version', () => {
     // Not hypothetical: `workspace:*` is what npm/pnpm docs suggest, and it cannot be published.
     const path = join(work, 'packages/cli/package.json');
     const pkg = JSON.parse(await readFile(path, 'utf8'));
-    pkg.dependencies['@orcareplay/core'] = 'workspace:*';
+    pkg.dependencies['@agenticreplay/core'] = 'workspace:*';
     await writeFile(path, `${JSON.stringify(pkg, null, 2)}\n`);
 
     await setVersion('1.2.3');
 
-    expect((await manifest('packages/cli/package.json')).dependencies?.['@orcareplay/core']).toBe(
-      '1.2.3',
-    );
+    expect(
+      (await manifest('packages/cli/package.json')).dependencies?.['@agenticreplay/core'],
+    ).toBe('1.2.3');
   });
 });

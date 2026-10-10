@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { BatchRetrieval, RetrievalRule } from '@orcareplay/plugin-api';
+import type { BatchRetrieval, RetrievalRule } from '@agenticreplay/plugin-api';
 
 /**
  * Retrieval calls: the half of a RAG run that is not a model exchange and is not opaque either.
  *
- * Orca's two existing answers to a POST were "a dialect reads it" and "forward it and record the
+ * AgenticReplay's two existing answers to a POST were "a dialect reads it" and "forward it and record the
  * bytes". A retrieval stack falls between them. `/v1/embeddings` is no dialect's path — there is
  * no conversation in it, no tools, no stop reason, and translating it to the canonical request
  * shape would be a lie — so it took the second answer, and a recording of an indexing run could
@@ -115,7 +115,7 @@ function embeddingInputs(raw: unknown): string[] | undefined {
   if (!Array.isArray(input) || input.length < 2) return undefined;
   // Only text. An `input` of token-id arrays is a different call, and the positional argument
   // below is about texts being independent of one another — which integers in a row are not
-  // obviously enough for orca to claim.
+  // obviously enough for agenticreplay to claim.
   return input.every((v) => typeof v === 'string') ? (input as string[]) : undefined;
 }
 
@@ -183,7 +183,7 @@ const embeddingBatch: BatchRetrieval = {
 };
 
 /**
- * The endpoints orca claims as retrieval, by the shape of their path.
+ * The endpoints agenticreplay claims as retrieval, by the shape of their path.
  *
  * Matched on the suffix rather than on `/v1/...`: a base URL rewritten through `/forward/` keeps
  * its version segment inside the encoded base, so what the client appends and what the proxy sees

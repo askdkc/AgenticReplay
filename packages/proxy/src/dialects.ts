@@ -5,14 +5,14 @@ import type {
   CanonicalResponse,
   CanonicalTool,
   StopReason,
-} from '@orcareplay/plugin-api';
+} from '@agenticreplay/plugin-api';
 
 /**
  * A wire dialect the proxy can sit in front of.
  *
  * The proxy deliberately does not know which dialects exist — it is handed a list. That is what
  * lets a third party support a new model API without touching the interception core, and it keeps
- * all wire-format knowledge in @orcareplay/providers where it belongs.
+ * all wire-format knowledge in @agenticreplay/providers where it belongs.
  */
 export interface Dialect {
   id: string;

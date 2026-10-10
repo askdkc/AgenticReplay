@@ -1,10 +1,15 @@
 import { basename, join } from 'node:path';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
-import { forwardBasePath } from '@orcareplay/proxy';
-import { resolveRealBinary } from '@orcareplay/shell-shim';
-import { detectAgent, homeDirHas } from './detect.js';
+import { execFile as execFileCallback } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { promisify } from 'node:util';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
+import { forwardBasePath } from '@agenticreplay/proxy';
+import { resolveRealBinary } from '@agenticreplay/shell-shim';
+import { detectAgent } from './detect.js';
 import { openCodeConfiguredBaseURLs, stripJsonc } from './opencode-config.js';
-import { writeOpenCodeCapturePlugin } from './opencode-capture.js';
+import { writeOpenCodeCapturePlugin, writeOpenCodeV2CapturePlugin } from './opencode-capture.js';
 import { passKey, passThrough, proxyBase, readEnv } from './env.js';
 
 /**
@@ -16,8 +21,12 @@ import { passKey, passThrough, proxyBase, readEnv } from './env.js';
 const OPENCODE_AUTH_PATHS = ['.local/share/opencode/auth.json', '.config/opencode/auth.json'];
 
 /** Whether OpenCode has credentials of its own, independent of the environment. */
-export function opencodeHasOwnAuth(): boolean {
-  return OPENCODE_AUTH_PATHS.some(homeDirHas);
+export function opencodeHasOwnAuth(env: Record<string, string | undefined> = process.env): boolean {
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const paths = OPENCODE_AUTH_PATHS.map((relative) => join(home, relative));
+  if (env.XDG_DATA_HOME) paths.push(join(env.XDG_DATA_HOME, 'opencode/auth.json'));
+  if (env.XDG_CONFIG_HOME) paths.push(join(env.XDG_CONFIG_HOME, 'opencode/auth.json'));
+  return paths.some((path) => existsSync(path));
 }
 
 /**
@@ -37,6 +46,47 @@ const OPENCODE_FIRST_PARTY_BASE: Record<string, string> = {
 
 /** The environment variable the run-local overlay rides in on. */
 const CONFIG_CONTENT_VAR = 'OPENCODE_CONFIG_CONTENT';
+const execFile = promisify(execFileCallback);
+
+async function isOpenCodeV2(ctx: RecordContext): Promise<boolean> {
+  const explicit = readEnv(ctx.env, 'AGENTICREPLAY_OPENCODE_VERSION');
+  if (explicit !== undefined) return /^\s*(?:opencode\s+v?)?2(?:\.|$)/i.test(explicit);
+  await mkdir(ctx.runDir, { recursive: true });
+  const probe = await mkdtemp(join(ctx.runDir, '.opencode-version-'));
+  try {
+    const result = await execFile('opencode', ['--version'], {
+      cwd: probe,
+      env: {
+        PATH: readEnv(ctx.env, 'PATH'),
+        HOME: probe,
+        USERPROFILE: probe,
+        XDG_CONFIG_HOME: join(probe, 'config'),
+        XDG_DATA_HOME: join(probe, 'data'),
+        XDG_CACHE_HOME: join(probe, 'cache'),
+        XDG_STATE_HOME: join(probe, 'state'),
+      },
+      timeout: 5000,
+      maxBuffer: 4096,
+    });
+    return /^\s*(?:opencode\s+v?)?2(?:\.|$)/i.test(`${result.stdout}\n${result.stderr}`);
+  } catch {
+    return false;
+  } finally {
+    await rm(probe, { recursive: true, force: true });
+  }
+}
+
+function privateServerArgs(args: string[]): string[] {
+  const delimiter = args.indexOf('--');
+  const options = delimiter < 0 ? args : args.slice(0, delimiter);
+  if (options.some((arg) => /^(?:--server|--attach)(?:=|$)/.test(arg)))
+    throw new Error('OpenCode 2 capture does not support --server or --attach');
+  if (options.includes('--standalone')) return [...args];
+  const run = options.indexOf('run');
+  return run >= 0
+    ? [...args.slice(0, run + 1), '--standalone', ...args.slice(run + 1)]
+    : ['--standalone', ...args];
+}
 
 /**
  * Shells whose real binary a shim can find again, from OpenCode's own acceptable set — the
@@ -100,9 +150,12 @@ async function shellThroughShim(
  * licence to reroute someone's provider. An existing `OPENCODE_CONFIG_CONTENT` keeps its fields
  * and provider routing; only the run-local capture plugin is appended.
  */
-async function baseURLsThroughProxy(ctx: RecordContext): Promise<Record<string, string>> {
+async function baseURLsThroughProxy(
+  ctx: RecordContext,
+  v2: boolean,
+): Promise<Record<string, string>> {
   const theirs = readEnv(ctx.env, CONFIG_CONTENT_VAR);
-  if (theirs !== undefined) return withCapturePlugin(ctx, theirs);
+  if (theirs !== undefined) return withCapturePlugin(ctx, theirs, v2);
   const scan = await openCodeConfiguredBaseURLs(ctx.env, ctx.cwd);
   if (!scan.trusted) return {};
   const provider: Record<string, { options: { baseURL: string } }> = {};
@@ -110,12 +163,13 @@ async function baseURLsThroughProxy(ctx: RecordContext): Promise<Record<string, 
     const base = scan.overrides.get(id) ?? catalogBase;
     provider[id] = { options: { baseURL: `${proxyBase(ctx.proxyUrl)}${forwardBasePath(base)}` } };
   }
-  return withCapturePlugin(ctx, JSON.stringify({ provider }));
+  return withCapturePlugin(ctx, JSON.stringify({ provider }), v2);
 }
 
 async function withCapturePlugin(
   ctx: RecordContext,
   content: string,
+  v2: boolean,
 ): Promise<Record<string, string>> {
   let config: Record<string, unknown>;
   try {
@@ -124,13 +178,28 @@ async function withCapturePlugin(
       throw new Error('not an object');
     if (config.plugin !== undefined && !Array.isArray(config.plugin))
       throw new Error('not a plugin list');
+    if (config.plugins !== undefined && !Array.isArray(config.plugins))
+      throw new Error('not a plugins list');
   } catch {
     // Leave invalid config for OpenCode to diagnose without discarding the user's settings.
     return { [CONFIG_CONTENT_VAR]: content };
   }
   const plugin = await writeOpenCodeCapturePlugin(ctx.runDir, proxyBase(ctx.proxyUrl));
   config.plugin = [...((config.plugin as unknown[] | undefined) ?? []), plugin];
-  return { [CONFIG_CONTENT_VAR]: JSON.stringify(config) };
+  if (!v2) return { [CONFIG_CONTENT_VAR]: JSON.stringify(config) };
+  if (readEnv(ctx.env, 'OPENCODE_CONFIG') !== undefined) {
+    throw new Error('OpenCode 2 capture cannot compose an existing OPENCODE_CONFIG file safely');
+  }
+  const v2Plugin = await writeOpenCodeV2CapturePlugin(ctx.runDir, proxyBase(ctx.proxyUrl));
+  // OpenCode 2 discovers plugins from a filesystem config. Keep the user's plugin order intact
+  // and point only this child process at a run-local overlay; user config remains untouched.
+  config.plugins = [...((config.plugins as unknown[] | undefined) ?? []), v2Plugin];
+  const v2Config = join(ctx.runDir, 'agenticreplay-opencode-v2-config.json');
+  await writeFile(v2Config, JSON.stringify({ plugins: config.plugins }), { mode: 0o600 });
+  return {
+    [CONFIG_CONTENT_VAR]: JSON.stringify(config),
+    OPENCODE_CONFIG: v2Config,
+  };
 }
 
 /**
@@ -146,6 +215,8 @@ export const openCodeAdapter: Adapter = {
   },
 
   async prepare(ctx: RecordContext): Promise<Launch> {
+    const v2 = await isOpenCodeV2(ctx);
+    const args = v2 ? privateServerArgs(ctx.userArgs) : [...ctx.userArgs];
     const env: Record<string, string> = {
       OPENAI_BASE_URL: proxyBase(ctx.proxyUrl, 'v1'),
       // OpenCode's AI SDK appends /messages, unlike Claude Code's /v1/messages.
@@ -165,14 +236,14 @@ export const openCodeAdapter: Adapter = {
     const hasAny =
       readEnv(ctx.env, 'OPENAI_API_KEY') !== undefined ||
       readEnv(ctx.env, 'ANTHROPIC_API_KEY') !== undefined;
-    if (hasAny || opencodeHasOwnAuth()) {
+    if (hasAny || (!v2 && opencodeHasOwnAuth(ctx.env))) {
       passThrough(env, ctx.env, 'OPENAI_API_KEY');
       passThrough(env, ctx.env, 'ANTHROPIC_API_KEY');
-    } else {
+    } else if (!v2) {
       passKey(env, ctx.env, 'OPENAI_API_KEY');
       passKey(env, ctx.env, 'ANTHROPIC_API_KEY');
     }
-    Object.assign(env, await baseURLsThroughProxy(ctx));
+    Object.assign(env, await baseURLsThroughProxy(ctx, v2));
 
     // `SHELL` overrides the user's own only to a shim standing in for a shell OpenCode would have
     // picked anyway. With `--no-shell` there is no shim directory, OpenCode's own resolution
@@ -181,6 +252,6 @@ export const openCodeAdapter: Adapter = {
     const shell = await shellThroughShim(ctx.env, ctx.runDir);
     if (shell !== undefined) env['SHELL'] = shell;
 
-    return { command: 'opencode', args: [...ctx.userArgs], env };
+    return { command: 'opencode', args, env };
   },
 };

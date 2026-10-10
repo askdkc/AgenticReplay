@@ -1,16 +1,16 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.Continuum-AI-Corp/orcareplay",
+  "name": "io.github.Continuum-AI-Corp/agenticreplay",
   "description": "Read, replay and fork recorded coding-agent runs.",
   "repository": {
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay",
+    "url": "https://github.com/askdkc/AgenticReplay",
     "source": "github"
   },
   "version": "0.2.2",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "orcareplay",
+      "identifier": "agenticreplay",
       "version": "0.2.2",
       "transport": {
         "type": "stdio"

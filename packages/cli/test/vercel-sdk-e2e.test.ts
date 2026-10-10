@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader } from '@orcareplay/core';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader } from '@agenticreplay/core';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -32,7 +32,7 @@ describe('end to end: an agent with a hardcoded provider origin', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-vercel-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-vercel-'));
     model = await startResponsesModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -57,7 +57,7 @@ describe('end to end: an agent with a hardcoded provider origin', () => {
     );
 
   it('captures nothing under an adapter that only sets environment variables', async () => {
-    // The control. Not a strawman: this is what `orca record` did for every AI SDK agent.
+    // The control. Not a strawman: this is what `agenticreplay record` did for every AI SDK agent.
     await record('generic-openai');
 
     expect(model.calls).toHaveLength(0);
@@ -98,7 +98,7 @@ describe('end to end: an agent with a hardcoded provider origin', () => {
     const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
 
     expect(replay.exitCode).toBe(0);
-    expect(replay.matchedExact).toBe(2);
+    expect(replay.canonicalExact).toBe(2);
     expect(replay.liveCalls).toBe(0);
     expect(model.calls.length).toBe(before);
   });

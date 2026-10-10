@@ -13,12 +13,12 @@ import { assertKnownFlags } from '../src/flags.js';
  * wrong shape — so the instruction disappeared and the run reported success having done something
  * else. Four shapes, all of them things a person actually types:
  *
- *   orca replay last --model            the value forgotten, or eaten by the shell
- *   orca scrub last --match a --match b the flag repeated, because that is how most CLIs take a list
- *   orca replay last --from four        a word where a number goes
- *   orca replay last --json=maybe       a value on a flag that is only ever on or off
+ *   agenticreplay replay last --model            the value forgotten, or eaten by the shell
+ *   agenticreplay scrub last --match a --match b the flag repeated, because that is how most CLIs take a list
+ *   agenticreplay replay last --from four        a word where a number goes
+ *   agenticreplay replay last --json=maybe       a value on a flag that is only ever on or off
  *
- * `orca gc --keep` already checked its own by hand, which is the argument for doing it here: one
+ * `agenticreplay gc --keep` already checked its own by hand, which is the argument for doing it here: one
  * command got it right and the other nine did not, and nothing made that visible.
  */
 describe('flags whose value cannot be honoured', () => {
@@ -63,7 +63,7 @@ describe('flags whose value cannot be honoured', () => {
   describe('a flag given twice', () => {
     /**
      * Repeating a flag is how most CLIs take a list, so people write it. Here the second assignment
-     * overwrote the first without a word: `orca scrub last --match a --match b --match c` redacted
+     * overwrote the first without a word: `agenticreplay scrub last --match a --match b --match c` redacted
      * only `c`, and reported the count for `c` as though that were the whole job.
      */
     it('refuses conflicting repeats rather than keeping the last', () => {

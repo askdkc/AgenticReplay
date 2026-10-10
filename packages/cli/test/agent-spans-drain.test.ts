@@ -47,7 +47,7 @@ describe('a span line the drain cannot stamp', () => {
 
   beforeEach(async () => {
     planted.line = '';
-    workspace = await mkdtemp(join(tmpdir(), 'orca-spans-drain-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-spans-drain-'));
     await exec('git', ['init', '-q'], { cwd: workspace });
     await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
     await exec('git', ['config', 'user.name', 'Test'], { cwd: workspace });
@@ -66,7 +66,7 @@ describe('a span line the drain cannot stamp', () => {
       new Output({ write: () => {}, isTTY: false }),
       workspace,
     );
-    const events = join(workspace, '.orca', 'runs', result.runId, 'events.jsonl');
+    const events = join(workspace, '.agenticreplay', 'runs', result.runId, 'events.jsonl');
     return (await readFile(events, 'utf8'))
       .split('\n')
       .filter((line) => line.trim() !== '')

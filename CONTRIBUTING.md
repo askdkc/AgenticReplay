@@ -1,10 +1,10 @@
-# Contributing to OrcaReplay
+# Contributing to AgenticReplay
 
 ## The five-minute dev loop
 
 ```console
-git clone https://github.com/Continuum-AI-Corp/OrcaReplay
-cd OrcaReplay
+git clone https://github.com/askdkc/AgenticReplay
+cd AgenticReplay
 npm install
 npm run check     # format check + typecheck + tests
 ```
@@ -15,21 +15,17 @@ it is not all of CI. Three more jobs run commands `check` does not:
 ```console
 node scripts/conformance.mjs      # the shipped example traces and a freshly written one both
                                   # validate against the normative schema
-node scripts/check-neutrality.mjs # no vendor plugin reaches past @orcareplay/plugin-api
+node scripts/check-neutrality.mjs # no vendor plugin reaches past @agenticreplay/plugin-api
 pip install ./python[dev] && python -m pytest python/ -q   # the Python SDK
 ```
 
 `conformance.mjs` reads `packages/*/dist`, so run it after a build — `npm run check` has already
 done one by the time you get there.
 
-Run those four and CI has nothing left to tell you, with one caveat it cannot: the `check` job runs
-on node 20 as well as 22, so a 22-only API passes locally and fails there.
+Run those four on Node 24 and Node 26; CI exercises both runtime lines.
 
-**Contributing needs a newer node than using.** The published CLI runs on node 20.0 and its
-`engines` says so; the *test toolchain* does not, because vitest pulls a vite that wants
-`^20.19.0 || >=22.12.0`. The root `package.json` declares that range, so `npm ci` tells you up front
-instead of letting the mismatch surface later as something stranger. Nobody running `orca` is
-affected.
+The published CLI and the development toolchain both require Node 24 or newer. The root
+`package.json` declares `>=24.0.0`, so `npm ci` reports an unsupported runtime immediately.
 
 Working on one package:
 
@@ -67,7 +63,7 @@ The highest-value contributions, in order:
 - **No new runtime dependencies** without discussion. The CLI has none beyond a JSON Schema
   validator, and a debugger you install to diagnose a broken environment should not drag in a
   hundred packages. `devDependencies` are easier, but still argue for them.
-- **The spec is normative.** `spec/orca-trace-v0.md` and the JSON Schema come first; TypeScript
+- **The spec is normative.** `spec/agenticreplay-trace-v0.md` and the JSON Schema come first; TypeScript
   types are verified against them. If you need a format change, change the spec in the same PR and
   bump the schema version. Adding an event type is a MINOR bump; changing one is MAJOR.
 - **Readers skip what they do not understand.** Never make an unknown event type an error.
@@ -75,13 +71,13 @@ The highest-value contributions, in order:
   debugger that quietly guesses is worse than no debugger, because you will believe it.
 - **Secrets never reach disk or a TTY.** Redaction lives in the write path. If you add a new sink,
   it goes through the redactor. If it *cannot* — anything written by the agent's own process, or by
-  a child of it, is on disk before orca sees it — then ask one question first: **does anything read
+  a child of it, is on disk before agenticreplay sees it — then ask one question first: **does anything read
   this file after the run?**
   - No: it is a transport, not part of the trace. Keep it out of the run directory, write an
     allow-list of the fields something actually reads rather than whatever the payload holds, and
     delete it once it has been read. `shell-frames.jsonl` and the agent-spans file are both this.
   - Yes: it stays, and it is unredacted material in a directory people share. Say so in
-    SECURITY.md, and make sure `orca scrub` at least *searches* it — a scrubber that reports
+    SECURITY.md, and make sure `agenticreplay scrub` at least *searches* it — a scrubber that reports
     "nothing matched" over a file it never opened is the one failure mode SECURITY.md says it must
     not have. `mcp-frames.jsonl` is this: a replay answers from it, and rewriting a frame changes
     the key it is looked up by, so a scrub that edited it would make the replay serve a different
@@ -89,7 +85,7 @@ The highest-value contributions, in order:
 - **A new field is a new sink.** The redactor works on payloads derived from the incoming request,
   so a value sourced from anywhere else — configuration, a flag, an environment variable — arrives
   having bypassed it. Adding an attribute, ask where its value comes from and whether that source
-  can carry a credential; `orca setup --gateway` accepts any URL, and `https://user:pw@gw` and
+  can carry a credential; `agenticreplay setup --gateway` accepts any URL, and `https://user:pw@gw` and
   `https://gw?key=…` are both ordinary ways to configure a gateway. This was learned the hard way:
   a field naming the origin that answered each call was verified four ways, all of them asking
   whether the value was *correct* and none asking what else could be in it. Review caught it.

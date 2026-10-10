@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns } from '@orcareplay/core';
+import { TraceReader, listRuns } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -23,7 +23,7 @@ const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
  * naming the origin that answered each call was added, verified four ways — the value is right on
  * every route, it follows the request rather than the configuration, both human surfaces show it —
  * and every one of those checks asked *is this value correct*. None asked *what else could be in
- * it*. The configured gateway comes from `orca setup --gateway`, which accepts any URL, so
+ * it*. The configured gateway comes from `agenticreplay setup --gateway`, which accepts any URL, so
  * `https://user:pw@gw.example` and `https://gw.example?key=…` went into the trace verbatim.
  *
  * The redactor did not catch it, and reasonably so: it works on payloads derived from the incoming
@@ -45,7 +45,7 @@ describe('a trace carries no credential-bearing URL, in any attribute', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-cred-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-cred-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -83,7 +83,7 @@ describe('a trace carries no credential-bearing URL, in any attribute', () => {
 
   it('when the gateway URL carries its key in userinfo', async () => {
     const secret = 'PASSWORD-IN-USERINFO';
-    // The fake model is a plain origin; the credential is injected the way `orca setup` would have
+    // The fake model is a plain origin; the credential is injected the way `agenticreplay setup` would have
     // left it, which is the route that produced the bug.
     const gateway = model.url.replace('http://', `http://someone:${secret}@`);
     const args = parseArgs([
@@ -143,7 +143,7 @@ describe('a trace carries no credential-bearing URL, in any attribute', () => {
    *
    * A record run never substitutes a model, so `forkModel` stays undefined and `route.decision` is
    * never emitted. The two cases above were written against exactly this bug and could not see it
-   * for that reason alone. On a fork orca *is* the gateway, and the decision it emits names the
+   * for that reason alone. On a fork agenticreplay *is* the gateway, and the decision it emits names the
    * origin it chose — the resolved upstream, verbatim. `buildExchange` puts that same value through
    * `recordableOrigin` before it reaches a trace; the `onRoute` payload did not, and replay writes
    * `attrs: { ...decision }` unchanged.

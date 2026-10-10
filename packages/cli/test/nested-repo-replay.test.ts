@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { TraceReader, deriveCheckpoints, type TraceWriter } from '@orcareplay/core';
-import { FsCapture } from '@orcareplay/fs-capture';
+import { TraceReader, deriveCheckpoints, type TraceWriter } from '@agenticreplay/core';
+import { FsCapture } from '@agenticreplay/fs-capture';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs } from '../src/args.js';
 import { assertResettable, assertRestorable, replayCommand } from '../src/commands/replay.js';
@@ -14,7 +14,23 @@ import { appendSnapshot } from '../src/fs-events.js';
 import { Output, type LogEntry } from '../src/out.js';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 
-const run = promisify(execFile);
+const exec = promisify(execFile);
+// Filesystem-only fixture agents intentionally make no HTTP requests. The recorder correctly
+// exits 2 for absent capture; these tests inspect filesystem restore and process teardown.
+const run: typeof exec = (async (...args: Parameters<typeof exec>) => {
+  try {
+    return await exec(...args);
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    if (
+      failure.code === 2 &&
+      failure.stdout?.includes('capture.empty') &&
+      args[1]?.includes('record')
+    )
+      return { stdout: failure.stdout, stderr: failure.stderr ?? '' };
+    throw error;
+  }
+}) as typeof exec;
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, '..', 'dist', 'cli.js');
 const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
@@ -65,14 +81,14 @@ describe('assertRestorable', () => {
   let tree: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-nested-guard-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-guard-'));
     await initRepo(dir);
     // One where an adapter could be told to delete the directory around it, one where it could not.
     await nestRepo(dir, 'cache/corpus');
     await nestRepo(dir, 'tools/vendored');
     // A real capture, so the gitlinks are the ones `git add` decides to write rather than a shape
     // this test made up — the guard's whole input is what git chose to store.
-    capture = await FsCapture.start({ runDir: join(dir, '.orca-run'), cwd: dir });
+    capture = await FsCapture.start({ runDir: join(dir, '.agenticreplay-run'), cwd: dir });
     tree = (await capture.snapshotTurn(0)).tree;
   });
   afterEach(async () => {
@@ -150,13 +166,13 @@ describe('assertRestorable', () => {
     // not look inside an embedded repository, so that comes back empty and it passes. The replay
     // then removes `data/cache`, restores with `allowIncomplete`, and neither the recording nor
     // the safety copy holds a byte of it — gone for good, under exit 0.
-    const nest = await mkdtemp(join(tmpdir(), 'orca-nested-ancestor-'));
+    const nest = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-ancestor-'));
     try {
       await initRepo(nest);
       await nestRepo(nest, 'data');
       await mkdir(join(nest, 'data', 'cache'), { recursive: true });
       await writeFile(join(nest, 'data', 'cache', 'index.bin'), 'the index the pipeline built');
-      const inner = await FsCapture.start({ runDir: join(nest, '.orca-run'), cwd: nest });
+      const inner = await FsCapture.start({ runDir: join(nest, '.agenticreplay-run'), cwd: nest });
       const snapshot = await inner.snapshotTurn(0);
       // The gitlink really is the ancestor, not the reset path itself.
       expect(await inner.gitlinks(snapshot.tree)).toEqual(['data']);
@@ -169,11 +185,14 @@ describe('assertRestorable', () => {
   });
 
   it('has nothing to say about a workspace that holds no nested repository', async () => {
-    const plain = await mkdtemp(join(tmpdir(), 'orca-nested-plain-'));
+    const plain = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-plain-'));
     try {
       await initRepo(plain);
       await writeFile(join(plain, 'notes.md'), 'ordinary work');
-      const ordinary = await FsCapture.start({ runDir: join(plain, '.orca-run'), cwd: plain });
+      const ordinary = await FsCapture.start({
+        runDir: join(plain, '.agenticreplay-run'),
+        cwd: plain,
+      });
       const snapshot = await ordinary.snapshotTurn(0);
       await expect(
         assertRestorable(ordinary, snapshot.tree, plain, artifacts(['cache'])),
@@ -222,13 +241,13 @@ describe('assertResettable, with a nested repository that has no commit', () => 
   }
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-nc-guard-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-nc-guard-'));
     await initRepo(dir);
     await writeFile(join(dir, 'README.md'), 'the outer project');
     await startProject('data');
     // A real capture over the real workspace: what the guard reads is what `git add` decided,
     // not a shape this test made up.
-    safety = await FsCapture.start({ runDir: join(dir, '.orca-run'), cwd: dir });
+    safety = await FsCapture.start({ runDir: join(dir, '.agenticreplay-run'), cwd: dir });
     await safety.snapshotTurn(0);
   });
   afterEach(async () => {
@@ -312,11 +331,11 @@ describe('assertResettable, with a nested repository that has no commit', () => 
  * the operator's own project at `data`.
  *
  * Git stages nothing inside another repository, and before the forced add set such a path aside
- * it answered in two ways, both of them wrong for orca:
+ * it answered in two ways, both of them wrong for agenticreplay:
  *
  *   committed, not ignored   the forced add died on "Pathspec 'data/cache' is in submodule 'data'"
  *                            — every snapshot of a recording, and the safety copy of a replay,
- *                            after its `orca-safety-*` directory already existed
+ *                            after its `agenticreplay-safety-*` directory already existed
  *   ignored, or no commit    the forced add exited 0 having staged nothing, and a replay whose
  *                            reset reached `data/cache` deleted it under exit 0, having printed
  *                            "your files are restored when the replay ends"
@@ -344,11 +363,11 @@ describe('a declared artifact path inside a nested repository', () => {
 
   /** The copy a replay takes: forced over what the adapter captures and resets. */
   async function capture(forced: string[]): Promise<FsCapture> {
-    return FsCapture.start({ runDir: join(dir, '.orca-run'), cwd: dir, forced });
+    return FsCapture.start({ runDir: join(dir, '.agenticreplay-run'), cwd: dir, forced });
   }
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-inside-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-inside-'));
     await initRepo(dir);
     await writeFile(join(dir, 'README.md'), 'the outer project');
   });
@@ -406,7 +425,7 @@ describe('a declared artifact path inside a nested repository', () => {
     it('refuses one that is committed and not ignored, which used to die inside git', async () => {
       await project(true);
       const safety = await capture(['data/cache']);
-      // The throw this replaces came from right here, after `orca-safety-*` already existed.
+      // The throw this replaces came from right here, after `agenticreplay-safety-*` already existed.
       await expect(safety.snapshotTurn(0)).resolves.toBeDefined();
       await expect(assertResettable(safety, dir, artifacts(['data/cache']))).rejects.toThrow(
         /cannot put data back/,
@@ -453,7 +472,7 @@ describe('a declared artifact path inside a nested repository', () => {
   });
 });
 
-describe('orca replay, in a workspace holding a nested git repository', () => {
+describe('agenticreplay replay, in a workspace holding a nested git repository', () => {
   const timeout = 120_000;
   const nested = ['tools', 'nested-repo'];
   let dir: string;
@@ -464,8 +483,8 @@ describe('orca replay, in a workspace holding a nested git repository', () => {
   beforeEach(async () => {
     // A temp dir of this test's own: the safety copy is made under it, so one left behind can be
     // counted rather than guessed at from a directory shared with every other run on the machine.
-    scratch = await mkdtemp(join(tmpdir(), 'orca-nested-tmp-'));
-    dir = await mkdtemp(join(tmpdir(), 'orca-nested-ws-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-tmp-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-ws-'));
     env = { ...process.env, NO_COLOR: '1', TMPDIR: scratch, TMP: scratch, TEMP: scratch };
 
     await initRepo(dir);
@@ -477,7 +496,7 @@ describe('orca replay, in a workspace holding a nested git repository', () => {
       env,
       timeout: timeout / 2,
     });
-    [runId] = (await readdir(join(dir, '.orca', 'runs'))) as [string];
+    [runId] = (await readdir(join(dir, '.agenticreplay', 'runs'))) as [string];
     // What the operator has in front of them when they ask for the replay: their own work, on top
     // of what the recorded agent left behind.
     await writeFile(join(dir, 'output.txt'), 'my own uncommitted edit');
@@ -499,7 +518,7 @@ describe('orca replay, in a workspace holding a nested git repository', () => {
   }
 
   const safetyCopies = async (): Promise<string[]> =>
-    (await readdir(scratch)).filter((entry) => entry.startsWith('orca-safety-'));
+    (await readdir(scratch)).filter((entry) => entry.startsWith('agenticreplay-safety-'));
 
   it(
     'replays it, keeps the repository, and puts the operator’s own tree back',
@@ -541,7 +560,7 @@ describe('orca replay, in a workspace holding a nested git repository', () => {
       expect(code, out).toBe(0);
       expect(out).toContain('vendored-since');
       expect(out).toContain('restored when the replay ends, except inside');
-      expect(out).toContain('orca holds no copy of what is inside them');
+      expect(out).toContain('agenticreplay holds no copy of what is inside them');
     },
     timeout,
   );
@@ -562,7 +581,7 @@ describe('orca replay, in a workspace holding a nested git repository', () => {
 });
 
 /**
- * `orca replay --from` — and so `orca compare`, which forks — restores a checkpoint into a
+ * `agenticreplay replay --from` — and so `agenticreplay compare`, which forks — restores a checkpoint into a
  * directory it makes itself, and used to die inside git while doing it.
  *
  * Nothing in that path deletes anything, so the tolerance is unconditional; what it owes the
@@ -577,7 +596,7 @@ describe('a fork taken in a workspace holding a nested git repository', () => {
   let out: Output;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'orca-nested-fork-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-nested-fork-'));
     model = await startFakeModel();
     log = [];
     out = new Output({ write: () => {}, isTTY: false, sink: (entry) => log.push(entry) });
@@ -675,8 +694,8 @@ describe('a recording whose snapshot holds a nested repository inside a reset pa
   }
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), 'orca-doomed-tmp-'));
-    dir = await mkdtemp(join(tmpdir(), 'orca-doomed-ws-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-doomed-tmp-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-doomed-ws-'));
     env = { ...process.env, NO_COLOR: '1', TMPDIR: scratch, TMP: scratch, TEMP: scratch };
     await initRepo(dir);
     await mkdir(join(dir, 'cache'), { recursive: true });
@@ -688,8 +707,8 @@ describe('a recording whose snapshot holds a nested repository inside a reset pa
       env,
       timeout: timeout / 2,
     });
-    [runId] = (await readdir(join(dir, '.orca', 'runs'))) as [string];
-    runDir = join(dir, '.orca', 'runs', runId!);
+    [runId] = (await readdir(join(dir, '.agenticreplay', 'runs'))) as [string];
+    runDir = join(dir, '.agenticreplay', 'runs', runId!);
   }, timeout);
 
   afterEach(async () => {
@@ -734,8 +753,8 @@ describe('a recording whose snapshot holds a nested repository inside a reset pa
 /**
  * What the in-place path owes the operator, now that it no longer refuses.
  *
- * `orca replay` restores the recording's tree into the operator's own directory and runs the
- * recorded agent there, live — orca does not intercept tool execution, so a recorded build step,
+ * `agenticreplay replay` restores the recording's tree into the operator's own directory and runs the
+ * recorded agent there, live — agenticreplay does not intercept tool execution, so a recorded build step,
  * generator or `rm` reaches inside a nested repository like any other path. The safety copy holds
  * that repository only as a gitlink, so nothing it does there is reversible.
  *
@@ -759,8 +778,8 @@ describe('a recording whose agent writes inside the nested repository', () => {
   }
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), 'orca-inside-tmp-'));
-    dir = await mkdtemp(join(tmpdir(), 'orca-inside-ws-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-inside-tmp-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-inside-ws-'));
     env = { ...process.env, NO_COLOR: '1', TMPDIR: scratch, TMP: scratch, TEMP: scratch };
     await initRepo(dir);
     await nestRepo(dir, nested.join('/'));
@@ -781,7 +800,7 @@ describe('a recording whose agent writes inside the nested repository', () => {
       env,
       timeout: timeout / 2,
     });
-    [runId] = (await readdir(join(dir, '.orca', 'runs'))) as [string];
+    [runId] = (await readdir(join(dir, '.agenticreplay', 'runs'))) as [string];
     await operatorsWork();
   }, timeout);
 
@@ -800,7 +819,7 @@ describe('a recording whose agent writes inside the nested repository', () => {
       });
       const out = `${stdout}${stderr}`;
       // Not "they are left exactly as they are", which was only ever true of the restore.
-      expect(out).toContain('orca holds no copy of what is inside them');
+      expect(out).toContain('agenticreplay holds no copy of what is inside them');
       expect(out).toContain('--worktree');
       // And the unqualified promise on the next line carries the same exception, since that is
       // the sentence the operator actually acts on.
@@ -834,13 +853,13 @@ describe('a recording whose agent writes inside the nested repository', () => {
  *
  * Every block above is about a nested repository git can record as a gitlink. One that has never
  * been committed to has no HEAD for git to name it by, so `git add -A` refuses the whole add — and
- * orca had no answer for that at either end:
+ * agenticreplay had no answer for that at either end:
  *
  *   recorded with it there   every turn's snapshot threw, so the trace held no `fs.snapshot` at
  *                            all, and the replay read that absence as `--no-fs` and told the
  *                            operator the run had been "recorded with --no-fs" when nobody passed it
  *   appearing before it      the safety snapshot threw, so the replay exited 1 on git's own
- *                            sentence about a commit checked out, leaving behind the `orca-safety-*`
+ *                            sentence about a commit checked out, leaving behind the `agenticreplay-safety-*`
  *                            directory it had already made and printing no path to it
  *
  * `git init` in a subdirectory is all it takes, which is what starting a second project inside a
@@ -868,7 +887,7 @@ describe('a nested git repository with no commit in it', () => {
       env,
       timeout: timeout / 2,
     });
-    const [id] = (await readdir(join(dir, '.orca', 'runs'))) as [string];
+    const [id] = (await readdir(join(dir, '.agenticreplay', 'runs'))) as [string];
     return { id, out: `${result.stdout}${result.stderr}` };
   }
 
@@ -882,8 +901,8 @@ describe('a nested git repository with no commit in it', () => {
   }
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), 'orca-nc-tmp-'));
-    dir = await mkdtemp(join(tmpdir(), 'orca-nc-ws-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-nc-tmp-'));
+    dir = await mkdtemp(join(tmpdir(), 'agenticreplay-nc-ws-'));
     env = { ...process.env, NO_COLOR: '1', TMPDIR: scratch, TMP: scratch, TEMP: scratch };
     await initRepo(dir);
     await writeFile(join(dir, 'README.md'), 'the outer project');
@@ -907,16 +926,19 @@ describe('a nested git repository with no commit in it', () => {
 
       // The trace has the workspace in it, which is the whole difference: with the add failing
       // there was no `fs.snapshot` anywhere, and everything downstream read that as `--no-fs`.
-      const events = await new TraceReader(join(dir, '.orca', 'runs', id)).events();
+      const events = await new TraceReader(join(dir, '.agenticreplay', 'runs', id)).events();
       const snapshots = events.filter((event) => event.type === 'fs.snapshot');
       expect(snapshots.length).toBeGreaterThan(0);
       expect(deriveCheckpoints(events).some((point) => point.fsTree !== undefined)).toBe(true);
 
-      const capture = await FsCapture.start({ runDir: join(dir, '.orca', 'runs', id), cwd: dir });
+      const capture = await FsCapture.start({
+        runDir: join(dir, '.agenticreplay', 'runs', id),
+        cwd: dir,
+      });
       const tree = String(snapshots[0]?.attrs?.['tree']);
       const held = (await capture.files(tree)).map((file) => file.path);
       expect(held).toContain('README.md');
-      // And it is left OUT rather than swept in: a repository orca cannot restore is one it must
+      // And it is left OUT rather than swept in: a repository agenticreplay cannot restore is one it must
       // not pretend to hold either.
       expect(held.filter((path) => path.startsWith('newproject/'))).toEqual([]);
       expect(await capture.gitlinks(tree)).toEqual([]);
@@ -936,14 +958,14 @@ describe('a nested git repository with no commit in it', () => {
 
       expect(code, out).toBe(0);
       expect(out).not.toContain('does not have a commit checked out');
-      // Named before the agent runs, for the reason every other nested repository is: orca holds
+      // Named before the agent runs, for the reason every other nested repository is: agenticreplay holds
       // no copy of what is in there, so whatever the replay does there stays.
       expect(out).toContain('replay.nested_kept');
       expect(out).toContain('newproject');
       expect(await readFile(mine, 'utf8')).toBe('work of my own, never committed anywhere');
-      expect((await readdir(scratch)).filter((entry) => entry.startsWith('orca-safety-'))).toEqual(
-        [],
-      );
+      expect(
+        (await readdir(scratch)).filter((entry) => entry.startsWith('agenticreplay-safety-')),
+      ).toEqual([]);
     },
     timeout,
   );

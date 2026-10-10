@@ -1,11 +1,11 @@
 # Capturing Cursor, and the four things in the way
 
 Cursor's CLI agent was the one harness none of the existing techniques reached. Getting to its
-system prompt took four separate fixes, three of them in OrcaReplay itself. This is what each one
+system prompt took four separate fixes, three of them in AgenticReplay itself. This is what each one
 was, how it was diagnosed, and how to reproduce the result.
 
 ```console
-ORCA_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
+AGENTICREPLAY_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
 ```
 
 That is the whole procedure now. What follows is why it did not work before.
@@ -195,12 +195,12 @@ Nine candidates and one reachable model is the same account limit seen from the 
 
 ## Reproducing it
 
-The h2 interception is not in any published orca build, so the capture has to run against a local
-one. `ORCA_BIN` exists for that.
+The h2 interception is not in any published agenticreplay build, so the capture has to run against a local
+one. `AGENTICREPLAY_BIN` exists for that.
 
 ```console
 npm ci && npm run build
-ORCA_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
+AGENTICREPLAY_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
 ```
 
 Prerequisites: `cursor-agent` installed and signed in (`cursor-agent status`), and a directory it

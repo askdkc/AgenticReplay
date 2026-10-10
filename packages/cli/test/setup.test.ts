@@ -4,29 +4,29 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs } from '../src/args.js';
 import { Output, stripAnsi } from '../src/out.js';
-import { ORCAROUTER_CONSOLE, ORCAROUTER_URL, readConfig } from '../src/config.js';
+import { readConfig } from '../src/config.js';
 import { modelsCommand, setupCommand } from '../src/commands/setup.js';
-import { withoutCredentials } from '@orcareplay/proxy';
+import { withoutCredentials } from '@agenticreplay/proxy';
 import { writeConfig } from '../src/config.js';
 import { upstreamPlan } from '../src/upstream.js';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 
 /**
- * `orca setup` is the answer to "how do I compare four models without wiring anything up". It asks
+ * `agenticreplay setup` is the answer to "how do I compare four models without wiring anything up". It asks
  * for a gateway and a key, checks they work, and writes them down once.
  *
  * The recurring assertion in here is that the key never appears in output. A debugger that prints
  * your credential into a terminal you are about to paste into an issue has undone the point of
  * every redaction rule in the write path.
  */
-describe('orca setup', () => {
+describe('agenticreplay setup', () => {
   let home: string;
   let env: NodeJS.ProcessEnv;
   let lines: string[];
   let out: Output;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-setup-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-setup-'));
     env = { XDG_CONFIG_HOME: home };
     lines = [];
     out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -38,96 +38,41 @@ describe('orca setup', () => {
 
   const text = () => stripAnsi(lines.join('\n'));
 
-  describe('the OrcaRouter default', () => {
-    it('fills the blank when the answer is empty', async () => {
-      const asked: string[] = [];
-      const config = await setupCommand(parseArgs(['setup']), out, {
-        env,
-        probe: async () => ['claude-opus-5'],
-        // Enter on both questions: the gateway takes the default, the key is left unset.
-        ask: async (q) => {
-          asked.push(q);
-          return '';
-        },
-      });
-
-      expect(config.gateway?.url).toBe(ORCAROUTER_URL);
-      expect(asked[0], 'the default has to be visible in the prompt').toContain(ORCAROUTER_URL);
-      expect(await readConfig(env)).toMatchObject({ gateway: { url: ORCAROUTER_URL } });
-    });
-
-    it('is overridden by anything the user actually types', async () => {
-      const config = await setupCommand(parseArgs(['setup']), out, {
-        env,
-        probe: async () => ['some-model'],
-        ask: async (q) => (q.startsWith('Gateway') ? 'https://gw.example' : ''),
-      });
-      expect(config.gateway?.url).toBe('https://gw.example');
-    });
-
-    it('is overridden by --gateway, which skips the question entirely', async () => {
-      const asked: string[] = [];
-      const config = await setupCommand(
-        parseArgs(['setup', '--gateway', 'https://gw.example', '--key', 'k']),
-        out,
-        {
+  describe('explicit gateway selection', () => {
+    it('rejects an empty answer without writing configuration or contacting a gateway', async () => {
+      let probed = false;
+      await expect(
+        setupCommand(parseArgs(['setup']), out, {
           env,
-          probe: async () => ['some-model'],
-          ask: async (q) => {
-            asked.push(q);
-            return '';
+          ask: async () => '',
+          probe: async () => {
+            probed = true;
+            return [];
           },
-        },
+        }),
+      ).rejects.toThrow('explicit gateway');
+      expect(probed).toBe(false);
+      expect(await readConfig(env)).toEqual({});
+    });
+    it('records the gateway the user names', async () => {
+      const config = await setupCommand(
+        parseArgs(['setup', '--gateway', 'https://gw.example']),
+        out,
+        { env, ask: async () => '', probe: async () => [] },
       );
-      expect(config.gateway?.url).toBe('https://gw.example');
-      expect(asked.some((q) => q.startsWith('Gateway'))).toBe(false);
+      expect(config.gateway).toMatchObject({ url: 'https://gw.example', url_source: 'named' });
     });
-
-    it('works non-interactively with only a key', async () => {
-      // A terminal-less `orca setup --key <k>` used to fail with "no gateway to configure".
-      const config = await setupCommand(parseArgs(['setup', '--key', 'sk-secret-value']), out, {
-        env,
-        probe: async () => ['claude-opus-5'],
-      });
-      expect(config.gateway?.url).toBe(ORCAROUTER_URL);
-      expect(text(), 'still never the key itself').not.toContain('sk-secret-value');
-    });
-
-    it('says where to get a key, but only for the gateway it suggested', async () => {
-      await setupCommand(parseArgs(['setup']), out, {
-        env,
-        probe: async () => [],
-        ask: async () => '',
-      });
-      expect(text()).toContain(ORCAROUTER_CONSOLE);
-
-      lines.length = 0;
-      await setupCommand(parseArgs(['setup']), out, {
-        env,
-        probe: async () => [],
-        ask: async (q) => (q.startsWith('Gateway') ? 'https://gw.example' : ''),
-      });
-      expect(text(), 'a different gateway is not ours to send people to').not.toContain(
-        ORCAROUTER_CONSOLE,
-      );
-    });
-
-    it('is a default, not a redirect: an unconfigured run still goes to the provider', async () => {
-      // The property that keeps this a recommendation. With nothing configured, recording proxies
-      // the agent's own traffic to whatever it was already talking to — routing that through a
-      // gateway the user never named would post their source code to a third party as a side
-      // effect of pressing record, on a key that would not authenticate there anyway.
+    it('leaves unconfigured recording on the selected provider', async () => {
       const plan = await upstreamPlan(parseArgs(['record', 'claude']), env);
-      expect(plan.upstream, 'no gateway configured means no upstream override').toBeUndefined();
+      expect(plan.upstream).toBeUndefined();
       expect(plan.headers).toBeUndefined();
-      expect(JSON.stringify(plan)).not.toContain('orcarouter');
     });
   });
 
   describe('the next-step line', () => {
     it('suggests models the gateway actually serves', async () => {
       // Model ids are gateway-specific — OrcaRouter namespaces them by provider, a direct provider
-      // does not — so a hardcoded pair is a copyable line that fails against the gateway orca just
+      // does not — so a hardcoded pair is a copyable line that fails against the gateway agenticreplay just
       // configured. It used to print `claude-opus-5,gpt-5.2` regardless.
       await setupCommand(
         parseArgs(['setup', '--gateway', 'https://gw.example', '--key', 'k']),
@@ -139,7 +84,7 @@ describe('orca setup', () => {
         },
       );
       // The ask above accepts the offered default, so a model list is stored and the line is short.
-      expect(text()).toContain('orca compare last --verify');
+      expect(text()).toContain('agenticreplay compare last --verify');
     });
 
     it('names real ids when no default list was chosen', async () => {
@@ -155,7 +100,7 @@ describe('orca setup', () => {
       );
     });
 
-    it('points at orca models when the gateway could not be reached', async () => {
+    it('points at agenticreplay models when the gateway could not be reached', async () => {
       await setupCommand(
         parseArgs(['setup', '--gateway', 'https://gw.example', '--key', 'k']),
         out,
@@ -167,7 +112,7 @@ describe('orca setup', () => {
         },
       );
       const printed = text();
-      expect(printed).toContain('orca models');
+      expect(printed).toContain('agenticreplay models');
       expect(printed, 'inventing ids for an unreachable gateway is worse than none').not.toMatch(
         /--models \S/,
       );
@@ -299,16 +244,11 @@ describe('orca setup', () => {
     expect((await readConfig(env)).models).toBeUndefined();
   });
 
-  it('configures the default gateway when it cannot ask and was told nothing', async () => {
-    // This used to throw "no gateway to configure". With a default there is something to
-    // configure, so the useful outcome is a written config and a key you can add afterwards —
-    // not an error telling you to pass the flag whose value orca already knows.
-    const config = await setupCommand(parseArgs(['setup']), out, { env, probe: async () => [] });
-
-    expect(config.gateway?.url).toBe(ORCAROUTER_URL);
-    expect(config.gateway?.api_key, 'a key is never invented').toBeUndefined();
-    expect(config.gateway?.api_key_env).toBeUndefined();
-    expect(text()).toContain('auth=none');
+  it('requires a gateway in non-interactive setup', async () => {
+    await expect(
+      setupCommand(parseArgs(['setup']), out, { env, probe: async () => [] }),
+    ).rejects.toThrow('explicit gateway');
+    expect(await readConfig(env)).toEqual({});
   });
   /**
    * The credential in a *gateway URL*, in every shape one can be written.
@@ -371,35 +311,41 @@ describe('orca setup', () => {
       },
     ];
 
-    it.each(sanitised)('orca setup takes $what and never prints it', async ({ url, secret }) => {
-      await setupCommand(parseArgs(['setup', '--gateway', url, '--key-env', 'FAKE_KEY']), out, {
-        env,
-        ask: undefined,
-        probe: async () => {
-          // What undici says about a userinfo URL, so the error path is exercised too.
-          throw new Error(
-            `Request cannot be constructed from a URL that includes credentials: ${url}/v1/models`,
-          );
-        },
-      });
-      expect((await readConfig(env)).gateway?.url, 'it still has to be sent').toBe(url);
-      expect(text(), 'and never printed').not.toContain(secret);
-    });
-
-    it.each(refused)('orca setup refuses $what without echoing it', async ({ url, secret }) => {
-      await expect(
-        setupCommand(parseArgs(['setup', '--gateway', url, '--key-env', 'FAKE_KEY']), out, {
+    it.each(sanitised)(
+      'agenticreplay setup takes $what and never prints it',
+      async ({ url, secret }) => {
+        await setupCommand(parseArgs(['setup', '--gateway', url, '--key-env', 'FAKE_KEY']), out, {
           env,
           ask: undefined,
-          probe: async () => [],
-        }),
-      ).rejects.toThrow(/is not an origin orca can use/);
-      expect(text(), 'the refusal must not print the value it refused').not.toContain(secret);
-      expect(await readConfig(env), 'nothing refused may reach the file').toEqual({});
-    });
+          probe: async () => {
+            // What undici says about a userinfo URL, so the error path is exercised too.
+            throw new Error(
+              `Request cannot be constructed from a URL that includes credentials: ${url}/v1/models`,
+            );
+          },
+        });
+        expect((await readConfig(env)).gateway?.url, 'it still has to be sent').toBe(url);
+        expect(text(), 'and never printed').not.toContain(secret);
+      },
+    );
+
+    it.each(refused)(
+      'agenticreplay setup refuses $what without echoing it',
+      async ({ url, secret }) => {
+        await expect(
+          setupCommand(parseArgs(['setup', '--gateway', url, '--key-env', 'FAKE_KEY']), out, {
+            env,
+            ask: undefined,
+            probe: async () => [],
+          }),
+        ).rejects.toThrow(/is not an origin agenticreplay can use/);
+        expect(text(), 'the refusal must not print the value it refused').not.toContain(secret);
+        expect(await readConfig(env), 'nothing refused may reach the file').toEqual({});
+      },
+    );
 
     it.each([...sanitised, ...refused])(
-      'orca models never prints $what from a hand-edited config',
+      'agenticreplay models never prints $what from a hand-edited config',
       async ({ url, secret }) => {
         // readConfig deliberately accepts a hand-edited file, so this is the one way such a URL can
         // still arrive — and modelsCommand exists to report a gateway it cannot reach.
@@ -453,14 +399,14 @@ describe('orca setup', () => {
   });
 });
 
-describe('orca models', () => {
+describe('agenticreplay models', () => {
   let home: string;
   let env: NodeJS.ProcessEnv;
   let lines: string[];
   let out: Output;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-models-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-models-'));
     env = { XDG_CONFIG_HOME: home };
     lines = [];
     out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -472,7 +418,7 @@ describe('orca models', () => {
 
   it('says how to configure a gateway when there is none', async () => {
     await modelsCommand(parseArgs(['models']), out, { env, probe: async () => [] });
-    expect(stripAnsi(lines.join('\n'))).toContain('orca setup');
+    expect(stripAnsi(lines.join('\n'))).toContain('agenticreplay setup');
   });
 
   it('lists what the gateway serves, with prices where they are known', async () => {
@@ -520,8 +466,8 @@ describe('setup makes compare work without flags', () => {
   let out: Output;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'orca-e2e-cfg-'));
-    workspace = await mkdtemp(join(tmpdir(), 'orca-e2e-ws-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-cfg-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-ws-'));
     model = await startFakeModel();
     out = new Output({ write: () => {}, isTTY: false });
   });

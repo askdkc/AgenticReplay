@@ -6,8 +6,8 @@ sequence of `npm publish` calls run by hand at the end of a long day.
 
 ## Once, before the first release
 
-- An **`NPM_TOKEN`** repository secret, from an npm account that owns the `orcareplay` name and the
-  `@orcareplay` scope. An automation token, not a personal one.
+- An **`NPM_TOKEN`** repository secret, from an npm account that owns the `agenticreplay` name and the
+  `@agenticreplay` scope. An automation token, not a personal one.
 - **Actions enabled** for the repository, and Actions billing active on the org.
 - For the three Python packages, a **pending publisher** registered at pypi.org under
   *Publishing → Add a pending publisher*, and a repository **environment named `pypi`**. There is
@@ -17,9 +17,9 @@ sequence of `npm publish` calls run by hand at the end of a long day.
 
   | PyPI project | owner | repository | workflow | environment |
   | --- | --- | --- | --- | --- |
-  | `orca-trace` | `Continuum-AI-Corp` | `OrcaReplay` | `release-python.yml` | `pypi` |
-  | `orcareplay-openai-agents` | `Continuum-AI-Corp` | `OrcaReplay` | `release-openai-agents.yml` | `pypi` |
-  | `orcareplay-langgraph` | `Continuum-AI-Corp` | `OrcaReplay` | `release-langgraph.yml` | `pypi` |
+  | `agenticreplay-trace` | `Continuum-AI-Corp` | `AgenticReplay` | `release-python.yml` | `pypi` |
+  | `agenticreplay-openai-agents` | `Continuum-AI-Corp` | `AgenticReplay` | `release-openai-agents.yml` | `pypi` |
+  | `agenticreplay-langgraph` | `Continuum-AI-Corp` | `AgenticReplay` | `release-langgraph.yml` | `pypi` |
 
   A pending publisher does not reserve the name — it is only honoured on the first upload, and
   another account registering that name first invalidates it. So publish reasonably soon after
@@ -29,12 +29,12 @@ sequence of `npm publish` calls run by hand at the end of a long day.
 
 | | what it is | who gets it |
 | --- | --- | --- |
-| `latest` | a version someone decided to release | `npm i orcareplay` |
-| `next` | main, once a day, as `0.2.4-main.g<sha>` | `npm i orcareplay@next` |
+| `latest` | a version someone decided to release | `npm i agenticreplay` |
+| `next` | main, once a day, as `0.2.4-main.g<sha>` | `npm i agenticreplay@next` |
 
 `next` is published by `.github/workflows/publish-next.yml` on a daily schedule — 04:00 UTC, which
 is noon in Beijing — and needs nothing from you. Every version on it is a **prerelease**, which npm
-excludes from `npm i orcareplay` even though `0.2.4-main.gabc1234` sorts above `0.2.3`, so main is
+excludes from `npm i agenticreplay` even though `0.2.4-main.gabc1234` sorts above `0.2.3`, so main is
 always installable and nobody is opted in to it by accident. `--tag next` never moves `latest`.
 
 It publishes **the newest commit on main that CI passed**, not whatever main happens to be at
@@ -44,7 +44,7 @@ what **Actions → Publish next → Run workflow** is for; uncheck *dry run*.
 
 > **Why daily rather than on every merge.** A version is not free. npm serves a *packument* — the
 > metadata for every version of a package — on each install, and it grows with the version count:
-> `orcareplay` is 20 KB at seven versions, `typescript` is 15.6 MB at 3820. That is roughly 4 KB
+> `agenticreplay` is 20 KB at seven versions, `typescript` is 15.6 MB at 3820. That is roughly 4 KB
 > each, paid by everyone who installs, including people who only ever ask for `latest`. Publishing
 > per merge at this repository's rate would add ~2900 versions a year and land in that territory
 > inside twelve months. Daily is an eighth of it, and it is what `typescript` does for its own
@@ -78,7 +78,7 @@ other than main.
 > **Why there is a script for what looks like one edit.** Twelve packages name each other by exact
 > version, so a bump is thirty-eight fields across thirteen manifests — and `npm version
 > --workspaces` moves each package's own `version` while leaving its dependants naming the previous
-> release. Publish that and `orcareplay@0.3.0` depends on `@orcareplay/core@0.2.0`, which npm will
+> release. Publish that and `agenticreplay@0.3.0` depends on `@agenticreplay/core@0.2.0`, which npm will
 > never let you replace.
 >
 > **And why `--lock` rather than `npm version`.** When a workspace sits at the new version and its
@@ -93,7 +93,7 @@ other than main.
 >
 > Both halves are still checked rather than trusted: `publish-order.mjs` catches a manifest
 > mismatch, and `scripts/set-version.test.ts` asserts the committed lockfile links every
-> `@orcareplay/*` instead of fetching it. The manifests can be perfectly consistent while the
+> `@agenticreplay/*` instead of fetching it. The manifests can be perfectly consistent while the
 > lockfile is not.
 
 > **The registry step waits for npm, and has to.** The MCP Registry validates that the npm version
@@ -119,7 +119,7 @@ other than main.
 > chose, and main can carry it across several commits, so "0.3.0 is on npm" does not mean this
 > commit put it there. If the loop dies at package five and someone then pushes the fix to main —
 > same version, still untagged — resuming would publish 6-12 from the new tree and leave 1-5 from
-> the old one, making `orcareplay@0.3.0` a mixture no commit corresponds to, permanently. So the
+> the old one, making `agenticreplay@0.3.0` a mixture no commit corresponds to, permanently. So the
 > skip compares npm's recorded `gitHead` with the commit being published and stops the release when
 > they disagree: bump the version instead.
 
@@ -136,9 +136,9 @@ They are not part of the npm release and do not share its version. Each ships on
 
 | package | source | tag | workflow |
 | --- | --- | --- | --- |
-| `orca-trace` — the read-only reader for the trace format | `python/` | `py-v<version>` | `release-python.yml` |
-| `orcareplay-openai-agents` — records the Agents SDK's own run structure | `python-openai-agents/` | `agents-v<version>` | `release-openai-agents.yml` |
-| `orcareplay-langgraph` — records which LangGraph node ran, and in which superstep | `python-langgraph/` | `langgraph-v<version>` | `release-langgraph.yml` |
+| `agenticreplay-trace` — the read-only reader for the trace format | `python/` | `py-v<version>` | `release-python.yml` |
+| `agenticreplay-openai-agents` — records the Agents SDK's own run structure | `python-openai-agents/` | `agents-v<version>` | `release-openai-agents.yml` |
+| `agenticreplay-langgraph` — records which LangGraph node ran, and in which superstep | `python-langgraph/` | `langgraph-v<version>` | `release-langgraph.yml` |
 
 ```console
 # edit the version in the package's pyproject.toml, merge that, then:
@@ -153,12 +153,12 @@ the upload, which is how to find out whether a release would work without making
 > **Why four workflows rather than one.** A Python-only fix must not force a version bump across
 > twelve npm packages, and the npm publish must not fail because PyPI had a bad day. The Python
 > packages are separated from each other for the same reason: they share a repository and nothing
-> else, so one tag publishing several would make every `orca-trace` fix reissue the adapters — and
+> else, so one tag publishing several would make every `agenticreplay-trace` fix reissue the adapters — and
 > PyPI does not allow reusing a version number.
 
 ## Why order matters
 
-Internal dependencies are pinned to an exact version — `"@orcareplay/core": "0.1.0"`, never `"*"`.
+Internal dependencies are pinned to an exact version — `"@agenticreplay/core": "0.1.0"`, never `"*"`.
 A `*` resolves to whatever is latest on the registry, so a 0.1.0 CLI would silently pull a 0.9.0
 core, and on the very first publish it cannot resolve at all because nothing exists yet.
 
@@ -175,7 +175,7 @@ The end-to-end check that matters is not "did npm accept it" but "does a fresh i
 npm pack --workspaces --pack-destination /tmp/tarballs
 mkdir /tmp/verify && cd /tmp/verify && npm init -y
 npm i /tmp/tarballs/*.tgz
-./node_modules/.bin/orca doctor       # both shims must report ok — they run out of dist/
+./node_modules/.bin/agenticreplay doctor       # both shims must report ok — they run out of dist/
 ```
 
 That last line is the one worth keeping. The MCP shim was resolved through a path that only worked

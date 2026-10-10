@@ -27,7 +27,13 @@ describe('bundleViewerScript', () => {
 
   it('keeps the behaviour: minification mangles names but not the DOM contract', async () => {
     const bundled = await bundleViewerScript();
-    for (const marker of ['orca-filter', 'orca-theme', 'aria-selected', 'ArrowDown', '.row']) {
+    for (const marker of [
+      'agenticreplay-filter',
+      'agenticreplay-theme',
+      'aria-selected',
+      'ArrowDown',
+      '.row',
+    ]) {
       expect(bundled).toContain(marker);
     }
   });

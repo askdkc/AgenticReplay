@@ -15,13 +15,13 @@ export const CLIENT_SOURCE = `
   var root = document.documentElement;
   var rows = [].slice.call(document.querySelectorAll('.row'));
   var panes = [].slice.call(document.querySelectorAll('.pane'));
-  var filterBox = document.getElementById('orca-filter');
-  var countBox = document.getElementById('orca-count');
-  var themeBtn = document.getElementById('orca-theme');
-  var playBtn = document.getElementById('orca-play');
-  var speedBtn = document.getElementById('orca-speed');
-  var progressBar = document.getElementById('orca-progress');
-  var playhead = document.getElementById('orca-playhead');
+  var filterBox = document.getElementById('agenticreplay-filter');
+  var countBox = document.getElementById('agenticreplay-count');
+  var themeBtn = document.getElementById('agenticreplay-theme');
+  var playBtn = document.getElementById('agenticreplay-play');
+  var speedBtn = document.getElementById('agenticreplay-speed');
+  var progressBar = document.getElementById('agenticreplay-progress');
+  var playhead = document.getElementById('agenticreplay-playhead');
   // Guarded rather than assumed: this script is also evaluated outside a full browser global
   // (its own test harness runs it against a DOM stub), and motion is the first thing that should
   // degrade, never the navigation.
@@ -207,12 +207,12 @@ export const CLIENT_SOURCE = `
   });
 
   function readTheme() {
-    try { return localStorage.getItem('orca-theme'); } catch (err) { return null; }
+    try { return localStorage.getItem('agenticreplay-theme'); } catch (err) { return null; }
   }
   function writeTheme(value) {
     try {
-      if (value) localStorage.setItem('orca-theme', value);
-      else localStorage.removeItem('orca-theme');
+      if (value) localStorage.setItem('agenticreplay-theme', value);
+      else localStorage.removeItem('agenticreplay-theme');
     } catch (err) { /* private mode, blocked storage: the page still works */ }
   }
   function applyTheme(value) {

@@ -8,7 +8,7 @@ we have already shipped that mistake once.
 The claim: LlamaIndex validates the model name against a list compiled into
 `llama_index.llms.openai.utils`, and refuses anything outside it *before any request is made*. So
 a name your gateway understands but OpenAI never published — the usual case when pointing
-LlamaIndex at a proxy, a local model, or an internal router — does not work, and no orca setting
+LlamaIndex at a proxy, a local model, or an internal router — does not work, and no agenticreplay setting
 changes that, because nothing has reached the wire yet.
 
 Where it raises matters as much as that it raises. The check is not in the constructor: `OpenAI(...)`

@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orca_trace import TraceReader, derive_checkpoints, snap_to_checkpoint, turns_of  # noqa: E402
+from agenticreplay_trace import TraceReader, derive_checkpoints, snap_to_checkpoint, turns_of  # noqa: E402
 
 DEFAULT_RUN = Path(__file__).resolve().parents[2] / "examples" / "traces" / "run_9f2c14a03b71"
 

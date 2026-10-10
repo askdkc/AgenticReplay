@@ -28,7 +28,7 @@ const { GIFEncoder, quantize, applyPalette } = gifenc;
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TARGET = join(HERE, 'capture-run.gif');
-const FRAMES = mkdtempSync(join(tmpdir(), 'orca-capture-run-'));
+const FRAMES = mkdtempSync(join(tmpdir(), 'agenticreplay-capture-run-'));
 
 /** [class, text, hold in ms] */
 const LINES = [
@@ -37,7 +37,7 @@ const LINES = [
   ['dim', '  cwd D:\\your\\repo', 380],
   [
     'dim',
-    '  orca attach --for claude --port 46081 --upstream-anthropic https://api.anthropic.com',
+    '  agenticreplay attach --for claude --port 46081 --upstream-anthropic https://api.anthropic.com',
     700,
   ],
   ['ok', '  launched pid=33076 in its own console', 2600],

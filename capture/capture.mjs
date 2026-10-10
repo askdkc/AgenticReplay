@@ -11,10 +11,10 @@
  * The prompt lands in `prompt/<model>-system-prompt.md`; the request body, tool definitions,
  * metadata and raw run land in `capture/<model>/`.
  *
- * Why this is not just `orca record`: the interactive prompt is a different, larger prompt than
+ * Why this is not just `agenticreplay record`: the interactive prompt is a different, larger prompt than
  * the non-interactive one, and a harness only assembles it when stdin is a real console. A pipe is
- * not, so `orca record claude` always captures the -p variant. Interactive mode here holds a proxy
- * open with `orca attach`, then has PowerShell launch the agent in a console of its own.
+ * not, so `agenticreplay record claude` always captures the -p variant. Interactive mode here holds a proxy
+ * open with `agenticreplay attach`, then has PowerShell launch the agent in a console of its own.
  *
  * Everything written except capture/<model>/trace/ is scrubbed: paths, usernames, emails,
  * uuids, long hex runs and the configured gateway host become {{PLACEHOLDERS}}, and the run aborts
@@ -72,36 +72,36 @@ function runExe(exe, args, opts = {}) {
 }
 
 /**
- * How to invoke orca.
+ * How to invoke agenticreplay.
  *
- * `ORCA_BIN` pointing at a built `cli.js` runs a local checkout instead of whatever is on PATH,
+ * `AGENTICREPLAY_BIN` pointing at a built `cli.js` runs a local checkout instead of whatever is on PATH,
  * which is what a capture needs while a fix is still in the working tree: the h2 interception the
  * Cursor profile depends on does not exist in a published build.
  */
 /**
- * Which orca this script drives.
+ * Which agenticreplay this script drives.
  *
  * The build in this checkout comes first, and that ordering is the whole point: a globally
- * installed `orca` is a *release*, and a release does not know about an adapter that was added to
+ * installed `agenticreplay` is a *release*, and a release does not know about an adapter that was added to
  * the tree after it shipped. Running `node capture/capture.mjs kilo` against one produced
  * "unknown adapter 'kilo'" listing the published registry -- an error about a binary the operator
  * never meant to use, from a script sitting three directories from the source that does support
- * it. `ORCA_BIN` still wins for anyone pointing this at a build elsewhere, and PATH is the
+ * it. `AGENTICREPLAY_BIN` still wins for anyone pointing this at a build elsewhere, and PATH is the
  * fallback for a machine with no checkout built.
  */
-function orcaCommand(args) {
-  const bin = process.env.ORCA_BIN ?? localOrcaBuild();
-  if (bin === undefined) return { name: 'orca', args };
+function agenticreplayCommand(args) {
+  const bin = process.env.AGENTICREPLAY_BIN ?? localAgenticReplayBuild();
+  if (bin === undefined) return { name: 'agenticreplay', args };
   return { name: process.execPath, args: [bin, ...args] };
 }
 
 /** The CLI entry point built from this checkout, or undefined when it has not been built. */
-function localOrcaBuild() {
+function localAgenticReplayBuild() {
   const built = join(dirname(CAPTURE_DIR), 'packages', 'cli', 'dist', 'cli.js');
   return existsSync(built) ? built : undefined;
 }
 
-/** Run a shim such as `orca.cmd`, which node cannot spawn without a shell. */
+/** Run a shim such as `agenticreplay.cmd`, which node cannot spawn without a shell. */
 function runShim(name, args, opts = {}) {
   if (!WIN) return runExe(name, args, opts);
   const line = [name, ...args.map(cmdQuote)].join(' ');
@@ -163,20 +163,20 @@ const USAGE = `usage: node capture/capture.mjs <claude|codex|opencode|qwen|mimo|
   --print            claude only: capture the -p prompt instead of the interactive one
   --interactive      codex only: capture the TUI prompt instead of the exec one
   --upstream <url>   override where the proxy forwards. default: api.anthropic.com for
-                     claude when an orca gateway is configured, otherwise untouched
+                     claude when an agenticreplay gateway is configured, otherwise untouched
   --port <n>         proxy port for interactive capture. default 46011
   --cwd <path>       directory to run the agent in. default: the current directory.
                      interactive claude needs a directory it already trusts
   --prompt <text>    the throwaway user turn. default: a one-word reply
   --timeout <sec>    how long to wait for the request. default 180
-  --no-trace         delete the raw orca run instead of keeping it under
+  --no-trace         delete the raw agenticreplay run instead of keeping it under
                      capture/<model>/trace/
   --retries <n>      how many extra attempts after a transient failure. default 2
   --allow-failed     file the capture even when the turn came back an error. the prompt
                      is still genuine; refused by default so a wrong --model cannot
                      quietly create a folder for a model that does not exist
   --index            rebuild capture/index.json and exit
-  --from-run <dir>   file an orca run that already exists instead of capturing a new
+  --from-run <dir>   file an agenticreplay run that already exists instead of capturing a new
                      one. the run directory is read in place and left where it is
   --dir <name>       folder name under capture/, when two harnesses serve the same
                      model and would otherwise land in the same one`;
@@ -277,8 +277,8 @@ function extractMuse(body) {
   };
 }
 
-/** A recorded body, whichever of the two forms orca stored it in. */
-const BINARY_BODY_PREFIX = 'orca-base64:';
+/** A recorded body, whichever of the two forms agenticreplay stored it in. */
+const BINARY_BODY_PREFIX = 'agenticreplay-base64:';
 const recordedBytes = (body) =>
   typeof body === 'string' && body.startsWith(BINARY_BODY_PREFIX)
     ? Buffer.from(body.slice(BINARY_BODY_PREFIX.length), 'base64')
@@ -353,11 +353,11 @@ function roleObjects(text) {
   return found;
 }
 
-/** The gateway credential from `orca setup`, for a harness that has no store of its own. */
-function orcaGatewayKey() {
+/** The gateway credential from `agenticreplay setup`, for a harness that has no store of its own. */
+function agenticreplayGatewayKey() {
   const path = join(
     process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'),
-    'orca',
+    'agenticreplay',
     'config.json',
   );
   try {
@@ -500,7 +500,7 @@ const PROFILES = {
      * Writing a project-level config with the proxy origin in it does redirect OpenCode when the
      * command is typed in a shell, and did not when the same file and command were launched from
      * here — the proxy recorded nothing at all. Rather than keep chasing that, this takes the route
-     * orca built for an agent whose origin cannot be moved: `--tls-intercept` terminates the TLS
+     * agenticreplay built for an agent whose origin cannot be moved: `--tls-intercept` terminates the TLS
      * OpenCode established itself, at the socket, and the config is left alone.
      *
      * The models under the built-in `opencode` provider are the ones this reaches, several of them
@@ -736,7 +736,7 @@ const PROFILES = {
      * Cursor is the awkward one, and every part of that is a protocol fact rather than a choice.
      *
      * Its agent stream speaks HTTP/2 exclusively to a host of its own, so there is no base URL to
-     * move and interception has to terminate h2 -- which orca could not do until the interceptor
+     * move and interception has to terminate h2 -- which agenticreplay could not do until the interceptor
      * learned to. The wire format is Connect over protobuf, so the body is bytes rather than JSON
      * and only survives a trace because a non-text body is now recorded as base64. And the prompt
      * is not in the request at all: the request carries the user's turn and the model settings,
@@ -785,7 +785,7 @@ const PROFILES = {
         throw new Error(
           'no Cursor agent stream in the run.\n' +
             '  the conversation host is reached over HTTP/2, so the interceptor has to speak h2;\n' +
-            '  check that --tls-hosts covers *.cursor.sh and that this orca build has the h2 path.',
+            '  check that --tls-hosts covers *.cursor.sh and that this agenticreplay build has the h2 path.',
         );
       }
 
@@ -882,12 +882,12 @@ const PROFILES = {
    *
    * Every other profile here hands the harness an origin and gets out of the way. Muse needs a
    * process in between, for a reason neither side is wrong about: it fetches a model catalogue
-   * with `GET /muse-code/models` and will not build a turn until that answers, and orca's proxy
+   * with `GET /muse-code/models` and will not build a turn until that answers, and agenticreplay's proxy
    * answers 404 to every non-POST because only a POST is ever a model call. `muse-shim.mjs`
    * serves that one GET and forwards the rest untouched, so the turn carrying the prompt is still
-   * recorded by orca as a `/responses` exchange.
+   * recorded by agenticreplay as a `/responses` exchange.
    *
-   * The origin reaches the shim through `ORCA_BASE_URL_VARS`, bare. `/forward/` is not available:
+   * The origin reaches the shim through `AGENTICREPLAY_BASE_URL_VARS`, bare. `/forward/` is not available:
    * Muse discards any path on `--base-url`, measured — given `…:47001/deep/path` it still asks
    * for `/muse-code/models` at the root — and a forward is nothing but path.
    *
@@ -923,7 +923,7 @@ const PROFILES = {
       // `=/` is the bare origin. Without the explicit path `applyNamedBaseUrls` would append
       // `v1`, which Muse would then discard along with the rest of the path — harmless but
       // misleading to read in a trace.
-      return { env: { ORCA_BASE_URL_VARS: 'MUSE_PROXY=/' }, restore() {} };
+      return { env: { AGENTICREPLAY_BASE_URL_VARS: 'MUSE_PROXY=/' }, restore() {} };
     },
 
     extract: extractMuse,
@@ -943,11 +943,12 @@ const PROFILES = {
      * one thing `generic-openai` redirects, so nothing clever is needed — no config to rewrite and
      * no TLS to terminate. What it does need is the key and the model name, since it has no
      * credential store of its own: `OPENAI_API_KEY` if the environment already carries one,
-     * otherwise the gateway key `orca setup` stored, which is where the traffic is going anyway.
+     * otherwise the gateway key `agenticreplay setup` stored, which is where the traffic is going anyway.
      */
     prepare(_cwd, model) {
-      const key = process.env.OPENAI_API_KEY ?? orcaGatewayKey();
-      if (!key) throw new Error('qwen needs OPENAI_API_KEY set, or an orca gateway with a key');
+      const key = process.env.OPENAI_API_KEY ?? agenticreplayGatewayKey();
+      if (!key)
+        throw new Error('qwen needs OPENAI_API_KEY set, or an agenticreplay gateway with a key');
       if (!model) throw new Error('qwen needs --model: the id its endpoint serves');
       return { env: { OPENAI_API_KEY: key, OPENAI_MODEL: model }, restore() {} };
     },
@@ -968,8 +969,12 @@ function gitValue(cwd, key) {
   return r.status === 0 ? r.stdout.trim() : '';
 }
 
-function orcaGatewayHost() {
-  const p = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'orca', 'config.json');
+function agenticreplayGatewayHost() {
+  const p = join(
+    process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'),
+    'agenticreplay',
+    'config.json',
+  );
   try {
     const url = JSON.parse(readFileSync(p, 'utf8')).gateway?.url;
     return url ? new URL(url).hostname : '';
@@ -990,7 +995,7 @@ function buildScrubber(cwd) {
   const user = userInfo().username;
   const gitName = gitValue(cwd, 'user.name');
   const gitEmail = gitValue(cwd, 'user.email');
-  const gateway = orcaGatewayHost();
+  const gateway = agenticreplayGatewayHost();
 
   const rules = [
     [/Recent commits:\n(?:[0-9a-f]{7,40} [^\n]*\n?)+/g, 'Recent commits:\n{{RECENT_COMMITS}}\n'],
@@ -1040,7 +1045,7 @@ function buildScrubber(cwd) {
   rules.push(
     [/(OS Version: [^\n]*?)\d+\.\d+\.\d{4,}/g, '$1{{OS_BUILD}}'],
     // A run id makes the artifact different on every capture, which would make `regenerate`
-    // produce a diff every time and mean nothing when it did not. MCode prints one: orca moves
+    // produce a diff every time and mean nothing when it did not. MCode prints one: agenticreplay moves
     // its data directory into the run, and the prompt reports that directory back as
     // `activeDataDir`. Twelve hex characters is below the `{{HEX}}` rule's floor of 32.
     [/\brun_[0-9a-f]{8,}\b/g, '{{RUN_ID}}'],
@@ -1141,7 +1146,7 @@ function trustState(cwd) {
 
 // ---------------------------------------------------------------------------- trace reading
 
-const runDir = (cwd, runId) => join(cwd, '.orca', 'runs', runId);
+const runDir = (cwd, runId) => join(cwd, '.agenticreplay', 'runs', runId);
 
 const readEvents = (dir) =>
   readFileSync(join(dir, 'events.jsonl'), 'utf8')
@@ -1152,7 +1157,7 @@ const readEvents = (dir) =>
 function readBlob(dir, ref) {
   const sha = ref.replace('sha256:', '');
   let v = JSON.parse(readFileSync(join(dir, 'blobs', sha.slice(0, 2), sha), 'utf8'));
-  if (typeof v === 'string') v = JSON.parse(v); // orca stores request bodies double-encoded
+  if (typeof v === 'string') v = JSON.parse(v); // agenticreplay stores request bodies double-encoded
   return v;
 }
 
@@ -1256,15 +1261,15 @@ function upstreamArgs(profile) {
   // A configured gateway captures every anthropic call, and a third-party router usually does not
   // serve the model, which surfaces as `400 unknown provider`. Codex is the opposite case: its own
   // config points at that gateway, so leaving it alone is what makes the model resolve.
-  if (profile.forceAnthropicUpstream && orcaGatewayHost()) {
+  if (profile.forceAnthropicUpstream && agenticreplayGatewayHost()) {
     return ['--upstream-anthropic', 'https://api.anthropic.com'];
   }
   return [];
 }
 
-/** Non-interactive: one `orca record`, which exits on its own when the agent does. */
+/** Non-interactive: one `agenticreplay record`, which exits on its own when the agent does. */
 function captureRecorded(profile, cwd, model, prompt) {
-  // No port here: this path lets orca stand the proxy up and pick one. Only the held-open proxy
+  // No port here: this path lets agenticreplay stand the proxy up and pick one. Only the held-open proxy
   // path knows a port in advance, and only a harness whose config has to name it cares.
   const prepared = profile.prepare?.(cwd, model);
   try {
@@ -1277,15 +1282,15 @@ function captureRecorded(profile, cwd, model, prompt) {
       ...upstreamArgs(profile),
       ...profile.recordArgs(model, prompt),
     ];
-    console.log(`  orca ${args.join(' ')}`);
-    const cmd = orcaCommand(args);
+    console.log(`  agenticreplay ${args.join(' ')}`);
+    const cmd = agenticreplayCommand(args);
     const { out } = runShim(cmd.name, cmd.args, {
       cwd,
       timeout: Number(flags.timeout ?? 300) * 1000,
       env: { ...process.env, ...(prepared?.env ?? {}) },
     });
     const runId = /run=(run_[0-9a-f]+)/.exec(out)?.[1];
-    if (!runId) throw new Error(`orca record produced no run id.\n${out.trim()}`);
+    if (!runId) throw new Error(`agenticreplay record produced no run id.\n${out.trim()}`);
     // `capture.empty` counts *model* exchanges, and a harness captured by decrypting its own
     // protocol has none -- Cursor's traffic is recorded as net exchanges instead. Treating the
     // warning as fatal there rejected a run that had the prompt in it.
@@ -1362,7 +1367,7 @@ function consoleLauncher(profile, cwd, model, prompt) {
 /**
  * Start the agent as an ordinary child, for a harness that needs no terminal.
  *
- * Used instead of `orca record` where the adapter's environment does not reach the agent: OpenCode
+ * Used instead of `agenticreplay record` where the adapter's environment does not reach the agent: OpenCode
  * answered from the gateway with the proxy set and left an empty trace, and the same launch under
  * a held-open proxy records fine. Holding the proxy ourselves also fixes the port before the
  * agent's config is written, which is what makes the `{env:...}` indirection in that config work.
@@ -1419,8 +1424,8 @@ async function captureWithProxy(profile, cwd, model, prompt, launch) {
     String(port),
     ...upstreamArgs(profile),
   ];
-  console.log(`  orca ${attachArgs.join(' ')}`);
-  const attachCmd = orcaCommand(attachArgs);
+  console.log(`  agenticreplay ${attachArgs.join(' ')}`);
+  const attachCmd = agenticreplayCommand(attachArgs);
   const attach = spawnShim(attachCmd.name, attachCmd.args, { cwd });
   let attachOut = '';
   attach.stdout?.on('data', (d) => {
@@ -1436,7 +1441,8 @@ async function captureWithProxy(profile, cwd, model, prompt, launch) {
       runId = /attached run=(run_[0-9a-f]+)/.exec(attachOut)?.[1];
       if (!runId) await sleep(300);
     }
-    if (!runId) throw new Error(`orca attach never reported a run id.\n${attachOut.trim()}`);
+    if (!runId)
+      throw new Error(`agenticreplay attach never reported a run id.\n${attachOut.trim()}`);
 
     const prepared = profile.prepare?.(cwd, model, port);
     let running;
@@ -1578,8 +1584,9 @@ function writeCapture(profile, cwd, runId, interactive, dirOverride) {
     harness: profile.id,
     mode: interactive ? 'interactive' : 'non-interactive',
     captured_at: new Date().toISOString(),
-    orca_run: runId,
-    orca_version: JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')).orca_version,
+    agenticreplay_run: runId,
+    agenticreplay_version: JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'))
+      .agenticreplay_version,
     ...got.meta,
     // Every figure here describes the prompt as sent. Scrubbing shortens the text a little, so
     // the file on disk is a few hundred characters smaller; mixing the two made the block sizes
@@ -1667,13 +1674,13 @@ function writeCapture(profile, cwd, runId, interactive, dirOverride) {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  // Either way the run has left the capture directory, so orca's scaffolding there is dead.
+  // Either way the run has left the capture directory, so agenticreplay's scaffolding there is dead.
   try {
-    if (readdirSync(join(cwd, '.orca', 'runs')).length === 0) {
-      rmSync(join(cwd, '.orca'), { recursive: true, force: true });
+    if (readdirSync(join(cwd, '.agenticreplay', 'runs')).length === 0) {
+      rmSync(join(cwd, '.agenticreplay'), { recursive: true, force: true });
     }
   } catch {
-    /* someone else's .orca, leave it */
+    /* someone else's .agenticreplay, leave it */
   }
 
   return { dest, meta };
@@ -1697,7 +1704,7 @@ function folderReadme(meta) {
     `| \`${slug}-request.json\` | yes | the whole request body as sent |`,
     `| \`${slug}-tools.json\` | yes | tool definitions |`,
     `| \`${slug}-meta.json\` | n/a | run id, sizes, token counts, tool names |`,
-    '| `trace/` | **no** | the raw orca run. holds account and session ids |',
+    '| `trace/` | **no** | the raw agenticreplay run. holds account and session ids |',
     '',
     `Mirrored to \`../${meta.prompt_file}\`. This copy is the source; \`--index\` repairs the other from it.`,
     '',
@@ -1793,7 +1800,7 @@ if (!WIN && interactive) {
 
 const cwd = resolve(typeof flags.cwd === 'string' ? flags.cwd : process.cwd());
 // Refused rather than ignored. The harness would answer `Unknown option '--model'` and print its
-// help, which costs a run and reads like a bug in orca; and silently dropping the flag would file
+// help, which costs a run and reads like a bug in agenticreplay; and silently dropping the flag would file
 // the capture under a model nobody asked for.
 if (profile.modelFromConfig && typeof flags.model === 'string') {
   console.error(
@@ -1818,7 +1825,7 @@ async function attempt() {
   let runId;
   if (fromRun) {
     if (!existsSync(join(fromRun, 'events.jsonl'))) {
-      throw new Error(`${fromRun} is not an orca run directory`);
+      throw new Error(`${fromRun} is not an agenticreplay run directory`);
     }
     runId = basename(fromRun);
     console.log(`  filing existing run ${runId}`);

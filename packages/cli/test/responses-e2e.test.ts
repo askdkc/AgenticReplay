@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints } from '@orcareplay/core';
-import { validateEvent, validateManifest } from '@orcareplay/schema';
+import { TraceReader, deriveCheckpoints } from '@agenticreplay/core';
+import { validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -32,7 +32,7 @@ describe('end to end: a Responses API agent', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-responses-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-responses-'));
     model = await startResponsesModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -104,7 +104,7 @@ describe('end to end: a Responses API agent', () => {
 
     expect(replay.exitCode).toBe(0);
     expect(replay.mode).toBe('exact');
-    expect(replay.matchedExact).toBeGreaterThan(0);
+    expect(replay.canonicalExact).toBeGreaterThan(0);
     // Nothing went live, and the whole claim behind it: the model was not asked again.
     expect(replay.liveCalls).toBe(0);
     expect(model.calls.length).toBe(before);

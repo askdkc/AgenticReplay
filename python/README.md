@@ -1,10 +1,10 @@
-# orca-trace
+# agenticreplay-trace
 
-Read-only Python reader for the [Orca trace format v0](../spec/orca-trace-v0.md).
+Read-only Python reader for the [AgenticReplay trace format v0](../spec/agenticreplay-trace-v0.md).
 
-OrcaReplay's core is TypeScript, but the people who turn traces into evaluation datasets work in
+AgenticReplay's core is TypeScript, but the people who turn traces into evaluation datasets work in
 Python. This package makes a recorded run readable from pandas, PyTorch, or a notebook without
-shelling out to `orca` and parsing its output — and it is the evidence that v0 is a format rather
+shelling out to `agenticreplay` and parsing its output — and it is the evidence that v0 is a format rather
 than a TypeScript library with a document next to it.
 
 - **No third-party dependencies.** Python 3.10+ standard library only, so it can be dropped into
@@ -17,7 +17,7 @@ than a TypeScript library with a document next to it.
 ## Install
 
 ```bash
-pip install -e python/            # from an OrcaReplay checkout
+pip install -e python/            # from an AgenticReplay checkout
 # or, since there is nothing to build:
 export PYTHONPATH="$PWD/python:$PYTHONPATH"
 ```
@@ -25,7 +25,7 @@ export PYTHONPATH="$PWD/python:$PYTHONPATH"
 ## Worked example
 
 ```python
-from orca_trace import TraceReader, derive_checkpoints, snap_to_checkpoint
+from agenticreplay_trace import TraceReader, derive_checkpoints, snap_to_checkpoint
 
 reader = TraceReader.open("examples/traces/run_9f2c14a03b71")
 
@@ -96,7 +96,7 @@ Spec §2 makes two tolerances mandatory, and this reader treats both as *reporta
 | Situation | Result |
 |---|---|
 | Truncated final line (the writer crashed) | skipped, reported in `problems()`, no exception |
-| Unknown `type` from a newer Orca | skipped, reported — this is what lets the format grow |
+| Unknown `type` from a newer AgenticReplay | skipped, reported — this is what lets the format grow |
 | `seq` gap, repeat, or a log not starting at 0 | event still returned, gap reported |
 | Malformed `$blob` payload | event skipped — spec §2.2 makes it an invalid event, not opaque data |
 | `causes` entry ≥ `seq` | event still returned, violation reported |

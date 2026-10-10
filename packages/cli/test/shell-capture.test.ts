@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader } from '@orcareplay/core';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader } from '@agenticreplay/core';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -25,7 +25,7 @@ describe.skipIf(process.platform === 'win32')('shell capture (POSIX)', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-shell-e2e-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-shell-e2e-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -172,7 +172,7 @@ describe.skipIf(process.platform === 'win32')('shell capture (POSIX)', () => {
   it('does not change what the agent itself observes', async () => {
     // The shim is in the agent's PATH during this run; the agent still completes normally.
     const result = await record();
-    expect(result.exitCode).toBe(0);
+    expect(result.childExitCode).toBe(0);
   });
 
   it('can be turned off, and then records no shell events', async () => {

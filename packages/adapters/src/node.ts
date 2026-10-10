@@ -3,8 +3,8 @@ import {
   bunOptionsWithHook,
   nodeOptionsWithHook,
   writeFetchHook,
-} from '@orcareplay/node-instrument';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+} from '@agenticreplay/node-instrument';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { applyNamedBaseUrls, passKey, passThrough, proxyBase, readEnv } from './env.js';
 
 /**
@@ -13,7 +13,7 @@ import { applyNamedBaseUrls, passKey, passThrough, proxyBase, readEnv } from './
  * Every other adapter here redirects an environment variable and stops. That covers most
  * harnesses and misses a whole class: an agent that hardcodes a base URL — which is most of
  * them once someone has pinned a gateway in code — never consults those variables, so under
- * `orca record` it runs perfectly, exits 0, and writes an empty trace.
+ * `agenticreplay record` it runs perfectly, exits 0, and writes an empty trace.
  *
  * So this one redirects at the only place all of them agree on — `globalThis.fetch` — by writing
  * a self-contained preload into the run directory and pointing `NODE_OPTIONS` at it. It is a
@@ -37,8 +37,8 @@ export const nodeAdapter: Adapter = {
     const [command, ...args] = ctx.userArgs;
     if (command === undefined || command === '') {
       throw new Error(
-        'node needs the command to run: orca record node -- <command> [args...], ' +
-          'e.g. orca record node -- node agent.mjs',
+        'node needs the command to run: agenticreplay record node -- <command> [args...], ' +
+          'e.g. agenticreplay record node -- node agent.mjs',
       );
     }
 
@@ -46,21 +46,21 @@ export const nodeAdapter: Adapter = {
     const env: Record<string, string> = {
       // Read by the hook. Absent, the hook is inert — which is what makes the file safe to leave
       // on disk in a run directory someone later opens.
-      ORCA_PROXY_URL: ctx.proxyUrl,
+      AGENTICREPLAY_PROXY_URL: ctx.proxyUrl,
       NODE_OPTIONS: nodeOptionsWithHook(hookPath, readEnv(ctx.env, 'NODE_OPTIONS')),
       // Bun accepts NODE_OPTIONS but ignores `--require` in it, so a Bun-based agent — grok-cli is
       // the one people hit — ran uninstrumented and its traffic went to the provider unrecorded.
       // Setting both costs nothing: each runtime reads only its own.
       BUN_OPTIONS: bunOptionsWithHook(hookPath, readEnv(ctx.env, 'BUN_OPTIONS')),
       // Belt and braces. One agent may use an SDK's default client for one provider and a
-      // hardcoded origin for another, and orca has no way to tell which from the outside.
+      // hardcoded origin for another, and agenticreplay has no way to tell which from the outside.
       OPENAI_BASE_URL: proxyBase(ctx.proxyUrl, 'v1'),
       OPENAI_API_BASE: proxyBase(ctx.proxyUrl, 'v1'),
       ANTHROPIC_BASE_URL: proxyBase(ctx.proxyUrl),
     };
     // An extra origin to redirect — an Azure deployment, a self-hosted gateway the agent pins in
     // code. Passed through rather than invented so the default stays the two provider hosts.
-    passThrough(env, ctx.env, 'ORCA_INSTRUMENT_HOSTS');
+    passThrough(env, ctx.env, 'AGENTICREPLAY_INSTRUMENT_HOSTS');
     passKey(env, ctx.env, 'OPENAI_API_KEY');
     passThrough(env, ctx.env, 'ANTHROPIC_API_KEY');
     applyNamedBaseUrls(env, ctx.env, ctx.proxyUrl);

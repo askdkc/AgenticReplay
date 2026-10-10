@@ -20,8 +20,9 @@ export interface ExportResult {
 
 /**
  * Reads `runDir` (manifest.json + events.jsonl + blobs/) and writes a self-contained document
- * to `outPath`. Blob bytes past `maxBlobBytes` (8 MB by default) become "payload omitted"
- * placeholders rather than a file nobody can open.
+ * to `outPath`. Text blobs are included in full by default; the HTML preview still truncates long
+ * values and offers a download link for the complete redacted body. Pass `maxBlobBytes` explicitly
+ * when a bounded export is required.
  */
 export async function exportTraceHtml(
   runDir: string,

@@ -7,7 +7,7 @@ in its own console and sending its first turn. The two absolute paths are replac
 placeholder repository; nothing else is reworded.</sub>
 
 
-Captured with OrcaReplay at the local proxy layer: what the harness on this machine actually sends,
+Captured with AgenticReplay at the local proxy layer: what the harness on this machine actually sends,
 not what a service returns. Everything is scrubbed except the raw traces.
 
 Two directories, and the split is the point:
@@ -35,12 +35,12 @@ node capture/capture.mjs --index                       # rebuild index.json only
 ```console
 node capture/capture.mjs opencode                      # a free model, so this one costs nothing
 node capture/capture.mjs qwen  --model gpt-5.6-sol --dir qwen-gpt-5.6-sol
-ORCA_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
+AGENTICREPLAY_BIN=packages/cli/dist/cli.js node capture/capture.mjs cursor
 ```
 
-Cursor needs `ORCA_BIN` pointing at a local build: it is reached by decrypting HTTP/2, which no
-published orca has. `CURSOR-HTTP2.md` covers that in full - four obstacles, three of them fixed in
-orca itself, and what is still out of reach.
+Cursor needs `AGENTICREPLAY_BIN` pointing at a local build: it is reached by decrypting HTTP/2, which no
+published agenticreplay has. `CURSOR-HTTP2.md` covers that in full - four obstacles, three of them fixed in
+agenticreplay itself, and what is still out of reach.
 
 All three work in one command. OpenCode is reached a different way: its provider origin lives in
 `opencode.json` rather than an environment variable, so it cannot be redirected, and the capture
@@ -62,7 +62,7 @@ Nothing else to run.
 | `--port <n>` | proxy port for interactive capture. default 46011 |
 | `--prompt <text>` | the throwaway user turn |
 | `--timeout <sec>` | how long to wait for the request. default 180 |
-| `--no-trace` | skip keeping the raw orca run |
+| `--no-trace` | skip keeping the raw agenticreplay run |
 
 ## What is here
 
@@ -117,7 +117,7 @@ ZCode has one too, `capture.mjs zcode`; it is the second harness here redirected
 config file rather than an environment variable, and the first whose file is JSON, so the rewrite
 walks a parsed tree instead of matching text. Its prefix column is blank because the turn was
 refused before any tokens were counted: this machine has no personal provider config, so the
-adapter wrote its own single provider pointed at the proxy, orca forwarded that to its default
+adapter wrote its own single provider pointed at the proxy, agenticreplay forwarded that to its default
 upstream, and the upstream does not serve `glm-4.6` -- `upstream 400`, carried back inside a `200`
 stream. The prompt is unaffected: it travels in the request, and all 9,084 characters of it were
 on disk before the response arrived.
@@ -137,10 +137,10 @@ The row records the empty-repository figure, which is the one that reproduces.
 
 Muse Code has a profile too, `capture.mjs muse`, and it is the only one that puts a process
 between the harness and the proxy. Muse fetches a model catalogue with `GET /muse-code/models` and
-will not build a turn until that answers; orca's proxy answers 404 to every non-POST, because only
+will not build a turn until that answers; agenticreplay's proxy answers 404 to every non-POST, because only
 a POST is ever a model call. Neither is wrong, so `muse-shim.mjs` serves that one GET and forwards
 everything else untouched -- a catalogue is not a model call, and the turn carrying the prompt is
-still recorded by orca as a `/responses` exchange. The shim also exists because Muse takes its
+still recorded by agenticreplay as a `/responses` exchange. The shim also exists because Muse takes its
 origin from a `--base-url` flag and *discards any path on it*, measured, which rules out
 `/forward/` for this harness: a forward is nothing but path.
 
@@ -154,7 +154,7 @@ context differ. No account is needed for any of it -- the key is a placeholder, 
 refused, and `--allow-failed` is what files it, the same as the MiniMax rows.
 the agent pointed at the proxy -- so `capture.mjs <harness>` will answer `unknown harness` for
 every one of them, and the way to reproduce one today is the way it was taken: run the agent
-under `orca record` with its provider base URL moved, and read the system prompt out of the
+under `agenticreplay record` with its provider base URL moved, and read the system prompt out of the
 request. Writing profiles for them is the follow-up that turns these rows into one-liners.
 
 Four are worth a sentence each, because the shape of the capture is not obvious from the row:
@@ -231,7 +231,7 @@ model and which mode it came from:
 | `<name>-request.json` | `capture/<name>/` | yes | the whole request body as sent |
 | `<name>-tools.json` | `capture/<name>/` | yes | tool definitions |
 | `<name>-meta.json` | `capture/<name>/` | n/a | run id, sizes, token counts, tool names |
-| `trace/` | `capture/<name>/` | **no** | the raw orca run. holds account and session ids |
+| `trace/` | `capture/<name>/` | **no** | the raw agenticreplay run. holds account and session ids |
 
 `prompt/` groups by harness, one folder per agent, so the file inside is named for the model
 alone: `prompt/CLAUDECODE/claude-fable-5-1-system-prompt.md`, and the `-p` variant beside it as
@@ -269,7 +269,7 @@ get when you call the harness from a script.
 ## Scrubbing
 
 Replacements are derived from the machine, not hard-coded, so the script is portable: home
-directory, username, git name and email, the gateway host from `~/.config/orca/config.json`, the
+directory, username, git name and email, the gateway host from `~/.config/agenticreplay/config.json`, the
 Claude Code project slug, the OS build, then generic rules for emails, uuids and hex runs of 32 or
 more. Order matters, since the memory directory sits inside the home directory.
 
@@ -280,8 +280,8 @@ Placeholders currently in use: `{{CWD}}`, `{{HOME}}`, `{{TMP}}`, `{{CLAUDE_HOME}
 ## Two things the script exists to get right
 
 **The interactive prompt is a different prompt.** A harness only assembles it when stdin is a real
-console, and a pipe is not one, so a plain `orca record claude` always captures the `-p` variant.
-Interactive mode holds the proxy open with `orca attach` and has PowerShell launch the agent in a
+console, and a pipe is not one, so a plain `agenticreplay record claude` always captures the `-p` variant.
+Interactive mode holds the proxy open with `agenticreplay attach` and has PowerShell launch the agent in a
 console of its own. For Claude Fable 5.1 that is the difference between 20,806 and 26,054 chars,
 and between 29 tools and 35.
 
@@ -336,7 +336,7 @@ than just omitting the line:
 ## Not covered
 
 Interactive capture is Windows-only for now; it depends on `Start-Process` handing a console
-application a real console. On Linux and macOS a pipe sits behind a pty, so one `orca record`
+application a real console. On Linux and macOS a pipe sits behind a pty, so one `agenticreplay record`
 should reach the interactive prompt directly, and the profile in `capture.mjs` would need a branch
 for it.
 

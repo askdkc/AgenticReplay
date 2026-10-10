@@ -23,7 +23,7 @@ import { readArchive, writeArchive } from '../src/archive.js';
 import { writeConfig } from '../src/config.js';
 
 /**
- * `orca push` and `orca pull`, against a gateway stood up in-process.
+ * `agenticreplay push` and `agenticreplay pull`, against a gateway stood up in-process.
  *
  * A real HTTP server rather than a stubbed fetch: what these commands get wrong is the wire — the
  * multipart body, which header carries the key, what a 4xx body means — and a stub asserts only
@@ -49,19 +49,19 @@ describe('push and pull', () => {
   const runId = 'run_abc123';
 
   async function seedRun(): Promise<void> {
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await mkdir(join(dir, 'blobs', 'ab'), { recursive: true });
     await writeFile(
       join(dir, 'manifest.json'),
-      `${JSON.stringify({ run_id: runId, schema_version: '0.1.0' }, null, 2)}\n`,
+      `${JSON.stringify({ run_id: runId, schema_version: '0.4.0' }, null, 2)}\n`,
     );
     await writeFile(join(dir, 'events.jsonl'), '{"seq":1,"type":"run.start"}\n');
     await writeFile(join(dir, 'blobs', 'ab', 'abcdef'), Buffer.from([1, 2, 3]));
   }
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-sync-'));
-    home = await mkdtemp(join(tmpdir(), 'orca-sync-home-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-sync-'));
+    home = await mkdtemp(join(tmpdir(), 'agenticreplay-sync-home-'));
     logs = [];
     out = new Output({ write: () => {}, sink: (e) => void logs.push(e), isTTY: false });
     received = [];
@@ -95,8 +95,8 @@ describe('push and pull', () => {
 
   const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
     XDG_CONFIG_HOME: home,
-    ORCA_GATEWAY_URL: url,
-    ORCA_GATEWAY_KEY: 'sk-replay-test',
+    AGENTICREPLAY_GATEWAY_URL: url,
+    AGENTICREPLAY_GATEWAY_KEY: 'sk-replay-test',
     ...extra,
   });
 
@@ -149,7 +149,7 @@ describe('push and pull', () => {
     await expect(
       pushCommand(parseArgs(['push', runId]), out, workspace, {
         XDG_CONFIG_HOME: home,
-        ORCA_GATEWAY_URL: url,
+        AGENTICREPLAY_GATEWAY_URL: url,
       }),
     ).rejects.toThrow(/key/i);
     expect(received).toHaveLength(0);
@@ -172,8 +172,11 @@ describe('push and pull', () => {
    * never wrote included. The gateway's text is one line however it arrives.
    */
   it.each([
-    ['a JSON refusal', JSON.stringify({ success: false, message: 'Invalid key\nnext: orca x' })],
-    ['a body that is not JSON', 'Bad gateway\r\nnext: orca x'],
+    [
+      'a JSON refusal',
+      JSON.stringify({ success: false, message: 'Invalid key\nnext: agenticreplay x' }),
+    ],
+    ['a body that is not JSON', 'Bad gateway\r\nnext: agenticreplay x'],
   ])('keeps %s on one line', async (_, body) => {
     await seedRun();
     reply = { status: 401, body };
@@ -181,7 +184,7 @@ describe('push and pull', () => {
       () => undefined,
       (e: unknown) => e as Error,
     );
-    expect(err?.message).toContain('next: orca x');
+    expect(err?.message).toContain('next: agenticreplay x');
     expect(err?.message).not.toMatch(/[\r\n]/);
   });
 
@@ -206,7 +209,7 @@ describe('push and pull', () => {
 
     expect(received[0]!.method).toBe('GET');
     expect(received[0]!.path).toBe(`/api/replay/runs/${runId}/export`);
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     expect(await readFile(join(dir, 'manifest.json'), 'utf8')).toBe(`{"run_id":"${runId}"}\n`);
     expect(await readFile(join(dir, 'events.jsonl'), 'utf8')).toBe('{"seq":1}\n');
     expect(Array.from(await readFile(join(dir, 'blobs', 'ab', 'abcdef')))).toEqual([9, 8, 7]);
@@ -241,7 +244,7 @@ describe('push and pull', () => {
     );
     // Verified on the staged copy, before the swap: what fails must not be what replaced a run.
     await expect(
-      readFile(join(workspace, '.orca', 'runs', runId, 'events.jsonl')),
+      readFile(join(workspace, '.agenticreplay', 'runs', runId, 'events.jsonl')),
     ).rejects.toThrow();
   });
 
@@ -256,18 +259,18 @@ describe('push and pull', () => {
    */
   it('says when the copy that arrived is the same events under a different serialisation', async () => {
     await seedRun();
-    const local = join(workspace, '.orca', 'runs', runId);
+    const local = join(workspace, '.agenticreplay', 'runs', runId);
     // `seedRun` writes no integrity root, and without one on both sides there is nothing to
     // compare — which is the case this test exists to cover, so give the local copy a real one.
     // Written in the order a writer writes them, which is NOT alphabetical — `seq,ts,type` already
     // is, so sorting it would be a no-op and the test would pass by testing nothing.
-    const localEvents = '{"type":"run.start","seq":0,"actor":"orca"}\n';
+    const localEvents = '{"type":"run.start","seq":0,"actor":"agenticreplay"}\n';
     await writeFile(join(local, 'events.jsonl'), localEvents);
     await writeFile(
       join(local, 'manifest.json'),
       `${JSON.stringify({
         run_id: runId,
-        schema_version: '0.1.0',
+        schema_version: '0.4.0',
         integrity: {
           events_sha256: createHash('sha256').update(localEvents).digest('hex'),
           blob_count: 0,
@@ -324,7 +327,7 @@ describe('push and pull', () => {
     reply = {
       status: 200,
       body: Buffer.from(zip),
-      headers: { 'content-type': 'application/zip', 'x-orca-run-truncated': 'true' },
+      headers: { 'content-type': 'application/zip', 'x-agenticreplay-run-truncated': 'true' },
     };
     await pullCommand(parseArgs(['pull', runId]), out, workspace, env());
     expect(logs.some((e) => e.level === 'warn' && e.event.includes('truncated'))).toBe(true);
@@ -348,9 +351,9 @@ describe('push and pull', () => {
       /already|exists/i,
     );
     // The local copy is untouched.
-    expect(await readFile(join(workspace, '.orca', 'runs', runId, 'events.jsonl'), 'utf8')).toBe(
-      '{"seq":1,"type":"run.start"}\n',
-    );
+    expect(
+      await readFile(join(workspace, '.agenticreplay', 'runs', runId, 'events.jsonl'), 'utf8'),
+    ).toBe('{"seq":1,"type":"run.start"}\n');
   });
   /**
    * THE STORED KEY BELONGS TO THE STORED GATEWAY, AND TO NOTHING ELSE.
@@ -433,13 +436,13 @@ describe('push and pull', () => {
     ).rejects.toThrow();
 
     // The run is exactly as it was.
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     expect(await readFile(join(dir, 'events.jsonl'), 'utf8')).toBe(
       '{"seq":1,"type":"run.start"}\n',
     );
     expect(Array.from(await readFile(join(dir, 'blobs', 'ab', 'abcdef')))).toEqual([1, 2, 3]);
-    // And no staging directory is left behind for `orca list` or the next pull to trip over.
-    const siblings = await readdir(join(workspace, '.orca', 'runs'));
+    // And no staging directory is left behind for `agenticreplay list` or the next pull to trip over.
+    const siblings = await readdir(join(workspace, '.agenticreplay', 'runs'));
     expect(siblings).toEqual([runId]);
   });
   /**
@@ -459,7 +462,7 @@ describe('push and pull', () => {
     which: 'incoming' | 'replaced' | 'both',
     newSeq: string,
   ): Promise<string> {
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await seedRun();
     if (which === 'replaced' || which === 'both') {
       await mkdir(`${dir}.replaced`, { recursive: true });
@@ -495,7 +498,7 @@ describe('push and pull', () => {
       /already|exists/i,
     );
     expect(await readFile(join(dir, 'events.jsonl'), 'utf8')).toBe('{"seq":42}\n');
-    expect(await readdir(join(workspace, '.orca', 'runs'))).toEqual([runId]);
+    expect(await readdir(join(workspace, '.agenticreplay', 'runs'))).toEqual([runId]);
   });
 
   it('rolls back a swap that was killed before the new copy landed', async () => {
@@ -507,12 +510,12 @@ describe('push and pull', () => {
     expect(await readFile(join(dir, 'events.jsonl'), 'utf8')).toBe(
       '{"seq":1,"type":"run.start"}\n',
     );
-    expect(await readdir(join(workspace, '.orca', 'runs'))).toEqual([runId]);
+    expect(await readdir(join(workspace, '.agenticreplay', 'runs'))).toEqual([runId]);
   });
 
   it('sweeps leftovers when the swap did complete', async () => {
     await seedRun();
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await mkdir(`${dir}.replaced`, { recursive: true });
     await writeFile(join(`${dir}.replaced`, 'events.jsonl'), 'stale\n');
 
@@ -532,13 +535,13 @@ describe('push and pull', () => {
 
     expect(await readFile(join(dir, 'events.jsonl'), 'utf8')).toBe('{"seq":7}\n');
     // The stranded copy is gone rather than sitting out of scrub's reach forever.
-    expect(await readdir(join(workspace, '.orca', 'runs'))).toEqual([runId]);
+    expect(await readdir(join(workspace, '.agenticreplay', 'runs'))).toEqual([runId]);
   });
   /**
    * A PULLED RUN IS AS SENSITIVE AS A RECORDED ONE, AND THE STORE SAYS SO IN TWO WAYS.
    *
    * `ensureRunsDir` is what record, attach and replay all go through, and it does two things this
-   * command was silently skipping: it creates `.orca/runs` mode 0700, and it writes `.orca/.gitignore`
+   * command was silently skipping: it creates `.agenticreplay/runs` mode 0700, and it writes `.agenticreplay/.gitignore`
    * containing `*` — git's own idiom for a directory that excludes itself. Pull wrote into the store
    * with a bare recursive mkdir instead, so under a default umask the run landed 0755/0644 and the
    * whole store appeared in `git status`, one `git add -A` from being committed.
@@ -571,11 +574,13 @@ describe('push and pull', () => {
       await pullCommand(parseArgs(['pull', runId]), out, workspace, env());
 
       // The store excludes itself from git — the accident ensureRunsDir exists to prevent.
-      expect(await readFile(join(workspace, '.orca', '.gitignore'), 'utf8')).toContain('*');
+      expect(await readFile(join(workspace, '.agenticreplay', '.gitignore'), 'utf8')).toContain(
+        '*',
+      );
 
       // SECURITY.md: "Trace files and blobs are written mode 0600, run directories 0700."
       const mode = async (...p: string[]): Promise<number> =>
-        (await stat(join(workspace, '.orca', 'runs', ...p))).mode & 0o777;
+        (await stat(join(workspace, '.agenticreplay', 'runs', ...p))).mode & 0o777;
       expect(await mode(runId)).toBe(0o700);
       expect(await mode(runId, 'blobs')).toBe(0o700);
       expect(await mode(runId, 'manifest.json')).toBe(0o600);
@@ -595,7 +600,7 @@ describe('push and pull', () => {
    * refused with "already exists locally".
    */
   it('discards a partial .incoming from an interrupted FIRST pull instead of promoting it', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     const dir = join(runs, runId);
     // What a first pull killed mid-write leaves: some entries, no manifest, no .replaced.
     await mkdir(join(`${dir}.incoming`, 'blobs', 'ab'), { recursive: true });
@@ -635,8 +640,8 @@ describe('push and pull', () => {
    */
   it('refuses to work on a run another pull is holding', async () => {
     await seedRun();
-    const lock = join(workspace, '.orca', 'runs', `${runId}.lock`);
-    await mkdir(join(workspace, '.orca', 'runs'), { recursive: true });
+    const lock = join(workspace, '.agenticreplay', 'runs', `${runId}.lock`);
+    await mkdir(join(workspace, '.agenticreplay', 'runs'), { recursive: true });
     await writeFile(lock, '99999\n');
 
     reply = {
@@ -654,17 +659,17 @@ describe('push and pull', () => {
 
     await expect(
       pullCommand(parseArgs(['pull', runId, '--force']), out, workspace, env()),
-    ).rejects.toThrow(/another orca pull|held/i);
+    ).rejects.toThrow(/another agenticreplay pull|held/i);
 
     // And the local copy is exactly as it was — the point of refusing.
-    expect(await readFile(join(workspace, '.orca', 'runs', runId, 'events.jsonl'), 'utf8')).toBe(
-      '{"seq":1,"type":"run.start"}\n',
-    );
+    expect(
+      await readFile(join(workspace, '.agenticreplay', 'runs', runId, 'events.jsonl'), 'utf8'),
+    ).toBe('{"seq":1,"type":"run.start"}\n');
   }, 20000);
   /*
    * PUSH MUST NOT SHIP THE RUN'S INTERCEPTION CA.
    *
-   * Every other thing that takes a run off disk enumerates the NAMED artifacts — `orca export`,
+   * Every other thing that takes a run off disk enumerates the NAMED artifacts — `agenticreplay export`,
    * `gc`, `scrub` all read `manifest.json`, `events.jsonl` and the blobs events reference, and none
    * of them can pick up what else a run directory happens to hold. `runEntries` sweeps the whole
    * directory instead, so whatever is in there leaves the machine.
@@ -681,7 +686,7 @@ describe('push and pull', () => {
    */
   it('never packs the run’s TLS CA, whatever the sweep finds', async () => {
     await seedRun();
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await mkdir(join(dir, 'tls'), { recursive: true });
     await writeFile(
       join(dir, 'tls', 'ca.key'),
@@ -723,7 +728,7 @@ describe('push and pull', () => {
    * is covered below — its lock does come off.
    */
   it('leaves a lock it no longer owns alone', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const lock = join(runs, `${runId}.lock`);
     const mine = `${process.pid} mine\n`;
@@ -767,7 +772,7 @@ describe('push and pull', () => {
 
     await pullCommand(parseArgs(['pull', runId, '--force']), out, workspace, env());
     await expect(
-      readFile(join(workspace, '.orca', 'runs', `${runId}.lock`), 'utf8'),
+      readFile(join(workspace, '.agenticreplay', 'runs', `${runId}.lock`), 'utf8'),
     ).rejects.toThrow();
   });
 
@@ -775,10 +780,10 @@ describe('push and pull', () => {
    * AND THE SAME RULE FOR THE ENVIRONMENT KEY, which the first version of this gate exempted.
    *
    * I argued that an env key alongside `--gateway` was a deliberate pairing made in one
-   * invocation. The README in this same PR says `read -rs ORCA_GATEWAY_KEY && export
-   * ORCA_GATEWAY_KEY` — and an export persists for the shell session, so the pairing was an
+   * invocation. The README in this same PR says `read -rs AGENTICREPLAY_GATEWAY_KEY && export
+   * AGENTICREPLAY_GATEWAY_KEY` — and an export persists for the shell session, so the pairing was an
    * assumption nothing enforced. A user who exported the key for their real gateway and later runs
-   * `orca push --gateway <other-host>` was sending that key and the whole recording to the other
+   * `agenticreplay push --gateway <other-host>` was sending that key and the whole recording to the other
    * host, while the identical request with the key in config was refused. An asymmetry that turns
    * on where a credential is STORED rather than where it is GOING is not a boundary.
    */
@@ -788,8 +793,8 @@ describe('push and pull', () => {
       pushCommand(parseArgs(['push', runId, '--gateway', 'http://127.0.0.1:9']), out, workspace, {
         XDG_CONFIG_HOME: home,
         // Exported for the real gateway, some time ago.
-        ORCA_GATEWAY_URL: url,
-        ORCA_GATEWAY_KEY: 'sk-orca-exported-for-the-real-one',
+        AGENTICREPLAY_GATEWAY_URL: url,
+        AGENTICREPLAY_GATEWAY_KEY: 'sk-orca-exported-for-the-real-one',
       }),
     ).rejects.toThrow(/key/i);
     expect(received).toHaveLength(0);
@@ -807,7 +812,7 @@ describe('push and pull', () => {
     await seedRun();
     await pushCommand(parseArgs(['push', runId, '--gateway', url]), out, workspace, {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_KEY: 'sk-orca-ci',
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-orca-ci',
     });
     expect(received[0]!.auth).toBe('Bearer sk-orca-ci');
   });
@@ -819,8 +824,8 @@ describe('push and pull', () => {
     await seedRun();
     await pushCommand(parseArgs(['push', runId]), out, workspace, {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_URL: url,
-      ORCA_GATEWAY_KEY: 'sk-orca-home',
+      AGENTICREPLAY_GATEWAY_URL: url,
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-orca-home',
     });
     expect(received[0]!.auth).toBe('Bearer sk-orca-home');
   });
@@ -839,7 +844,7 @@ describe('push and pull', () => {
    *   mcp-frames.jsonl     raw JSON-RPC bodies.
    *   shims/               generated launchers carrying this machine's paths.
    *
-   * `orca scrub` is why a denylist cannot be finished: it rewrites manifest.json, events.jsonl and
+   * `agenticreplay scrub` is why a denylist cannot be finished: it rewrites manifest.json, events.jsonl and
    * blobs/ and NOTHING else, so a user who scrubbed a secret and pushed was shipping an unscrubbed
    * copy of it in the raw logs — scrub said it succeeded and the secret went out anyway.
    *
@@ -849,7 +854,7 @@ describe('push and pull', () => {
    */
   it('packs only trace content, never the capture scaffolding beside it', async () => {
     await seedRun();
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await writeFile(
       join(dir, 'mcp-config.json'),
       `${JSON.stringify({
@@ -865,7 +870,7 @@ describe('push and pull', () => {
       '{"jsonrpc":"2.0","result":"mcp_frame_secret"}\n',
     );
     await mkdir(join(dir, 'shims'), { recursive: true });
-    await writeFile(join(dir, 'shims', 'curl'), '#!/bin/sh\nexec orca-shell-shim "$@"\n');
+    await writeFile(join(dir, 'shims', 'curl'), '#!/bin/sh\nexec agenticreplay-shell-shim "$@"\n');
     // Kept: the scrub ledger says a run WAS scrubbed, by rule and count and never by value.
     await writeFile(join(dir, 'redactions.json'), '{"records":[{"rule":"scrub","count":2}]}\n');
     // WITHHELD unless --fs: the shadow store is the largest thing scrub cannot rewrite, and a
@@ -909,11 +914,11 @@ describe('push and pull', () => {
 
   The snapshots are still pushable for the case they exist for — a teammate who needs the tree to
   reproduce — but as a decision the pusher makes rather than a default they inherit, because
-  `orca scrub` cannot rewrite the store and says as much itself.
+  `agenticreplay scrub` cannot rewrite the store and says as much itself.
   */
   it('ships the workspace snapshots only when --fs asks, and warns when it does', async () => {
     await seedRun();
-    const dir = join(workspace, '.orca', 'runs', runId);
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
     await mkdir(join(dir, 'fs', 'objects'), { recursive: true });
     await writeFile(join(dir, 'fs', 'objects', 'aa'), 'snapshot\n');
     await mkdir(join(dir, 'fs', 'shims'), { recursive: true });
@@ -956,7 +961,7 @@ describe('push and pull', () => {
    * caller can interpose on it.
    */
   it('breaks the stale lock it claimed, never a live one that replaced it', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const lock = join(runs, `${runId}.lock`);
 
@@ -1002,7 +1007,7 @@ describe('push and pull', () => {
   the two below it, because the released file then disappears instead of going back.
   */
   it('releases only the exact lock file it claimed, never the path', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const lock = join(runs, `${runId}.lock`);
     const mine = `${process.pid} mine\n`;
@@ -1036,7 +1041,7 @@ describe('push and pull', () => {
   Here the path is occupied by a third party before the restore, which is exactly that window.
   */
   it('leaves a live holder’s lock behind rather than deleting it when the path is taken', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const lock = join(runs, `${runId}.lock`);
     // The hand-back is asserted directly rather than by racing a write against breakStaleRunLock's
@@ -1078,7 +1083,7 @@ describe('push and pull', () => {
   the wrong path, or is cleared too early.
   */
   it('keeps a held lock’s mtime fresh while the critical section runs', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const dest = join(runs, runId);
     const lock = `${dest}.lock`;
@@ -1137,7 +1142,7 @@ describe('push and pull', () => {
   moves, and it is what a third pull's `wx` create would find missing.
   */
   it('does not move a lock aside to discover it is not ours', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const lock = join(runs, `${runId}.lock`);
     await writeFile(lock, 'the new holder\n');
@@ -1166,7 +1171,7 @@ describe('push and pull', () => {
   ages out, no later pull can break it, and the run is wedged until someone deletes the file.
   */
   it('stops beating on the lock once it belongs to someone else', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const dest = join(runs, runId);
     const lock = `${dest}.lock`;
@@ -1212,7 +1217,7 @@ describe('push and pull', () => {
   test that tries to hit the window by timing is the coin flip this file already learned about.
   */
   it('puts the old run back when the lock is lost between the two renames', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     const dest = join(runs, runId);
     await mkdir(dest, { recursive: true });
     await writeFile(join(dest, 'events.jsonl'), 'the run that was already here\n');
@@ -1260,7 +1265,7 @@ describe('push and pull', () => {
   `revertStagedSwap` is told `existing: false`, and it puts nothing back — while also
   deleting the staged replacement. `<run>` then exists nowhere: `.replaced` matches no
   RUN_ID_PATTERN, so list, show, events, checkpoints, export, scrub, gc and push all skip
-  it, and only a later `orca pull` of that exact id would ever reclaim it.
+  it, and only a later `agenticreplay pull` of that exact id would ever reclaim it.
 
   A function cannot both return a value and throw, so no return value can carry this. The
   failure path has to stop needing the caller, which is what the single `catch` inside
@@ -1271,7 +1276,7 @@ describe('push and pull', () => {
   test above does not reach.
   */
   it('puts the old run back when the swap rename fails and the lock is still ours', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     const dest = join(runs, runId);
     await mkdir(dest, { recursive: true });
     await writeFile(join(dest, 'events.jsonl'), 'the run that was already here\n');
@@ -1314,7 +1319,7 @@ describe('push and pull', () => {
   new holder renames the blend into place and prints `pull.done`.
 
   Two archives of one run key differ in ordinary operation (a re-push, a scrub between fetches, or
-  the truncated export the `x-orca-run-truncated` header warns about), and the result is a run whose
+  the truncated export the `x-agenticreplay-run-truncated` header warns about), and the result is a run whose
   manifest integrity root covers one copy while some blobs are the other's. That is verbatim what
   withRunLock's own comment says the lock exists to rule out: "the run that lands is a blend of both
   copies … with nothing reporting it."
@@ -1324,7 +1329,7 @@ describe('push and pull', () => {
   such tests, and they were flaky one run in four).
   */
   it('stops staging the moment the lock is no longer ours', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const dest = join(runs, runId);
     const staging = `${dest}.incoming`;
@@ -1444,7 +1449,7 @@ describe('push and pull', () => {
   `recoverInterruptedSwap` runs under the lock at the head of every pull and reclaims both siblings.
   */
   it('leaves the shared scratch alone when the swap aborts because the lock was taken', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const dest = join(runs, runId);
     const staging = `${dest}.incoming`;
@@ -1488,7 +1493,7 @@ describe('push and pull', () => {
     const manifest = {
       name: `${runId}/manifest.json`,
       bytes: new TextEncoder().encode(
-        `${JSON.stringify({ run_id: runId, schema_version: '0.1.0' })}\n`,
+        `${JSON.stringify({ run_id: runId, schema_version: '0.4.0' })}\n`,
       ),
     };
     const events = {
@@ -1512,15 +1517,15 @@ describe('push and pull', () => {
 
     await pullCommand(parseArgs(['pull', runId, '--gateway', url]), out, workspace, env());
 
-    const blobs = join(workspace, '.orca', 'runs', runId, 'blobs');
+    const blobs = join(workspace, '.agenticreplay', 'runs', runId, 'blobs');
     expect((await stat(blobs)).isDirectory()).toBe(true);
     expect(await readFile(join(blobs, 'ab', 'abcdef'))).toEqual(Buffer.from([1, 2, 3]));
   });
 
   /*
-  AN EXPORTED KEY IS HOMED AT ORCA_GATEWAY_URL, AND NOWHERE ELSE.
+  AN EXPORTED KEY IS HOMED AT AGENTICREPLAY_GATEWAY_URL, AND NOWHERE ELSE.
 
-  `envHome` read `ORCA_GATEWAY_URL ?? configured`, which substituted a home the key had never been
+  `envHome` read `AGENTICREPLAY_GATEWAY_URL ?? configured`, which substituted a home the key had never been
   associated with — and the README’s own CI recipe exports the KEY ALONE, so the substitution fired
   on the common case. A key exported for host A then travelled to the configured host B, in place
   of B’s own stored key, because the stored branch is the env branch’s `else`.
@@ -1537,7 +1542,7 @@ describe('push and pull', () => {
     // The README’s CI recipe: the key is exported, no URL is.
     const keyOnly = {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_KEY: 'sk-exported-for-somewhere-else',
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-exported-for-somewhere-else',
     };
 
     await pushCommand(parseArgs(['push', runId]), out, workspace, keyOnly);
@@ -1553,20 +1558,20 @@ describe('push and pull', () => {
     received.length = 0;
     await pushCommand(parseArgs(['push', runId, '--gateway', url]), out, workspace, {
       XDG_CONFIG_HOME: home,
-      ORCA_GATEWAY_KEY: 'sk-ci',
+      AGENTICREPLAY_GATEWAY_KEY: 'sk-ci',
     });
     expect(received[0]!.auth).toBe('Bearer sk-ci');
   });
 
   /**
-   * PUSH HAS NO DEFAULT DESTINATION — and `orca setup`'s own default is not one either.
+   * PUSH HAS NO DEFAULT DESTINATION — and `agenticreplay setup`'s own default is not one either.
    *
    * README's "Never a default destination" says a run goes only where you NAMED, because a run
    * carries source, shell output and workspace snapshots. The code read `config.gateway.url`, and
-   * `orca setup` writes ORCAROUTER_URL into that field when you press Enter — so plain
-   * `orca setup` followed by `orca push last` sent all of it to a host the user never typed.
+   * `agenticreplay setup` writes ORCAROUTER_URL into that field when you press Enter — so plain
+   * `agenticreplay setup` followed by `agenticreplay push last` sent all of it to a host the user never typed.
    */
-  it('refuses to push to a gateway orca setup chose rather than the user', async () => {
+  it('refuses to push to a gateway agenticreplay setup chose rather than the user', async () => {
     await seedRun();
     await writeConfig(
       { gateway: { url: 'https://api.orcarouter.ai', url_source: 'default', api_key: 'sk-x' } },
@@ -1588,23 +1593,9 @@ describe('push and pull', () => {
     expect(received).toHaveLength(1);
   });
 
-  /**
-   * Configs written before `url_source` existed carry no provenance, so the URL decides. Setup
-   * writes ORCAROUTER_URL and nothing else without being told, so any OTHER origin can only have
-   * been named.
-   */
-  it('treats a pre-provenance config as named unless it is the CLI’s own default', async () => {
+  it('treats an explicitly configured URL without provenance as named', async () => {
     await seedRun();
     const noEnv = { XDG_CONFIG_HOME: home };
-
-    await writeConfig(
-      { gateway: { url: 'https://api.orcarouter.ai', api_key: 'sk-x' } },
-      { XDG_CONFIG_HOME: home },
-    );
-    await expect(pushCommand(parseArgs(['push', runId]), out, workspace, noEnv)).rejects.toThrow(
-      /not a destination you named/,
-    );
-    expect(received).toHaveLength(0);
 
     await writeConfig({ gateway: { url, api_key: 'sk-x' } }, { XDG_CONFIG_HOME: home });
     await pushCommand(parseArgs(['push', runId]), out, workspace, noEnv);
@@ -1657,7 +1648,7 @@ describe('push and pull', () => {
   ])(
     'recovery touches nothing once the lock has moved — $what',
     async ({ dest: hasDest, staging: hasStaging, retired: hasRetired }) => {
-      const runs = join(workspace, '.orca', 'runs');
+      const runs = join(workspace, '.agenticreplay', 'runs');
       await mkdir(runs, { recursive: true });
       const dest = join(runs, runId);
       const staging = `${dest}.incoming`;
@@ -1700,7 +1691,7 @@ describe('push and pull', () => {
   names exist to make recoverable.
   */
   it('still finishes an interrupted swap while the lock is ours', async () => {
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     await mkdir(runs, { recursive: true });
     const dest = join(runs, runId);
     const staging = `${dest}.incoming`;

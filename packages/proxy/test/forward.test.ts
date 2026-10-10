@@ -9,7 +9,7 @@ afterEach(async () => {
 });
 
 /**
- * A `/forward/` path is how an adapter hands the proxy a request whose real destination orca
+ * A `/forward/` path is how an adapter hands the proxy a request whose real destination agenticreplay
  * rewrote away: the harness's base URL was pointed here with the true base encoded into the path,
  * so every request arrives naming where it was headed. The assertions are about restoring that
  * faithfully — same bytes, same path, same wire shape — and about the prefix never firing on a
@@ -116,7 +116,7 @@ describe('record mode — a forwarded origin', () => {
   });
 
   it('outranks a configured gateway on a live call, because the request names its own destination', async () => {
-    // A gateway picked up from `orca setup` is a default for calls orca would otherwise have to
+    // A gateway picked up from `agenticreplay setup` is a default for calls agenticreplay would otherwise have to
     // guess at. A forwarded request announces where it was headed — and the recorded run that
     // exposed this answered every turn with the gateway's website 404 page, because
     // `https://gateway/chat/completions` is not an API path anything serves.
@@ -154,9 +154,9 @@ describe('record mode — a forwarded origin', () => {
     expect(up.calls[0]!.headers['authorization']).toBeUndefined();
   });
 
-  it('normalizes the path for an origin orca chose, so a gateway sees its version segment', async () => {
+  it('normalizes the path for an origin agenticreplay chose, so a gateway sees its version segment', async () => {
     // A bare base url (no `/v1`) reaches this proxy as `/chat/completions`; a gateway handed that
-    // without the version segment answers 404. The dialect's own path is what an origin orca
+    // without the version segment answers 404. The dialect's own path is what an origin agenticreplay
     // picked expects — which is also what an env-redirected request already carries.
     const up = stubUpstream({ id: 'c1', choices: [] });
     const proxy = await createProxy({
@@ -207,7 +207,7 @@ describe('record mode — a forwarded origin', () => {
   it('lets a configured gateway have an unclaimed tail on a fork, where the fork decides', async () => {
     // Substituting the model is the operator choosing where answers come from, so the fork's
     // configured origin decides for an unclaimed tail too. A retrieval call is the exception, and
-    // it is one for a reason that does not apply here: orca knows what it is and forwards it
+    // it is one for a reason that does not apply here: agenticreplay knows what it is and forwards it
     // unchanged, so the destination it announces is the only one anything can say about it.
     const up = stubUpstream({ object: 'list', data: [] });
     const proxy = await createProxy({

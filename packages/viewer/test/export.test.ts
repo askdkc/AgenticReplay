@@ -75,7 +75,7 @@ describe('exportTraceHtml', () => {
     expect(written).toContain('payload omitted, 3000 bytes');
   });
 
-  it('defaults the cap to 8 MB', async () => {
+  it('keeps the complete redacted body by default', async () => {
     resetSeq();
     const big = 'c'.repeat(9 * 1024 * 1024);
     const dir = await fixture('bigcap', {
@@ -84,8 +84,8 @@ describe('exportTraceHtml', () => {
     });
     const out = join(dir, 'big.html');
     const result = await exportTraceHtml(dir, out);
-    expect(result.bytes).toBeLessThan(2 * 1024 * 1024);
-    expect(await readFile(out, 'utf8')).toContain('payload omitted');
+    expect(result.bytes).toBeGreaterThan(9 * 1024 * 1024);
+    expect(await readFile(out, 'utf8')).toContain('download full redacted body');
   });
 
   it('tolerates a truncated final line, as the spec requires of every reader', async () => {

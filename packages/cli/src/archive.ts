@@ -29,8 +29,8 @@ const ZIP32_SENTINEL = 0xffffffff;
 /**
  * CRC-32 (IEEE), computed here rather than taken from `zlib.crc32`.
  *
- * That builtin landed in node 20.15, and the published CLI supports node 20.0 — so using it would
- * break the floor `package.json` advertises, on a patch release nobody would think to test.
+ * That builtin landed in Node 20.15, while the published CLI requires Node 24 — keeping the local
+ * implementation avoids making archive support depend on a newer patch-level builtin detail.
  */
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -49,7 +49,7 @@ export function crc32(bytes: Uint8Array): number {
 }
 
 /**
- * Reject a name that would write outside the run directory when `orca pull` unpacks it.
+ * Reject a name that would write outside the run directory when `agenticreplay pull` unpacks it.
  *
  * Checked where the name is PARSED rather than where it is used: pull is not the only future
  * caller, and a check in the caller is one a later caller forgets. A trace names its entries
@@ -81,8 +81,8 @@ export async function writeArchive(entries: ArchiveEntry[]): Promise<Uint8Array>
    *   70000          -> wraps to 4464, and readArchive SUCCEEDS with 4464 of
    *                     them
    *
-   * That last band is the one that matters: `orca push` sends a structurally
-   * corrupt archive, and `orca pull` installs a fraction of the run and
+   * That last band is the one that matters: `agenticreplay push` sends a structurally
+   * corrupt archive, and `agenticreplay pull` installs a fraction of the run and
    * reports success. Silent partial loss is exactly what this file's governing
    * property — entry bytes round-trip EXACTLY — exists to rule out, and a run
    * directory holds one file per unique content-addressed blob, so a long

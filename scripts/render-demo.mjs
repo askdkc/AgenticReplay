@@ -16,7 +16,7 @@
  *   npm i --no-save playwright-core pngjs gifenc
  *   node scripts/render-demo.mjs            # -> docs/demo-cli.gif
  *
- * The viewer GIF (docs/demo-viewer.gif) is captured the same way, by driving `orca ui` in the same
+ * The viewer GIF (docs/demo-viewer.gif) is captured the same way, by driving `agenticreplay ui` in the same
  * browser; see docs/media/README.md.
  */
 import { chromium } from 'playwright-core';
@@ -30,22 +30,22 @@ import gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET = join(REPO, 'docs', 'demo-cli.gif');
-const FRAMES = mkdtempSync(join(tmpdir(), 'orca-demo-'));
+const FRAMES = mkdtempSync(join(tmpdir(), 'agenticreplay-demo-'));
 
 /** Every line is from docs/media/transcript.txt, trimmed for width and not otherwise altered. */
 const SCRIPT = [
-  ['cmd', '$ orca record claude -- -p "Reject tokens shorter than 8 chars in auth.ts"'],
+  ['cmd', '$ agenticreplay record claude -- -p "Reject tokens shorter than 8 chars in auth.ts"'],
   ['dim', 'info recording run=run_c00c6c89 adapter=claude-code proxy=:44043 fs=on shell=on'],
   ['out', 'Updated `isValid` in auth.ts to require tokens of at least 8 characters.'],
   ['dim', 'info recorded run=run_c00c6c89 events=42 blobs=8 exit=0'],
   ['gap', ''],
-  ['cmd', '$ orca replay last'],
+  ['cmd', '$ agenticreplay replay last'],
   ['dim', 'info replay.restored to=5c1e02c6 your_tree=fbb98ae5  # put back when the replay ends'],
   ['dim', 'info replaying exchanges=6 egress=blocked cwd=/tmp/herodemo'],
   ['warn', 'warn divergence seq=5 level=major  request 1 has an identical trailing message'],
   ['ok', 'info replay.done matched=2 total=6 divergences=4 unmatched=0 exit=0'],
   ['gap', ''],
-  ['cmd', '$ orca compare last --from 4 --models claude-sonnet-5,claude-haiku-4-5 \\'],
+  ['cmd', '$ agenticreplay compare last --from 4 --models claude-sonnet-5,claude-haiku-4-5 \\'],
   ['cmd', '      --verify "npx tsc --noEmit auth.ts"'],
   ['dim', 'info forked from=run_c00c6c89 at=4 model=claude-sonnet-5'],
   ['dim', 'info forked from=run_c00c6c89 at=4 model=claude-haiku-4-5'],
@@ -82,7 +82,7 @@ const CSS = `
 
 const html = `<!doctype html><meta charset="utf-8"><style>${CSS}</style>
 <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
-<span style="margin-left:.4rem">ORCAREPLAY — RECORD · REPLAY · FORK</span></div>
+<span style="margin-left:.4rem">AGENTICREPLAY — RECORD · REPLAY · FORK</span></div>
 <div class="body">${SCRIPT.map(
   ([k, t], i) =>
     `<div class="l ${k}" id="l${i}">${t.replace(/&/g, '&amp;').replace(/</g, '&lt;') || '&nbsp;'}</div>`,

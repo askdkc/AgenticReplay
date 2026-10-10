@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns } from '@orcareplay/core';
-import { RunCa } from '@orcareplay/proxy';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader, listRuns } from '@agenticreplay/core';
+import { RunCa } from '@agenticreplay/proxy';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -17,14 +17,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const TLS_AGENT = join(here, 'fixtures', 'tls-agent.mjs');
 
 /**
- * `orca record --tls-intercept`, end to end, with a child process that really does CONNECT through
+ * `agenticreplay record --tls-intercept`, end to end, with a child process that really does CONNECT through
  * the proxy and really does speak TLS on the other side.
  *
  * The properties under test are the ones that make the feature defensible rather than the ones
  * that make it work: off unless asked for, announced when on, trusted only by the child, gone when
  * the run ends, and never — under any circumstance — written into the trace.
  */
-describe('orca record --tls-intercept', () => {
+describe('agenticreplay record --tls-intercept', () => {
   let workspace: string;
   let originDir: string;
   let scratch: string;
@@ -38,7 +38,7 @@ describe('orca record --tls-intercept', () => {
   let keyOut: string;
   /**
    * The environment as it stood before the run. Asserting against `undefined` would be wrong on
-   * any machine that already sets a proxy or a CA bundle of its own — and orca leaving those
+   * any machine that already sets a proxy or a CA bundle of its own — and agenticreplay leaving those
    * exactly as it found them is the property worth pinning anyway.
    */
   let ambient: Record<string, string | undefined>;
@@ -68,9 +68,9 @@ describe('orca record --tls-intercept', () => {
   }
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-mitmcli-'));
-    originDir = await mkdtemp(join(tmpdir(), 'orca-mitmorigin-'));
-    scratch = await mkdtemp(join(tmpdir(), 'orca-mitmscratch-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-mitmcli-'));
+    originDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mitmorigin-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-mitmscratch-'));
     originCa = await RunCa.create({ runDir: originDir });
     envOut = join(scratch, 'env.json');
     resultOut = join(scratch, 'results.json');
@@ -90,23 +90,23 @@ describe('orca record --tls-intercept', () => {
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
     ambient = { ...process.env };
 
-    process.env.ORCA_TEST_ENV_OUT = envOut;
-    process.env.ORCA_TEST_RESULT_OUT = resultOut;
-    process.env.ORCA_TEST_CA_KEY_OUT = keyOut;
-    process.env.ORCA_TEST_ORIGIN_CA = originCa.certPath;
+    process.env.AGENTICREPLAY_TEST_ENV_OUT = envOut;
+    process.env.AGENTICREPLAY_TEST_RESULT_OUT = resultOut;
+    process.env.AGENTICREPLAY_TEST_CA_KEY_OUT = keyOut;
+    process.env.AGENTICREPLAY_TEST_ORIGIN_CA = originCa.certPath;
     // The origins here are signed by a CA no machine trusts. Real interception verifies the
     // origin, so the proxy has to be told about that root the same way a corporate one would be.
-    process.env.ORCA_TLS_UPSTREAM_CA = originCa.certPath;
+    process.env.AGENTICREPLAY_TLS_UPSTREAM_CA = originCa.certPath;
   });
 
   afterEach(async () => {
     for (const key of [
-      'ORCA_TEST_ENV_OUT',
-      'ORCA_TEST_RESULT_OUT',
-      'ORCA_TEST_CA_KEY_OUT',
-      'ORCA_TEST_ORIGIN_CA',
-      'ORCA_TEST_TARGETS',
-      'ORCA_TLS_UPSTREAM_CA',
+      'AGENTICREPLAY_TEST_ENV_OUT',
+      'AGENTICREPLAY_TEST_RESULT_OUT',
+      'AGENTICREPLAY_TEST_CA_KEY_OUT',
+      'AGENTICREPLAY_TEST_ORIGIN_CA',
+      'AGENTICREPLAY_TEST_TARGETS',
+      'AGENTICREPLAY_TLS_UPSTREAM_CA',
     ]) {
       delete process.env[key];
     }
@@ -162,14 +162,14 @@ describe('orca record --tls-intercept', () => {
           '--no-fs',
           '--no-shell',
           '--',
-          'orca-definitely-not-a-real-binary',
+          'agenticreplay-definitely-not-a-real-binary',
         ]),
         out,
         workspace,
       ),
     ).rejects.toThrow(/could not launch/);
 
-    const runs = join(workspace, '.orca', 'runs');
+    const runs = join(workspace, '.agenticreplay', 'runs');
     for (const run of await readdir(runs)) {
       await expect(stat(join(runs, run, 'tls'))).rejects.toThrow();
       expect(await grepRunDir(join(runs, run), 'PRIVATE KEY')).toEqual([]);
@@ -185,7 +185,7 @@ describe('orca record --tls-intercept', () => {
   });
 
   it('decrypts model API hosts and nothing else when no list is given', async () => {
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: bank.port, path: '/accounts' },
     ]);
     const result = await record(['--tls-intercept']);
@@ -204,7 +204,7 @@ describe('orca record --tls-intercept', () => {
   });
 
   /**
-   * The additive form, end to end. The unit tests in @orcareplay/proxy cover the resolution; this
+   * The additive form, end to end. The unit tests in @agenticreplay/proxy cover the resolution; this
    * one exists because the flag is where the mistake was actually made — someone naming the one
    * endpoint their agent talks to, and losing the twelve model APIs they still needed.
    */
@@ -229,9 +229,9 @@ describe('orca record --tls-intercept', () => {
     ).rejects.toThrow(/api\.openai\.com.*\+grok\.example/s);
     // Rejected before `RunCa.create`, so the run that is not going to happen leaves no private key
     // anywhere under the runs root — the same guarantee `--tls-hosts '*'` already has.
-    expect(await grepRunDir(join(workspace, '.orca'), 'PRIVATE KEY')).toEqual([]);
+    expect(await grepRunDir(join(workspace, '.agenticreplay'), 'PRIVATE KEY')).toEqual([]);
     // And before `ensureRunsDir`, so there is no runs root either. The key was the urgent half;
-    // this is the rest of it — a refused host list used to leave an empty run for `orca list` to
+    // this is the rest of it — a refused host list used to leave an empty run for `agenticreplay list` to
     // show, the same way a refused upstream did.
     expect(await listRuns(workspace), 'a refused host list must not have created a run').toEqual(
       [],
@@ -241,13 +241,13 @@ describe('orca record --tls-intercept', () => {
   /**
    * Telling the operator at record time that a capture is meaningless.
    *
-   * Intercepted bytes on a path no dialect claims are written as `net.*` — orca holds them but not
+   * Intercepted bytes on a path no dialect claims are written as `net.*` — agenticreplay holds them but not
    * their meaning, so they can never be matched on replay or forked to another model. That was
    * only discoverable one command later, from the 502 that strict replay raises, by which point
    * the agent has finished and the opportunity to record it properly is gone.
    */
   it('says at record time when intercepted traffic was not a model call it understands', async () => {
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       {
         host: '127.0.0.1',
         port: bank.port,
@@ -273,7 +273,7 @@ describe('orca record --tls-intercept', () => {
       method: 'POST',
       body: JSON.stringify({ prompt: 'hello' }),
     };
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([call, call, call]);
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([call, call, call]);
     await record(['--tls-intercept', '--tls-hosts', `127.0.0.1:${bank.port}`]);
 
     const warnings = lines.join('').match(/tls\.unclaimed_path/g) ?? [];
@@ -285,7 +285,7 @@ describe('orca record --tls-intercept', () => {
     // prefix kept -- but a body cut mid-JSON cannot be parsed by any dialect, so `add a dialect
     // for it` is advice that cannot help. Driving this through a real origin printed exactly that
     // about a path the openai dialect had claimed all along.
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       {
         host: '127.0.0.1',
         port: bank.port,
@@ -294,7 +294,13 @@ describe('orca record --tls-intercept', () => {
         padKb: 1224,
       },
     ]);
-    await record(['--tls-intercept', '--tls-hosts', `127.0.0.1:${bank.port}`]);
+    await record([
+      '--max-body-bytes',
+      '1048576',
+      '--tls-intercept',
+      '--tls-hosts',
+      `127.0.0.1:${bank.port}`,
+    ]);
 
     const printed = lines.join('');
     expect(printed).toContain('tls.request_too_large');
@@ -308,7 +314,7 @@ describe('orca record --tls-intercept', () => {
     // Same path and the same JSON body as the warning test above, so the only difference is that
     // this one never got a response. `add a dialect for it` cannot help an exchange with nothing
     // to replay, and a harness that opens calls and leaves would print this every turn.
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       {
         host: '127.0.0.1',
         port: bank.port,
@@ -326,7 +332,7 @@ describe('orca record --tls-intercept', () => {
   it('stays quiet about traffic that was never a model call to begin with', async () => {
     // A GET, and a body that is not JSON. Warning here would train the operator to ignore the
     // warning that matters, which is worse than not printing one.
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: bank.port, path: '/accounts' },
     ]);
     await record(['--tls-intercept', '--tls-hosts', `127.0.0.1:${bank.port}`]);
@@ -354,7 +360,7 @@ describe('orca record --tls-intercept', () => {
    *
    * A `transport` adapter points the agent nowhere on purpose, so without interception the run
    * finishes, exits zero, and records no model traffic at all — the exact silent shape the adapter
-   * contract exists to catch. Verified by hand against the cursor adapter: `orca record cursor`
+   * contract exists to catch. Verified by hand against the cursor adapter: `agenticreplay record cursor`
    * with no flag answered the prompt correctly and filed `exchanges=0`.
    */
   it('says so up front when a transport adapter is run without interception', async () => {
@@ -396,7 +402,7 @@ describe('orca record --tls-intercept', () => {
       // The agent's own calls to the recording proxy must not be sent through the recording proxy.
       expect(env.NO_PROXY).toContain('127.0.0.1');
 
-      // Nothing global. Orca's own process was never asked to trust the run CA, and the variables
+      // Nothing global. AgenticReplay's own process was never asked to trust the run CA, and the variables
       // it set on the child are absent from — or unchanged in — its own environment.
       for (const key of [
         'NODE_EXTRA_CA_CERTS',
@@ -411,7 +417,7 @@ describe('orca record --tls-intercept', () => {
   );
 
   it('captures an allowlisted host and tunnels everything else', async () => {
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: model.port, path: '/v1/embeddings', method: 'POST', body: '{}' },
       { host: '127.0.0.1', port: bank.port, path: '/accounts' },
     ]);
@@ -429,10 +435,10 @@ describe('orca record --tls-intercept', () => {
     // the tunnel is transparent to everything.
     expect(results[0]!.status).toBe(200);
     expect(results[1]!.status).toBe(200);
-    // The intercepted call saw a certificate orca minted; the tunnelled one saw the origin's own.
+    // The intercepted call saw a certificate agenticreplay minted; the tunnelled one saw the origin's own.
     const originIssuer = /CN=(.*)/.exec(new X509Certificate(originCa.certPem).subject)?.[1];
     expect(results[0]!.issuer).not.toBe(originIssuer);
-    expect(results[0]!.issuer).toContain('OrcaReplay run CA');
+    expect(results[0]!.issuer).toContain('AgenticReplay run CA');
     expect(results[1]!.issuer).toBe(originIssuer);
 
     const events = await (await TraceReader.open(result.runDir)).events();
@@ -449,7 +455,7 @@ describe('orca record --tls-intercept', () => {
     expect(tunnelled.map((e) => e.type)).toEqual(['net.request', 'net.response']);
     expect(tunnelled[0]!.attrs?.host).toBe('127.0.0.1');
     expect(tunnelled[0]!.attrs?.port).toBe(bank.port);
-    // A tunnel is an address and a byte count. It has no path and no body, because orca never
+    // A tunnel is an address and a byte count. It has no path and no body, because agenticreplay never
     // held the plaintext to write one.
     expect(tunnelled[0]!.payload).toBeUndefined();
     expect(tunnelled[1]!.payload).toBeUndefined();
@@ -457,7 +463,7 @@ describe('orca record --tls-intercept', () => {
   });
 
   it('never writes the bank host it tunnelled into the trace as content', async () => {
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: bank.port, path: '/accounts' },
     ]);
     const result = await record(['--tls-intercept', '--tls-hosts', `127.0.0.1:${model.port}`]);
@@ -466,7 +472,7 @@ describe('orca record --tls-intercept', () => {
   });
 
   it('never writes the CA private key into the trace', async () => {
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: model.port, path: '/v1/embeddings', method: 'POST', body: '{}' },
     ]);
     const result = await record(['--tls-intercept', '--tls-hosts', `127.0.0.1:${model.port}`]);

@@ -1,6 +1,6 @@
 import { assertKnownFlags, assertNoStrayPositionals } from './flags.js';
 import { parseArgs, type ParsedArgs } from './args.js';
-import { Orca } from './api.js';
+import { AgenticReplay } from './api.js';
 import { serveMcp } from './mcp-server.js';
 import { Output } from './out.js';
 import { attachCommand } from './commands/attach.js';
@@ -22,70 +22,70 @@ import { scrubCommand } from './commands/scrub.js';
 import { gcCommand } from './commands/gc.js';
 import { doctorCommand } from './commands/doctor.js';
 import { modelsCommand, setupCommand } from './commands/setup.js';
-import { withoutCredentials } from '@orcareplay/proxy';
-import { ORCA_VERSION } from './version.js';
+import { withoutCredentials } from '@agenticreplay/proxy';
+import { AGENTICREPLAY_VERSION } from './version.js';
 
-const HELP = `orca ${ORCA_VERSION} — record, replay and fork debugger for AI agents
+const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record, replay and fork debugger for AI agents
 
-  orca quickstart                a project, a recorded run and an offline replay of it —
+  agenticreplay quickstart                a project, a recorded run and an offline replay of it —
                                  no key, no agent installed, no network
-        --dir <path>             where to put it (default: ./orca-quickstart)
+        --dir <path>             where to put it (default: ./agenticreplay-quickstart)
         --full                   the whole timeline and the replay as it happened
-  orca record <agent>            run an agent and capture everything
-  orca attach                    record an agent orca does not launch — one in a sandbox,
+  agenticreplay record <agent>            run an agent and capture supported API traffic
+  agenticreplay attach                    record an agent agenticreplay does not launch — one in a sandbox,
                                  a container, or on another machine
         --for <agent>            print the variables that agent reads (default: exec)
         --bind <addr>            address to listen on (default: 127.0.0.1)
         --advertise <host>       how the sandbox reaches this machine, when they differ
-        --remote-ca-path <p>     where the CA will live over there (default: /tmp/orca-ca.crt)
+        --remote-ca-path <p>     where the CA will live over there (default: /tmp/agenticreplay-ca.crt)
         --replay <run>           serve a recording back to that agent instead of recording,
                                  for a run whose agent is not on this machine
-  orca replay [run]              reproduce a run exactly, network off
+  agenticreplay replay [run]              reproduce a run exactly, network off
         --quiet                  discard the replayed agent's own output, keep the verdict
         --ui                     open the timeline when it finishes
-  orca replay [run] --from N     fork from a checkpoint and continue live
+  agenticreplay replay [run] --from N     fork from a checkpoint and continue live
         --model <id>             continue on a different model
         --no-fs                  fork the conversation only — do not restore the workspace,
                                  which a pulled run lacks unless it was pushed with --fs
-  orca compare [run] --models a,b,c
+  agenticreplay compare [run] --models a,b,c
                                  fork the same checkpoint onto several models
         --from N                 checkpoint to fork every model from
         --verify <cmd>           run this in each fork; its exit code is the verdict
         --no-fs                  as for replay: fork without the workspace
         --share [f.svg|png]      write the verdict table as a shareable card
-  orca show [run]                the timeline, in the terminal
-  orca checkpoints [run]         where you can fork from
-  orca graph [run]               what caused what — recorded edges and derived ones
+  agenticreplay show [run]                the timeline, in the terminal
+  agenticreplay checkpoints [run]         where you can fork from
+  agenticreplay graph [run]               what caused what — recorded edges and derived ones
         --to N                   just the chain that produced event N
-  orca export [run] -o file.html a single self-contained file you can attach
+  agenticreplay export [run] -o file.html a single self-contained file you can attach
         --card [f.svg|png|gif]   one causal chain as a picture, ready to paste
         --graph-card [f.svg|png] the whole run as a graph, with the chain lit
         --to N                   which event the card is about (default: the failure)
-  orca scrub [run] --match X     remove something from a recorded trace
+  agenticreplay scrub [run] --match X     remove something from a recorded trace
         --dry-run                say what would go, and write nothing
         --drop-fs                delete the filesystem snapshots, which cannot be scrubbed
-  orca ui [run]                  serve the viewer locally
-  orca push [run]                send a run to the gateway, for the rest of the team
+  agenticreplay ui [run]                  serve the viewer locally
+  agenticreplay push [run]                send a run to the gateway, for the rest of the team
         --gateway <url>          where to send it (a gateway you named; no default)
         --fs                     include the workspace snapshots (scrub cannot clean them)
         --force                  push even though the gateway's scan found a secret
-  orca pull <run>                fetch a gateway run into this machine's store
+  agenticreplay pull <run>                fetch a gateway run into this machine's store
         --gateway <url>          where to fetch from (a gateway you named; no default)
         --force                  replace a run of the same id already recorded here
-  orca list                      runs recorded here
+  agenticreplay list                      runs recorded here
         --remote                 runs held on the gateway instead (a gateway you named)
         --gateway <url>          with --remote: where to look (a gateway you named)
         --source gateway|upload  with --remote: what it recorded, or what was pushed
         --limit N                with --remote: how many (default 20)
-  orca gc --older-than 7d        reclaim space, forks' scratch worktrees included
+  agenticreplay gc --older-than 7d        reclaim space, forks' scratch worktrees included
                                  --keep N, --dry-run
-  orca doctor                    check this machine can record at all
-  orca setup                     point orca at a gateway once, to compare many models
-                                 defaults to OrcaRouter; --gateway for any other
+  agenticreplay doctor                    check this machine can record at all
+  agenticreplay setup                     point agenticreplay at a gateway once, to compare many models
+                                 requires an explicit --gateway URL
         --gateway <url>          origin that serves the model APIs
         --key <k> | --key-env V  store the key, or read it from an environment variable
         --models a,b,c           default model list, so compare needs no flags
-  orca models                    what the configured gateway serves, and what it costs
+  agenticreplay models                    what the configured gateway serves, and what it costs
 
   [run] is a run id, or "last" (the default).
 
@@ -101,19 +101,21 @@ Flags
   --ci           machine-readable output, no progress
   --verbose      more detail
   --no-color     also honours NO_COLOR
-  --port <n>     port for --ui and orca ui (default: any free port)
+  --port <n>     port for --ui and agenticreplay ui (default: any free port)
 
 A harness that reads no base-URL variable cannot be captured that way at all — a Codex CLI signed
 in with a ChatGPT subscription, a bot with its origin hardcoded, an agent in a language the fetch
 hook cannot reach. Capture those below the agent instead, at the socket:
 
-  orca record exec --tls-intercept -- <command> [args...]
+  agenticreplay record exec --tls-intercept -- <command> [args...]
 
 exec (or "any") launches your command and redirects nothing: no origin and no credential are
 invented, so an agent recorded this way still talks to whoever it was already talking to. It also
-reaches an agent orca did not launch — record the editor, and the agent it spawns inherits the
+reaches an agent agenticreplay did not launch — record the editor, and the agent it spawns inherits the
 capture.
 
+  --max-body-bytes <n>         capture ceiling per body (default 67108864); overflow fails capture
+  --max-buffered-bytes <n>     aggregate retained-body budget (default 268435456)
   --tls-intercept              decrypt HTTPS for the hosts below, for this run only
                                replay and fork turn this back on by themselves, using the
                                hosts the recording names; --no-tls-intercept refuses
@@ -123,16 +125,16 @@ capture.
 
   It mints a certificate authority in the run directory, trusts it to the agent through that
   child's environment alone, and deletes it when the run ends. It installs nothing, anywhere.
-  If a machine is already behind a TLS-inspecting proxy, name its root in ORCA_TLS_UPSTREAM_CA.
+  If a machine is already behind a TLS-inspecting proxy, name its root in AGENTICREPLAY_TLS_UPSTREAM_CA.
 
 Sending traffic somewhere other than the vendor — a gateway, a proxy, a local model — is what
 these two are for. They apply to record, replay, fork and compare alike:
 
-  --upstream-anthropic <url>   origin for /v1/messages       (env ORCA_UPSTREAM_ANTHROPIC)
-  --upstream-openai <url>      origin for /chat/completions  (env ORCA_UPSTREAM_OPENAI)
+  --upstream-anthropic <url>   origin for /v1/messages       (env AGENTICREPLAY_UPSTREAM_ANTHROPIC)
+  --upstream-openai <url>      origin for /chat/completions  (env AGENTICREPLAY_UPSTREAM_OPENAI)
 
 Everything after -- goes to the agent:
-  orca record claude -- -p "fix the failing test"
+  agenticreplay record claude -- -p "fix the failing test"
 
 For a script, an agent, or CI — every command below also answers as data:
 
@@ -140,17 +142,17 @@ For a script, an agent, or CI — every command below also answers as data:
                  list · show · events · checkpoints · graph · record · replay · compare
                  · doctor
 
-  orca mcp       serve orca to an agent over MCP on stdio, so it can read its own runs:
-                 {"command": "orca", "args": ["mcp"]}
+  agenticreplay mcp       serve agenticreplay to an agent over MCP on stdio, so it can read its own runs:
+                 {"command": "agenticreplay", "args": ["mcp"]}
 
-Docs: https://github.com/Continuum-AI-Corp/OrcaReplay
+Docs: https://github.com/askdkc/AgenticReplay
 `;
 
 /**
  * The commands `--json` answers and the terminal does not.
  *
  * A set rather than a special case. It holds one name today, and the point of the shape is that
- * adding a second `--json`-only view does not quietly bring back `orca events` telling a reader
+ * adding a second `--json`-only view does not quietly bring back `agenticreplay events` telling a reader
  * that a command `--help` had just listed does not exist. `json-only.test.ts` derives the same set
  * from the two switches in this file and fails when this disagrees with them.
  */
@@ -159,7 +161,7 @@ const JSON_ONLY = new Set(['events']);
 export async function main(argv: string[], cwd = process.cwd()): Promise<number> {
   const args = parseArgs(argv);
   if (args.bool('json')) return jsonMain(args, cwd);
-  // Under `orca mcp`, stdout is the JSON-RPC transport. A single info line on it corrupts the
+  // Under `agenticreplay mcp`, stdout is the JSON-RPC transport. A single info line on it corrupts the
   // stream and the client drops the session with no useful error.
   const toStderr = args.command === 'mcp';
   const out = new Output({
@@ -175,7 +177,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
   });
 
   if (args.bool('version') || args.command === 'version') {
-    out.plain(ORCA_VERSION);
+    out.plain(AGENTICREPLAY_VERSION);
     return 0;
   }
   if (args.command === 'help' || args.bool('help') || args.bool('h')) {
@@ -185,7 +187,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
 
   try {
     // Before anything runs: a flag the command does not have is an instruction that would be
-    // silently ignored, and a run that quietly did something else is the failure orca exists to
+    // silently ignored, and a run that quietly did something else is the failure agenticreplay exists to
     // surface. Inside the try so it is reported the same way every other failure is.
     assertKnownFlags(args);
     // Same reasoning, other half of the command line: an argument nothing reads is an
@@ -248,26 +250,30 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
       case 'mcp':
         // stdout is the transport here, so nothing else may touch it: `out` already writes to
         // stderr under this command, and the server owns the stream until stdin closes.
-        await serveMcp({ orca: new Orca({ cwd }), input: process.stdin, output: process.stdout });
+        await serveMcp({
+          agenticreplay: new AgenticReplay({ cwd }),
+          input: process.stdin,
+          output: process.stdout,
+        });
         return 0;
       default:
         // `--json` answers one view that the terminal does not, and `--help` lists it beside seven
-        // that it does. A reader scanning that line reasonably types `orca events`, and being told
+        // that it does. A reader scanning that line reasonably types `agenticreplay events`, and being told
         // there is no such command — by the same tool that had just named it — reads as the CLI
         // contradicting itself. Name the route instead.
         if (JSON_ONLY.has(args.command)) {
           out.failure({
             event: 'json_only_command',
             what: `${args.command} answers as data, not as a table`,
-            why: 'these are the raw trace records; `orca show` is the same events, rendered',
-            next: `orca ${args.command} --json`,
+            why: 'these are the raw trace records; `agenticreplay show` is the same events, rendered',
+            next: `agenticreplay ${args.command} --json`,
           });
           return 2;
         }
         out.failure({
           event: 'unknown_command',
           what: `there is no "${args.command}" command`,
-          next: 'orca help',
+          next: 'agenticreplay help',
         });
         return 2;
     }
@@ -279,7 +285,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
     // Per-command wrapping is what let this through: `push`/`pull` were new sinks for a gateway
     // URL and simply did not do it. A failed fetch reports the URL it was given, so an origin
     // configured as `https://user:pw@gw` or `https://gw?key=…` — both ordinary, both storable by
-    // `orca setup` — arrives inside undici's exception text ("Request cannot be constructed from
+    // `agenticreplay setup` — arrives inside undici's exception text ("Request cannot be constructed from
     // a URL that includes credentials: …") and lands in the terminal and in the CI log.
     //
     // out.ts's own guard cannot catch it: that guard is shape-based and applies to `#line` field
@@ -304,7 +310,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
  * `--json`: one JSON document on stdout, diagnostics on stderr.
  *
  * The split is the whole design. A caller wants the answer, so stdout is one document rather than
- * a stream of log objects — `orca show last --json | jq .events` works with nothing in front of
+ * a stream of log objects — `agenticreplay show last --json | jq .events` works with nothing in front of
  * it. And a run that warns must not corrupt that document, so every `info`/`warn` line goes to
  * stderr, where a human still reads it and a parser never sees it.
  *
@@ -327,34 +333,34 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
     // THE SAME TWO CHECKS THE PLAIN PATH MAKES, for the reason stated there: a flag the command
     // does not have is an instruction that would be silently ignored. `--json` is a second sink
     // for the same command, not a different command — and it returned above before either check
-    // ran, so `orca show --worktre --json` did the opposite of what was typed and said nothing
+    // ran, so `agenticreplay show --worktre --json` did the opposite of what was typed and said nothing
     // about it, which is the failure the plain path exists to surface.
     assertKnownFlags(args);
     assertNoStrayPositionals(args);
 
-    const orca = new Orca({ cwd });
+    const agenticreplay = new AgenticReplay({ cwd });
     const selector = args.positionals[0] ?? 'last';
     switch (args.command) {
       case 'list':
         // `--remote` asks the gateway, here as much as on the terminal. It used to be dropped:
-        // `orca list --remote --json` ran the LOCAL listing and emitted `[]` from a directory
+        // `agenticreplay list --remote --json` ran the LOCAL listing and emitted `[]` from a directory
         // with no runs — telling a script the gateway holds nothing while the same command
         // without `--json` printed what it holds. A silent wrong answer, to the reader least
         // able to notice.
-        emit(args.bool('remote') ? await gatewayRunsFor(args, out) : await orca.list());
+        emit(args.bool('remote') ? await gatewayRunsFor(args, out) : await agenticreplay.list());
         return 0;
       case 'show':
-        emit(await orca.show(selector));
+        emit(await agenticreplay.show(selector));
         return 0;
       case 'events':
-        emit(await orca.events(selector));
+        emit(await agenticreplay.events(selector));
         return 0;
       case 'checkpoints':
-        emit(await orca.checkpoints(selector));
+        emit(await agenticreplay.checkpoints(selector));
         return 0;
       case 'graph':
         emit(
-          await orca.graph(selector, {
+          await agenticreplay.graph(selector, {
             ...(args.num('to') === undefined ? {} : { to: args.num('to')! }),
           }),
         );

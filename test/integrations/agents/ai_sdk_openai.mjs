@@ -12,7 +12,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 
-if (/\borca-fetch-hook\b/.test(process.env.NODE_OPTIONS ?? '')) {
+if (/\bagenticreplay-fetch-hook\b/.test(process.env.NODE_OPTIONS ?? '')) {
   throw new Error('this check is the no-preload path; the fetch hook was injected');
 }
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { defaultAdapters } from '../src/index.js';
 
 /**
@@ -28,7 +28,7 @@ const USER_ARGS = ['my-agent', '--task', 'demo'];
 const FIXTURES = new URL('../fixtures/harness/', import.meta.url);
 // `_HOST` too: goose reads `OPENAI_HOST` and `ANTHROPIC_HOST` rather than the `_BASE_URL`
 // spellings, and those are the variables its whole capture depends on. Left out, the two that
-// matter most for that adapter were the two nothing checked. `ORCA_INSTRUMENT_HOSTS` is a list
+// matter most for that adapter were the two nothing checked. `AGENTICREPLAY_INSTRUMENT_HOSTS` is a list
 // of hostnames rather than an origin, and ends `HOSTS`, so it stays out.
 const BASE_URL_LIKE = /(?:_BASE_URL|_API_BASE|_HOST)$/;
 
@@ -48,7 +48,7 @@ interface HarnessFixture {
    *
    * `optional_env_vars` cannot describe these: it asserts the value comes through untouched, and
    * the whole point of a second model origin is that the value is *replaced* — with a
-   * `/forward/` path carrying the destination orca took the call away from. Without an entry
+   * `/forward/` path carrying the destination agenticreplay took the call away from. Without an entry
    * here, an adapter that stopped redirecting its embedding endpoint would pass every check in
    * this file while sending that traffic straight past the proxy.
    */
@@ -65,7 +65,7 @@ const REDIRECT_PROBE = 'https://embeddings.example/v1';
  * here, the first adapter to do that created a directory at the filesystem root on whoever ran
  * the tests, or failed outright on a machine where they could not.
  */
-const SCRATCH = mkdtempSync(join(tmpdir(), 'orca-harness-fixture-'));
+const SCRATCH = mkdtempSync(join(tmpdir(), 'agenticreplay-harness-fixture-'));
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
 
 /**
@@ -92,7 +92,7 @@ function ctx(over: Partial<RecordContext> = {}): RecordContext {
     runId: 'run_fixture',
     cwd: join(SCRATCH, 'work'),
     proxyUrl: PROXY,
-    runDir: join(SCRATCH, 'work', '.orca', 'runs', 'run_fixture'),
+    runDir: join(SCRATCH, 'work', '.agenticreplay', 'runs', 'run_fixture'),
     userArgs: [...USER_ARGS],
     // PATH, because a real run carries one and an adapter may resolve against it — OpenCode's
     // now points SHELL at a shim, and only when the real shell is findable again.
@@ -140,11 +140,18 @@ const registry = defaultAdapters();
 
 describe.each(registry.ids())('%s', (id) => {
   const adapter = registry.get(id);
+  // This historical fixture describes OpenCode 1.18.29, independently of the installed CLI.
+  // Version 2 has separate native and launch regressions.
+  function fixtureContext(over: Partial<RecordContext> = {}): RecordContext {
+    const context = ctx(over);
+    if (id === 'opencode') context.env.AGENTICREPLAY_OPENCODE_VERSION = '1.18.29';
+    return context;
+  }
 
   /**
-   * The fixtures were captured on POSIX, and one variable in them is the host's, not orca's:
+   * The fixtures were captured on POSIX, and one variable in them is the host's, not agenticreplay's:
    * `opencode` passes `$SHELL` through, and Windows does not set it. Comparing the whole key list
-   * on Windows therefore fails over the absence of a variable orca never promised to invent.
+   * on Windows therefore fails over the absence of a variable agenticreplay never promised to invent.
    *
    * Skipped rather than filtered so the fixture keeps meaning what it says — it is a record of what
    * this adapter produced on the platform it was captured on, and CI runs that platform.
@@ -152,7 +159,7 @@ describe.each(registry.ids())('%s', (id) => {
   it.skipIf(process.platform === 'win32')(
     'still produces the env it was recorded with',
     async () => {
-      const launch = await adapter.prepare(ctx());
+      const launch = await adapter.prepare(fixtureContext());
       const fixture = readFixture(adapter, launch);
       expect(Object.keys(launch.env).sort()).toEqual(fixture.env_vars);
       expect(launch.command).toBe(fixture.command);
@@ -160,7 +167,7 @@ describe.each(registry.ids())('%s', (id) => {
   );
 
   it('still points every base url at the proxy, on the recorded path', async () => {
-    const launch = await adapter.prepare(ctx());
+    const launch = await adapter.prepare(fixtureContext());
     const fixture = readFixture(adapter, launch);
     for (const [name, path] of Object.entries(fixture.base_urls)) {
       expect(launch.env[name]).toBe(`${PROXY}${path}`);
@@ -172,31 +179,31 @@ describe.each(registry.ids())('%s', (id) => {
   });
 
   it('still redirects the origins it is recorded as redirecting', async () => {
-    const fixture = readFixture(adapter, await adapter.prepare(ctx()));
+    const fixture = readFixture(adapter, await adapter.prepare(fixtureContext()));
     for (const [name, path] of Object.entries(fixture.redirected_env_vars ?? {})) {
-      const launch = await adapter.prepare(ctx({ env: { [name]: REDIRECT_PROBE } }));
+      const launch = await adapter.prepare(fixtureContext({ env: { [name]: REDIRECT_PROBE } }));
       expect(launch.env[name]).toBe(`${PROXY}${path}`);
     }
   });
 
   it('passes its optional variables through without inventing them', async () => {
-    const bare = await adapter.prepare(ctx());
+    const bare = await adapter.prepare(fixtureContext());
     const fixture = readFixture(adapter, bare);
     for (const name of fixture.optional_env_vars) {
       expect(Object.keys(bare.env)).not.toContain(name);
-      const carried = await adapter.prepare(ctx({ env: { [name]: 'from-the-user' } }));
+      const carried = await adapter.prepare(fixtureContext({ env: { [name]: 'from-the-user' } }));
       expect(carried.env[name]).toBe('from-the-user');
     }
   });
 
   it('records the harness versions the adapter declares, so the two cannot drift', async () => {
-    const fixture = readFixture(adapter, await adapter.prepare(ctx()));
+    const fixture = readFixture(adapter, await adapter.prepare(fixtureContext()));
     expect(fixture.harness_versions).toBe(adapter.harnessVersions ?? null);
     expect(fixture.adapter).toBe(id);
   });
 
   it('carries a real verification date', async () => {
-    const fixture = readFixture(adapter, await adapter.prepare(ctx()));
+    const fixture = readFixture(adapter, await adapter.prepare(fixtureContext()));
     expect(fixture.verified_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(Number.isNaN(Date.parse(fixture.verified_at))).toBe(false);
   });

@@ -4,7 +4,7 @@ import { DEFAULT_TLS_HOSTS, HostPolicy, resolveTlsHosts } from '../src/tls-hosts
 /**
  * Which hosts a `--tls-intercept` run is allowed to decrypt.
  *
- * This is the part of the feature that decides whether orca is a model debugger or a general
+ * This is the part of the feature that decides whether agenticreplay is a model debugger or a general
  * wiretap. Everything not named here is tunnelled opaquely, so the tests below are less about
  * matching semantics than about what the tool refuses to look at.
  */

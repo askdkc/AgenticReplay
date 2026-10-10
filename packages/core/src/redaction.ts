@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
-import type { RedactionRecord } from '@orcareplay/schema';
+import type { RedactionRecord } from '@agenticreplay/schema';
 
 /** Bump when a rule is added or changed, so old traces stay interpretable. */
 // Bumped when a rule's *name* or pattern changes, because both reach the trace: the placeholder is
@@ -66,7 +66,7 @@ interface Rule {
  * Written by the proxy when a body is not valid UTF-8, and honoured here so the encoding survives
  * the trace. Kept in this module because the redactor and the proxy have to agree on it.
  */
-export const BINARY_BODY_PREFIX = 'orca-base64:';
+export const BINARY_BODY_PREFIX = 'agenticreplay-base64:';
 
 const RULES: Rule[] = [
   {
@@ -263,11 +263,10 @@ const CRC_TABLE = (() => {
 /**
  * CRC-32 of `data`.
  *
- * Not `zlib.crc32`, which arrived after the oldest runtime this repo supports: `packages/cli`
- * declares `>=20.0.0` and `doctor` enforces major 20, while `zlib.crc32` is newer than that. A
- * named import of it would be `undefined` on such a runtime, and the first screenshot would take
- * the recording down with it — `intercept.ts` looks `zstdDecompressSync` up dynamically for
- * exactly this reason, and `tls-intercept.test.ts` records what the named import did instead.
+ * A local implementation keeps CRC behavior deterministic across supported Node patch releases
+ * and avoids coupling this parser to an optional builtin export. `intercept.ts` looks
+ * `zstdDecompressSync` up dynamically for the same compatibility reason, and
+ * `tls-intercept.test.ts` records what the named import provides instead.
  *
  * Computing it here rather than looking it up dynamically leaves one implementation, always
  * exercised, instead of a fallback branch that only some runtimes ever run. It costs 0.75 ms on a
@@ -354,7 +353,7 @@ function isWholePng(b: Buffer): boolean {
   // afterwards meant a 400 KB IDAT declaring 1×1 could expand to whatever it liked: measured, one
   // 531 KB base64 payload took RSS up by 821 MB, and `--max-old-space-size` does not bound it
   // because zlib writes outside the JS heap. This is the one place in the write path that runs
-  // over bytes an agent's tools, an MCP server, or (for `orca scrub`) somebody else's trace file
+  // over bytes an agent's tools, an MCP server, or (for `agenticreplay scrub`) somebody else's trace file
   // chose.
   const expected = pngRawLength(width, height, channels, depth, interlace === 1);
   if (expected > MAX_RASTER_RAW_BYTES) return false;
@@ -483,7 +482,7 @@ function looksRandom(token: string): boolean {
  *
  *   messages.1.content.2.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'
  *
- * So `orca compare`, the feature the tool is pitched on, could not work against any real recording.
+ * So `agenticreplay compare`, the feature the tool is pitched on, could not work against any real recording.
  * Found by forking one, which no fixture could have shown.
  *
  * This shields these values from the *entropy heuristic* only. The pattern rules run first and are
@@ -526,6 +525,11 @@ const PROTOCOL_SIGNATURE_VALUE = /(\\*")signature\1\s*:\s*\1[A-Za-z0-9+/=_-]*\1/
  */
 function spansOf(value: string): [number, number][] {
   const spans: [number, number][] = [];
+  // Public directory prefix plus mkdtemp's six characters; this is a recorder-generated
+  // transport location, not a credential. Named credential rules still run first.
+  for (const m of value.matchAll(/\bagenticreplay-(?:shell|spans)-[A-Za-z0-9]{6}\b/g)) {
+    spans.push([m.index, m.index + m[0].length]);
+  }
   for (const m of value.matchAll(PLACEHOLDER)) spans.push([m.index, m.index + m[0].length]);
   for (const m of value.matchAll(PROTOCOL_ID_VALUE)) spans.push([m.index, m.index + m[0].length]);
   for (const m of value.matchAll(PROTOCOL_SIGNATURE_VALUE)) {
@@ -542,7 +546,7 @@ function spansOf(value: string): [number, number][] {
  * outside that class placed inside a credential splits it — and one with no visible form splits
  * it without anyone noticing. `sk-abc` + U+200B + `defghijklmnopqrstuvwxyz` matched no rule, the
  * run after the space was one the sweep does not consider random, and the key was written to the
- * trace verbatim: the file `orca push` shares. Interleave one every fifteen characters and no run
+ * trace verbatim: the file `agenticreplay push` shares. Interleave one every fifteen characters and no run
  * the sweep measures is long enough to be measured at all.
  *
  * It is a named set, not "whatever renders blank", and the edges are deliberate. In: Unicode's
@@ -631,9 +635,13 @@ export class Redactor {
     this.#envAllowlist = new Set(opts.envAllowlist ?? DEFAULT_ENV_ALLOWLIST);
   }
 
-  redactString(s: string, context?: string): RedactionResult<string> {
+  redactString(
+    s: string,
+    context?: string,
+    options: { entropy?: boolean } = {},
+  ): RedactionResult<string> {
     const hits = new Map<string, RedactionRecord>();
-    const value = this.#scan(s, context, hits);
+    const value = this.#scan(s, context, hits, options.entropy !== false);
     this.#merge(hits);
     return { value, hits: [...hits.values()] };
   }
@@ -675,22 +683,19 @@ export class Redactor {
     return out;
   }
 
-  #scan(input: string, context: string | undefined, hits: Map<string, RedactionRecord>): string {
+  #scan(
+    input: string,
+    context: string | undefined,
+    hits: Map<string, RedactionRecord>,
+    entropy = true,
+  ): string {
     let value = input;
     for (const rule of RULES) {
       value = value.replace(rule.pattern, (m) => this.#hit(rule.kind, m, context, hits));
     }
-    // A body recorded as base64 is one long high-entropy run by construction, and the entropy
-    // scanner shredded a 14 KB Connect/protobuf response into 226 placeholders -- destroying it
-    // outright while protecting nothing, since a credential inside a binary body is not matchable
-    // once encoded anyway. The named rules above still run: those look for shapes, not randomness.
-    // `includes`, not `startsWith`: a body reaches the trace inside a JSON-encoded blob, so the
-    // marker sits one quote in. The marker is only ever written by the proxy around a body it
-    // base64-encoded itself, so its presence identifies the value rather than merely appearing in
-    // it.
-    const binary = value.includes(BINARY_BODY_PREFIX);
-    if (!binary) value = this.#scanEntropy(value, context, hits);
-    return this.#scanHidden(value, context, hits, !binary);
+    // Body text is untrusted. A marker in it must never disable redaction of its neighbors.
+    if (entropy) value = this.#scanEntropy(value, context, hits);
+    return this.#scanHidden(value, context, hits, entropy);
   }
 
   /**

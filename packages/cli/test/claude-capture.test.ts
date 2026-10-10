@@ -53,7 +53,7 @@ function stream(model: string) {
 }
 
 async function setup(binary: string) {
-  const root = await mkdtemp(join(tmpdir(), 'orca-claude-capture-'));
+  const root = await mkdtemp(join(tmpdir(), 'agenticreplay-claude-capture-'));
   closers.push(() => rm(root, { recursive: true, force: true }));
   await exec('git', ['init', '-q'], { cwd: root });
   const calls: { path: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }[] = [];
@@ -156,80 +156,87 @@ async function record(s: Awaited<ReturnType<typeof setup>>, adapter: string, arg
 }
 
 // Build first; opt in with absolute installed binary paths. No real accounts or user config.
-describe.skipIf(!process.env.ORCA_TEST_CLAUDE)('installed Claude Code through orca record', () => {
-  it.each(['api', 'bearer', 'oauth'] as const)(
-    'records %s authentication and SSE',
-    async (auth) => {
-      const s = await setup(process.env.ORCA_TEST_CLAUDE!);
-      const secret = `fixture-${auth}-secret`;
-      s.env[
-        auth === 'api'
-          ? 'ANTHROPIC_API_KEY'
-          : auth === 'bearer'
-            ? 'ANTHROPIC_AUTH_TOKEN'
-            : 'CLAUDE_CODE_OAUTH_TOKEN'
-      ] = secret;
-      await record(s, 'claude', [
-        '-p',
-        'Reply with captured.',
-        '--model',
-        MODEL,
-        '--tools',
-        '',
-        '--safe-mode',
-        '--setting-sources',
-        '',
-        '--strict-mcp-config',
-        '--mcp-config',
-        '{"mcpServers":{}}',
-        '--system-prompt',
-        'Reply briefly.',
-      ]);
-      expect(s.calls.length).toBeGreaterThan(0);
-      for (const call of s.calls) {
-        expect(call.body.model).toBe(MODEL);
-        expect(call.headers[auth === 'api' ? 'x-api-key' : 'authorization']).toBe(
-          auth === 'api' ? secret : `Bearer ${secret}`,
-        );
-        if (auth === 'oauth') expect(call.headers['anthropic-beta']).toContain('oauth-2025-04-20');
-      }
-    },
-    60000,
-  );
-});
-
-describe.skipIf(!process.env.ORCA_TEST_OPENCODE)('OpenCode Anthropic through orca record', () => {
-  it('records Claude model requests with an API key', async () => {
-    const s = await setup(process.env.ORCA_TEST_OPENCODE!);
-    s.env.ANTHROPIC_API_KEY = 'fixture-api-secret';
-    Object.assign(s.env, {
-      OPENCODE_DISABLE_PROJECT_CONFIG: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_FFF: '1',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: '1',
-      OPENCODE_CONFIG_CONTENT: JSON.stringify({
-        enabled_providers: ['anthropic'],
-        model: `anthropic/${MODEL}`,
-        small_model: `anthropic/${MODEL}`,
-        provider: { anthropic: { models: { [MODEL]: { name: MODEL } } } },
-      }),
-    });
-    const configDir = join(s.env.XDG_CONFIG_HOME!, 'opencode');
-    await mkdir(join(configDir, 'node_modules'), { recursive: true });
-    await writeFile(
-      join(configDir, 'package-lock.json'),
-      JSON.stringify({
-        lockfileVersion: 3,
-        packages: { '': { dependencies: { '@opencode-ai/plugin': '1.18.29' } } },
-      }),
+describe.skipIf(!process.env.AGENTICREPLAY_TEST_CLAUDE)(
+  'installed Claude Code through agenticreplay record',
+  () => {
+    it.each(['api', 'bearer', 'oauth'] as const)(
+      'records %s authentication and SSE',
+      async (auth) => {
+        const s = await setup(process.env.AGENTICREPLAY_TEST_CLAUDE!);
+        const secret = `fixture-${auth}-secret`;
+        s.env[
+          auth === 'api'
+            ? 'ANTHROPIC_API_KEY'
+            : auth === 'bearer'
+              ? 'ANTHROPIC_AUTH_TOKEN'
+              : 'CLAUDE_CODE_OAUTH_TOKEN'
+        ] = secret;
+        await record(s, 'claude', [
+          '-p',
+          'Reply with captured.',
+          '--model',
+          MODEL,
+          '--tools',
+          '',
+          '--safe-mode',
+          '--setting-sources',
+          '',
+          '--strict-mcp-config',
+          '--mcp-config',
+          '{"mcpServers":{}}',
+          '--system-prompt',
+          'Reply briefly.',
+        ]);
+        expect(s.calls.length).toBeGreaterThan(0);
+        for (const call of s.calls) {
+          expect(call.body.model).toBe(MODEL);
+          expect(call.headers[auth === 'api' ? 'x-api-key' : 'authorization']).toBe(
+            auth === 'api' ? secret : `Bearer ${secret}`,
+          );
+          if (auth === 'oauth')
+            expect(call.headers['anthropic-beta']).toContain('oauth-2025-04-20');
+        }
+      },
+      60000,
     );
-    await record(s, 'opencode', [
-      'run',
-      '-m',
-      `anthropic/${MODEL}`,
-      'Reply with captured. Do not use tools.',
-    ]);
-    for (const call of s.calls) expect(call.headers['x-api-key']).toBe('fixture-api-secret');
-  }, 60000);
-});
+  },
+);
+
+describe.skipIf(!process.env.AGENTICREPLAY_TEST_OPENCODE)(
+  'OpenCode Anthropic through agenticreplay record',
+  () => {
+    it('records Claude model requests with an API key', async () => {
+      const s = await setup(process.env.AGENTICREPLAY_TEST_OPENCODE!);
+      s.env.ANTHROPIC_API_KEY = 'fixture-api-secret';
+      Object.assign(s.env, {
+        OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+        OPENCODE_DISABLE_MODELS_FETCH: '1',
+        OPENCODE_DISABLE_AUTOUPDATE: '1',
+        OPENCODE_DISABLE_FFF: '1',
+        OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: '1',
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          enabled_providers: ['anthropic'],
+          model: `anthropic/${MODEL}`,
+          small_model: `anthropic/${MODEL}`,
+          provider: { anthropic: { models: { [MODEL]: { name: MODEL } } } },
+        }),
+      });
+      const configDir = join(s.env.XDG_CONFIG_HOME!, 'opencode');
+      await mkdir(join(configDir, 'node_modules'), { recursive: true });
+      await writeFile(
+        join(configDir, 'package-lock.json'),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: { '': { dependencies: { '@opencode-ai/plugin': '1.18.29' } } },
+        }),
+      );
+      await record(s, 'opencode', [
+        'run',
+        '-m',
+        `anthropic/${MODEL}`,
+        'Reply with captured. Do not use tools.',
+      ]);
+      for (const call of s.calls) expect(call.headers['x-api-key']).toBe('fixture-api-secret');
+    }, 60000);
+  },
+);

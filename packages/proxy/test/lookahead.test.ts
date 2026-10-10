@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonicalRequest } from '@orcareplay/plugin-api';
+import type { CanonicalRequest } from '@agenticreplay/plugin-api';
 import { RequestMatcher } from '../src/matching.js';
 
 /**

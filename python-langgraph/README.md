@@ -1,22 +1,22 @@
-# orcareplay-langgraph
+# agenticreplay-langgraph
 
 Record a LangGraph run's own structure — which node ran, in which superstep, and how it ended —
-into an [OrcaReplay](https://github.com/Continuum-AI-Corp/OrcaReplay) trace.
+into an [AgenticReplay](https://github.com/askdkc/AgenticReplay) trace.
 
 ```console
-pip install orcareplay-langgraph
+pip install agenticreplay-langgraph
 ```
 
-That is the whole setup. `orca record` attaches it to a graph you have not edited; there is no
+That is the whole setup. `agenticreplay record` attaches it to a graph you have not edited; there is no
 callback to register, no `with_config`, and no import in your code.
 
 ```console
-orca record generic-openai -- python your_graph.py
+agenticreplay record generic-openai -- python your_graph.py
 ```
 
 ## What it adds, and what it does not
 
-orca records model traffic at a proxy, and every claim it makes about capture comes from there.
+agenticreplay records model traffic at a proxy, and every claim it makes about capture comes from there.
 This package is not needed for that: a LangGraph run recorded without it is complete in the sense
 the rest of the project means. What it adds is the part a proxy structurally cannot see.
 
@@ -48,8 +48,8 @@ origin produces:
 ```
 
 **What it does not do is attribute a model call to a node by timestamp alone**, and the reason is
-on orca's side rather than here. A node record carries the instant the callback fired — measured
-against the agent's own clock, exactly. A `model.request` is stamped when orca *persists* it, which
+on agenticreplay's side rather than here. A node record carries the instant the callback fired — measured
+against the agent's own clock, exactly. A `model.request` is stamped when agenticreplay *persists* it, which
 is after the response and after a workspace snapshot: measured 95 ms late on one call and 31 ms on
 the next. The node boundaries are trustworthy; a call within about a tenth of a second of one can
 fall on the wrong side of it.
@@ -65,7 +65,7 @@ Two record types, and from each only the fields the reader consumes:
 
 Nothing else. No state, no inputs, no outputs, no messages, no tool arguments, and no exception
 *message* — only the exception's class name. The model exchanges are left to the proxy, which
-already holds them byte for byte; a second copy in a file orca does not redact on the way in would
+already holds them byte for byte; a second copy in a file agenticreplay does not redact on the way in would
 be a lossier duplicate in a place nothing scrubs.
 
 `step` is the superstep, which is per graph rather than per run: a subgraph's node reports its own,
@@ -94,14 +94,14 @@ The two are equal only for an author-defined node, so a runtime string cannot re
 through this path. LangGraph's own `__start__` and `__end__` markers are filtered as well: they are
 reported exactly like nodes, and nobody wrote them.
 
-## Inert unless orca is recording
+## Inert unless agenticreplay is recording
 
-Everything keys off `ORCA_AGENT_SPANS`, which only `orca record` sets. With it unset the package
+Everything keys off `AGENTICREPLAY_AGENT_SPANS`, which only `agenticreplay record` sets. With it unset the package
 registers nothing, opens nothing and costs nothing, which is what makes it safe to leave installed.
 
 It declares **no dependencies** — not langgraph, not langchain-core. Installing a framework as a
 side effect of installing a debugging aid is the kind of thing that makes people uninstall the
-debugging aid, and `orca record` puts this package's bootstrap in front of every Python process a
+debugging aid, and `agenticreplay record` puts this package's bootstrap in front of every Python process a
 recording starts, `python --version` included. Importing the module that holds langchain-core's
 hook registry costs **617 ms** against an interpreter that starts in about 50, so `install()` arms
 a `sys.meta_path` finder and returns; the registration happens the first time anything under
@@ -110,10 +110,10 @@ a `sys.meta_path` finder and returns; the registration happens the first time an
 ## Using it explicitly
 
 Supported, for anyone who would rather be. `install()` returns whether it did anything, and is
-false — quietly — when orca is not recording or the hook is already registered.
+false — quietly — when agenticreplay is not recording or the hook is already registered.
 
 ```python
-from orcareplay_langgraph import install
+from agenticreplay_langgraph import install
 
 install()
 ```
@@ -121,14 +121,14 @@ install()
 To supply your own handler instance, set the context variable langchain-core offers:
 
 ```python
-from orcareplay_langgraph import HANDLER_VAR, OrcaCallbackHandler
+from agenticreplay_langgraph import HANDLER_VAR, AgenticReplayCallbackHandler
 
-HANDLER_VAR.set(OrcaCallbackHandler())
+HANDLER_VAR.set(AgenticReplayCallbackHandler())
 ```
 
 ## The langchain-core interface it implements
 
-`OrcaCallbackHandler` is **not** a subclass of `BaseCallbackHandler`, deliberately: importing
+`AgenticReplayCallbackHandler` is **not** a subclass of `BaseCallbackHandler`, deliberately: importing
 langchain-core to define the class would make this module unimportable without it, and the point is
 that it is inert when langchain-core is absent. langchain-core checks the attributes, not the base
 class, and `_configure` type-checks with `isinstance(handler, handler_class)` against the class it

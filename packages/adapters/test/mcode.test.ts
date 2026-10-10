@@ -2,14 +2,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
-import { decodeForwardPath } from '@orcareplay/proxy';
+import type { RecordContext } from '@agenticreplay/plugin-api';
+import { decodeForwardPath } from '@agenticreplay/proxy';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { hasOrigin, mcodeAdapter, redirected, rewriteIsTrustworthy } from '../src/mcode.js';
 import { defaultAdapters } from '../src/registry.js';
 
 /**
- * MiniMax Code is the first harness orca captures by moving the agent's *data directory* rather
+ * MiniMax Code is the first harness agenticreplay captures by moving the agent's *data directory* rather
  * than a base-URL variable or the transport. Its origin lives in a config file, and its HTTP
  * client is Node's `fetch`, which consults no proxy variable — so neither of the two routes that
  * came before it reaches this one.
@@ -41,7 +41,7 @@ describe('the mcode adapter', () => {
   ].join('\n');
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-mcode-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-mcode-'));
     await mkdir(join(root, 'work'), { recursive: true });
     await mkdir(join(root, 'run'), { recursive: true });
     await mkdir(join(root, 'home'), { recursive: true });
@@ -99,14 +99,14 @@ describe('the mcode adapter', () => {
   it('does not copy a credential into the run directory', async () => {
     await mcodeAdapter.prepare(ctx);
     const written = await readFile(join(ctx.runDir, 'mcode-data', 'config.yaml'), 'utf8');
-    // §7. The file lands inside the trace directory, so the key does not travel with it — orca
+    // §7. The file lands inside the trace directory, so the key does not travel with it — agenticreplay
     // supplies the real one for the origin it forwards to. Without that the gateway answers 401,
     // and the prompt is captured anyway, because it is in the request.
     expect(written).not.toContain('sk-live-must-not-be-copied');
     expect(written).not.toContain('sk-live-second-key');
     expect([...written.matchAll(/apiKey:\s*(\S+)/g)].map((m) => m[1])).toEqual([
-      'orca-recorded',
-      'orca-recorded',
+      'agenticreplay-recorded',
+      'agenticreplay-recorded',
     ]);
   });
 
@@ -133,9 +133,9 @@ describe('the mcode adapter', () => {
     );
     expect(out).not.toContain('sk-live-');
     // Seven keys in, seven placeholders out — not six with one line quietly skipped.
-    expect([...out.matchAll(/orca-recorded/g)]).toHaveLength(7);
+    expect([...out.matchAll(/agenticreplay-recorded/g)]).toHaveLength(7);
     // Quoting and the comment are the operator's, and survive.
-    expect(out).toContain('apiKey: "orca-recorded"');
+    expect(out).toContain('apiKey: "agenticreplay-recorded"');
     expect(out).toContain('# rotate me');
   });
 
@@ -185,7 +185,7 @@ describe('the mcode adapter', () => {
     const out = redirected(CONFIG, 'http://127.0.0.1:44100');
     const changed = CONFIG.split('\n').filter((line, i) => line !== out.split('\n')[i]);
     // Rewritten as text on purpose: a YAML round-trip would reformat comments, quoting and key
-    // order in a file orca did not write.
+    // order in a file agenticreplay did not write.
     expect(changed).toHaveLength(4);
     expect(out).toContain('defaultModel: custom_provider:gw/minimax-m3');
     expect(out).toContain('      minimax-m3: {}');
@@ -194,7 +194,7 @@ describe('the mcode adapter', () => {
   it('writes no config when there is no provider to redirect', async () => {
     // The built-in `minimax_oauth` login is not redirectable — MCode restores its own origin over
     // whatever the config says. A redirect aimed at a provider that is not there would be a
-    // captured run talking to the wrong host; an untouched launch plus orca's empty-capture
+    // captured run talking to the wrong host; an untouched launch plus agenticreplay's empty-capture
     // warning is the truer answer.
     await writeFile(join(root, 'home', 'config.yaml'), 'logLevel: info\n', 'utf8');
     const launch = await mcodeAdapter.prepare(ctx);
@@ -259,8 +259,8 @@ describe('the mcode adapter', () => {
     expect(written).not.toContain('sk-live-custom');
     expect(written).not.toContain('sk-live-built-in');
     expect([...written.matchAll(/apiKey:\s*(\S+)/g)].map((m) => m[1])).toEqual([
-      'orca-recorded',
-      'orca-recorded',
+      'agenticreplay-recorded',
+      'agenticreplay-recorded',
     ]);
     expect(written).toContain('baseURL: https://agent.minimaxi.com/mavis/api/v1/llm/v1');
     const moved = /baseURL: (http:\/\/127[^\s]*)/.exec(written)?.[1];
@@ -330,7 +330,7 @@ describe('the mcode adapter', () => {
         '        sk-live-x',
         '      baseURL: https://d.example/v1',
       ],
-      // The one that actually shipped: one provider orca can rewrite, one it cannot.
+      // The one that actually shipped: one provider agenticreplay can rewrite, one it cannot.
       'block and flow together': [
         'custom_provider:',
         '  a:',
@@ -381,11 +381,11 @@ describe('the mcode adapter', () => {
 
     expect(out).not.toContain('sk-live-');
     // Nine keys in, nine placeholders out — not eight with one line quietly skipped.
-    expect([...out.matchAll(/orca-recorded/g)]).toHaveLength(9);
+    expect([...out.matchAll(/agenticreplay-recorded/g)]).toHaveLength(9);
     // Quoting, spacing and comments are the operator's and survive.
-    expect(out).toContain('apiKey: "orca-recorded"');
-    expect(out).toContain("apiKey: 'orca-recorded'   # note");
-    expect(out).toContain('"apiKey": orca-recorded');
+    expect(out).toContain('apiKey: "agenticreplay-recorded"');
+    expect(out).toContain("apiKey: 'agenticreplay-recorded'   # note");
+    expect(out).toContain('"apiKey": agenticreplay-recorded');
     expect(out).toContain('# rotate me');
     // A comment that merely mentions the field is left alone rather than refused.
     expect(out).toContain('# your apiKey goes above');
@@ -447,13 +447,13 @@ describe('the mcode adapter', () => {
   });
 
   it('isolates the data directory even when it has nothing to write there', async () => {
-    // Caught in review. `orca replay` calls this same `prepare`, with the operator's *current*
+    // Caught in review. `agenticreplay replay` calls this same `prepare`, with the operator's *current*
     // environment rather than the recorded one, so a config that has lost its custom provider
     // since the recording used to launch MCode untouched — on the real `~/.minimax`, against the
     // real gateway, with the real credential. Nothing reached the proxy, `unmatched` stayed at
     // zero, and the replay reported success: money spent, nothing recorded, quietly.
     //
-    // An empty directory of orca's own is what stops it. Measured: MCode finds no provider and no
+    // An empty directory of agenticreplay's own is what stops it. Measured: MCode finds no provider and no
     // credential there and refuses to start — "Sign in to MiniMax to use Agent features" — without
     // making a call.
     for (const body of [
@@ -478,7 +478,7 @@ describe('the mcode adapter', () => {
   });
 
   it('refuses an origin `/forward/` cannot carry, rather than aiming the run elsewhere', () => {
-    // `forwardOrProxyBase` answers an origin the decoder will not take with orca's own default
+    // `forwardOrProxyBase` answers an origin the decoder will not take with agenticreplay's own default
     // upstream. For the env route that is a reasonable last resort; here it would send the run to
     // a host the operator never named, which this file's own comment calls worse than not
     // capturing. Userinfo, a query and a non-HTTP scheme are the three the decoder refuses.
@@ -572,7 +572,7 @@ describe('the mcode adapter', () => {
     // under any other name would pass every check and be copied out verbatim, into the run
     // directory `capture.mjs` ships unscrubbed.
     //
-    // Two nets, because one has a measured hole: orca's redactor catches an `sk-` token, a real
+    // Two nets, because one has a measured hole: agenticreplay's redactor catches an `sk-` token, a real
     // JWT, a long random string and an AWS key id, but not 32 hex characters — that string's
     // maximum Shannon entropy is exactly its threshold. So an opaque token of 24 characters or
     // more under a name this file does not rewrite is refused on shape instead.
@@ -637,7 +637,7 @@ describe('the mcode adapter', () => {
     expect(
       rewriteIsTrustworthy(
         [
-          'defaultModel: custom_provider:orca-cap/deepseek/deepseek-v4-flash-free',
+          'defaultModel: custom_provider:agenticreplay-cap/deepseek/deepseek-v4-flash-free',
           'custom_provider:',
           '  gw:',
           '    options:',

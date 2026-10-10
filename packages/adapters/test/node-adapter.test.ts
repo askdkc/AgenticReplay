@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
-import { HOOK_FILENAME } from '@orcareplay/node-instrument';
+import type { RecordContext } from '@agenticreplay/plugin-api';
+import { HOOK_FILENAME } from '@agenticreplay/node-instrument';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { defaultAdapters } from '../src/registry.js';
 import { nodeAdapter } from '../src/node.js';
@@ -20,7 +20,7 @@ describe('the node adapter', () => {
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-node-adapter-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-node-adapter-'));
     ctx = {
       runId: 'run_test',
       cwd: join(root, 'work'),
@@ -68,12 +68,12 @@ describe('the node adapter', () => {
 
   it('tells the hook where the proxy is', async () => {
     const launch = await nodeAdapter.prepare(ctx);
-    expect(launch.env.ORCA_PROXY_URL).toBe(ctx.proxyUrl);
+    expect(launch.env.AGENTICREPLAY_PROXY_URL).toBe(ctx.proxyUrl);
   });
 
   it('still sets the base-URL variables, for an agent that does read them', async () => {
     // Belt and braces on purpose: one agent may use the SDK's default client for one provider and
-    // a hardcoded origin for another, and orca has no way to know which.
+    // a hardcoded origin for another, and agenticreplay has no way to know which.
     const launch = await nodeAdapter.prepare(ctx);
     expect(launch.env.OPENAI_BASE_URL).toContain('44100');
     expect(launch.env.ANTHROPIC_BASE_URL).toContain('44100');

@@ -81,7 +81,7 @@ describe('the support table is backed by checks that exist', () => {
       expect(checks.has(id), `run.mjs has no check called ${id}`).toBe(true);
       expect(checks.get(id), `${id} asserts a different exchange count`).toBe(c.exact);
     }
-    expect(row).toContain(`\`exact=${c.exact}\``);
+    expect(row).toContain(`\`canonical_exact=${c.exact}\``);
   });
 
   it('every docs/integrations.md anchor a row links to resolves', async () => {

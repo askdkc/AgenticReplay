@@ -2,16 +2,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
+import type { RecordContext } from '@agenticreplay/plugin-api';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { defaultAdapters } from '../src/registry.js';
 import { execAdapter } from '../src/exec.js';
 
 /**
- * The adapter for an agent orca knows nothing about.
+ * The adapter for an agent agenticreplay knows nothing about.
  *
  * Every other adapter here names a harness and the variable that harness reads. This one names
- * neither, because the case it exists for is an agent whose model loop orca cannot see into at
+ * neither, because the case it exists for is an agent whose model loop agenticreplay cannot see into at
  * all: a Python bot with a hardcoded xAI origin, a Go binary, an editor that spawns its own agent
  * as a child. Capture for those happens at the transport — `--tls-intercept` — and the adapter's
  * whole job is to launch the command and get out of the way.
@@ -26,7 +26,7 @@ describe('the exec adapter', () => {
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-exec-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-exec-'));
     ctx = {
       runId: 'run_test',
       cwd: join(root, 'work'),
@@ -91,14 +91,14 @@ describe('the exec adapter', () => {
   it('redirects a variable the operator names', async () => {
     const launch = await execAdapter.prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'GROK_BASE_URL' },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'GROK_BASE_URL' },
     });
     expect(launch.env.GROK_BASE_URL).toBe('http://127.0.0.1:44100/v1');
   });
 
   it('says what to type when the command is missing', async () => {
     await expect(execAdapter.prepare({ ...ctx, userArgs: [] })).rejects.toThrow(
-      /orca record exec .*-- <command>/,
+      /agenticreplay record exec .*-- <command>/,
     );
   });
 
@@ -106,7 +106,7 @@ describe('the exec adapter', () => {
    * Declared rather than inferred. The contract's `redirects-model-traffic` check exists to catch
    * an adapter that points the harness nowhere — which is precisely, and deliberately, what this
    * adapter does. Marking it as transport-captured is how it opts out honestly, instead of setting
-   * an inert `ORCA_PROXY_URL` to look like it installed a hook it never installed.
+   * an inert `AGENTICREPLAY_PROXY_URL` to look like it installed a hook it never installed.
    */
   it('declares that it captures at the transport, not through the environment', () => {
     expect(execAdapter.capture).toBe('transport');

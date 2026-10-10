@@ -8,25 +8,25 @@ import {
   pickChainTarget,
   resolveRunSelector,
   runGraph,
-} from '@orcareplay/core';
+} from '@agenticreplay/core';
 import { listGatewayRuns, readSource, type GatewayRun } from './sync.js';
-import type { RunGraph } from '@orcareplay/core';
+import type { RunGraph } from '@agenticreplay/core';
 import {
   buildTimeline,
   detectLoops,
   exportTraceHtml,
   serveViewer,
   summarize,
-} from '@orcareplay/viewer';
-import { priceFor } from '@orcareplay/providers';
+} from '@agenticreplay/viewer';
+import { priceFor } from '@agenticreplay/providers';
 import type { Output } from '../out.js';
 import type { ParsedArgs } from '../args.js';
 import { formatCost } from './compare.js';
 import { renderChainCard, renderGraphCard, scopeForCard } from '../share-card.js';
 import { cardTarget, gifFrames, svgToPng, svgsToGif, type CardFormat } from '../rasterize.js';
-import { recordableOrigin, unusableOrigin } from '@orcareplay/proxy';
+import { recordableOrigin, unusableOrigin } from '@agenticreplay/proxy';
 
-/** `orca list` — what runs are here, newest first. */
+/** `agenticreplay list` — what runs are here, newest first. */
 export async function listCommand(
   args: ParsedArgs,
   out: Output,
@@ -40,10 +40,10 @@ export async function listCommand(
   if (runs.length === 0) {
     out.plain('no runs recorded yet');
     out.plain('');
-    out.plain('  orca record claude      # record one');
+    out.plain('  agenticreplay record claude      # record one');
     return;
   }
-  // FROM is what makes a directory full of `orca compare` output readable: four runs with no
+  // FROM is what makes a directory full of `agenticreplay compare` output readable: four runs with no
   // stated relationship are four mysteries, and the relationship is already in every manifest.
   out.table(
     ['RUN', 'CREATED', 'FROM', 'DIR'],
@@ -134,10 +134,10 @@ async function listGatewayCommand(
   // The listing exists to be acted on, and `pull` is the only thing to do with a run that is not
   // here yet — so it says so rather than leaving the reader to guess the next command.
   out.plain('');
-  out.plain('  orca pull <run>      # fetch one into this machine’s store');
+  out.plain('  agenticreplay pull <run>      # fetch one into this machine’s store');
 }
 
-/** `orca show` — the timeline, in the terminal. */
+/** `agenticreplay show` — the timeline, in the terminal. */
 export async function showCommand(
   args: ParsedArgs,
   out: Output,
@@ -174,7 +174,7 @@ export async function showCommand(
       );
     }
   }
-  // Where the traffic went, which the timeline could not say. `proxy` is orca's own address, and
+  // Where the traffic went, which the timeline could not say. `proxy` is agenticreplay's own address, and
   // the origin behind it is chosen per request — from a flag, a configured gateway, a `/forward/`
   // base the client announced, or the vendor default — so the answer is read back off the
   // exchanges rather than off the manifest, and a run that reached two origins says both.
@@ -224,7 +224,7 @@ export async function showCommand(
   }
 }
 
-/** `orca checkpoints` — where can I fork from? */
+/** `agenticreplay checkpoints` — where can I fork from? */
 export async function checkpointsCommand(
   args: ParsedArgs,
   out: Output,
@@ -247,11 +247,11 @@ export async function checkpointsCommand(
     checkpoints.map((c) => [String(c.seq), String(c.turn), (c.fsTree ?? '').slice(0, 12)]),
   );
   out.plain('');
-  out.plain(`  orca replay last --from ${checkpoints.at(-1)!.seq} --model <other-model>`);
+  out.plain(`  agenticreplay replay last --from ${checkpoints.at(-1)!.seq} --model <other-model>`);
 }
 
 /**
- * `orca graph` — what caused what.
+ * `agenticreplay graph` — what caused what.
  *
  * The timeline says what happened in what order; this says what produced what. Every row names
  * both ends and, crucially, whether the trace vouches for the edge or a rule here worked it out —
@@ -273,7 +273,7 @@ export async function graphCommand(
     out.plain('no causal edges in this run');
     // Naming the likely cause beats leaving someone to wonder whether the feature works at all.
     out.plain(
-      '  a run with no tool calls has nothing to connect; try `orca show` for the timeline',
+      '  a run with no tool calls has nothing to connect; try `agenticreplay show` for the timeline',
     );
     return;
   }
@@ -323,7 +323,7 @@ async function writeCard(
   return buffer.length;
 }
 
-/** `orca export` — the single self-contained file that makes a trace shareable. */
+/** `agenticreplay export` — the single self-contained file that makes a trace shareable. */
 export async function exportCommand(
   args: ParsedArgs,
   out: Output,
@@ -370,7 +370,7 @@ export async function exportCommand(
       throw new Error(
         `nothing in ${manifest.run_id} stands out as the subject of a card — ` +
           'no failing command, no tool error and no file change. ' +
-          'Name the event yourself with `--to <seq>`, or `orca show` to find one.',
+          'Name the event yourself with `--to <seq>`, or `agenticreplay show` to find one.',
       );
     }
     const chain = chainTo(runGraph(events), to);
@@ -409,7 +409,7 @@ export async function exportCommand(
   out.phase('exported', { path: result.path, bytes: result.bytes });
 }
 
-/** `orca ui` — the same viewer, served locally. */
+/** `agenticreplay ui` — the same viewer, served locally. */
 export async function uiCommand(args: ParsedArgs, out: Output, cwd = process.cwd()): Promise<void> {
   const runDir = (await resolveRunSelector(cwd, args.positionals[0] ?? 'last')).dir;
   const server = await serveViewer({ runDir, port: args.num('port') ?? 0 });
@@ -454,7 +454,7 @@ function nestPrefix(depth: number, previousDepth: number): string {
  *
  * Read off the events rather than the manifest because there is nothing to read there: the origin
  * is resolved per request, and a fork that changes provider changes it mid-run. An empty list is
- * a trace recorded before orca wrote this down — not a run that reached nothing.
+ * a trace recorded before agenticreplay wrote this down — not a run that reached nothing.
  */
 export function upstreamsIn(events: { type: string; attrs?: Record<string, unknown> }[]): string[] {
   const seen: string[] = [];

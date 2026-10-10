@@ -19,8 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunCa } from '../src/ca.js';
 
 /**
- * zstd landed in Node's `zlib` after the oldest runtime this CLI supports, so on Node 20 the named
- * import was simply `undefined` and the test below died on `zstdCompressSync is not a function` —
+ * zstd landed in Node's `zlib` after the oldest runtime this CLI supports, so a named import can be
+ * `undefined` on supported runtimes and the test below would die on `zstdCompressSync is not a function` —
  * a red build on every pull request, saying nothing about the change that triggered it.
  *
  * Looked up dynamically, the same way `decodeBody` looks up the other half of the pair, so
@@ -46,7 +46,7 @@ import { defaultDialects } from '../src/server.js';
  *
  * Two origins run throughout — one the run is allowed to decrypt, one it is not — and both are
  * real HTTPS servers with their own certificates. That is what makes the negative case meaningful:
- * the un-allowlisted origin is reached with *its own* certificate, over a connection orca could
+ * the un-allowlisted origin is reached with *its own* certificate, over a connection agenticreplay could
  * not read even if it wanted to.
  */
 
@@ -343,9 +343,9 @@ async function startOrigin(
 }
 
 /**
- * A body orca cannot decode is a body no dialect can read, and the run says only that nothing
+ * A body agenticreplay cannot decode is a body no dialect can read, and the run says only that nothing
  * looked like a model call. Sending a gzipped request through a real intercepted host recorded
- * `orca-base64:H4sIA...` and exactly that message, so these three are worth pinning: they need no
+ * `agenticreplay-base64:H4sIA...` and exactly that message, so these three are worth pinning: they need no
  * runtime guard, unlike zstd, and gzip is the encoding an SDK is most likely to turn on.
  */
 describe('decodeBody', () => {
@@ -360,8 +360,16 @@ describe('decodeBody', () => {
     expect(decodeBody(zlib.brotliCompressSync(Buffer.from(payload)), 'br')).toBe(payload);
   });
 
-  it("honours the first encoding of a list, and the header's case", () => {
+  it('decodes layered encodings in reverse wire order', () => {
     expect(decodeBody(zlib.gzipSync(Buffer.from(payload)), 'GZIP, identity')).toBe(payload);
+    const layered = zlib.deflateSync(zlib.gzipSync(Buffer.from(payload)));
+    expect(decodeBody(layered, 'gzip, deflate')).toBe(payload);
+  });
+
+  it('rejects decompression that exceeds the configured output bound', () => {
+    expect(() => decodeBody(zlib.gzipSync(Buffer.from('x'.repeat(1024))), 'gzip', 32)).toThrow(
+      /larger than|capture limit/,
+    );
   });
 
   it('leaves an unencoded body alone', () => {
@@ -392,8 +400,8 @@ describe('TLS interception', () => {
   let originSawChatBody: string | undefined;
 
   beforeEach(async () => {
-    runDir = await mkdtemp(join(tmpdir(), 'orca-mitm-run-'));
-    originDir = await mkdtemp(join(tmpdir(), 'orca-mitm-origin-'));
+    runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mitm-run-'));
+    originDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mitm-origin-'));
     runCa = await RunCa.create({ runDir });
     originCa = await RunCa.create({ runDir: originDir });
     netExchanges = [];
@@ -424,9 +432,18 @@ describe('TLS interception', () => {
           res.end();
           return;
         }
+        if (req.url === '/repeated') {
+          res.writeHead(200, {
+            'content-type': 'application/json',
+            'x-repeated': ['one', 'two'],
+            'set-cookie': ['session=secret-a', 'session=secret-b'],
+          });
+          res.end('{"ok":true}');
+          return;
+        }
         if (req.url === '/stream-gzip') {
           // A compressed stream, handed over in two writes so a client can leave mid-member. What
-          // orca keeps is then a prefix of a deflate stream, which cannot be inflated.
+          // agenticreplay keeps is then a prefix of a deflate stream, which cannot be inflated.
           const whole = zlib.gzipSync(Buffer.from('data: first\n\ndata: second\n\n'));
           res.writeHead(200, {
             'content-type': 'text/event-stream',
@@ -484,7 +501,7 @@ describe('TLS interception', () => {
         }
         if (req.url === '/v1/chat/completions' && req.headers['x-test-hold'] !== undefined) {
           // Held before a single response header is written, which is the state a client that
-          // gives up early leaves the exchange in: a request orca decrypted and a response that
+          // gives up early leaves the exchange in: a request agenticreplay decrypted and a response that
           // never began. Released in `afterEach` along with `/stream`.
           void new Promise<void>((resolve) => {
             release = resolve;
@@ -583,6 +600,63 @@ describe('TLS interception', () => {
     expect(netExchanges[0]).toMatchObject({ path, requestBody: rawBody, status: 200 });
   });
 
+  it('marks an over-limit intercepted body incomplete while preserving the wire byte count', async () => {
+    const handle = await (async () => {
+      proxy = await createProxy({
+        mode: 'record',
+        maxCapturedBytes: 32,
+        onNetExchange: (e) => void netExchanges.push(e),
+        tls: {
+          ca: runCa,
+          hosts: [`127.0.0.1:${model.port}`],
+          trustedOriginCerts: [originCa.certPem],
+          maxCapturedBytes: 32,
+          onNetExchange: (e) => void netExchanges.push(e),
+        },
+      });
+      return proxy;
+    })();
+    const body = JSON.stringify({ unknown: 'x'.repeat(512) });
+    const response = await through({
+      proxyPort: handle.port,
+      host: '127.0.0.1',
+      port: model.port,
+      trust: [runCa.certPem],
+      method: 'POST',
+      path: '/api/v2/chat/messages',
+      body,
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(netExchanges).toHaveLength(1);
+    expect(netExchanges[0]).toMatchObject({
+      requestBytes: Buffer.byteLength(body),
+      requestTruncated: true,
+      responseTruncated: true,
+      responseComplete: false,
+    });
+    expect(netExchanges[0]!.requestBody.length).toBeLessThan(body.length);
+  });
+
+  it('preserves repeated nonsecret response headers and excludes cookies', async () => {
+    const handle = await startProxy([`127.0.0.1:${model.port}`]);
+    const response = await through({
+      proxyPort: handle.port,
+      host: '127.0.0.1',
+      port: model.port,
+      trust: [runCa.certPem],
+      method: 'POST',
+      path: '/repeated',
+      body: '{}',
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(netExchanges[0]!.responseHeaders['x-repeated']).toEqual(['one', 'two']);
+    expect(netExchanges[0]!.responseHeaders['set-cookie']).toBeUndefined();
+  });
+
   /**
    * HTTP/2, which reaches a different forwarder inside the interceptor.
    *
@@ -649,6 +723,43 @@ describe('TLS interception', () => {
       expect(exchange.responseHeaders['content-encoding']).toBeUndefined();
     });
 
+    it('marks an over-limit h2 response incomplete', async () => {
+      h2Origin = await startH2Origin(originCa, {
+        answer: () => ({
+          contentType: 'application/json',
+          body: JSON.stringify({ answer: 'x'.repeat(512) }),
+        }),
+      });
+      const handle = await createProxy({
+        mode: 'record',
+        maxCapturedBytes: 32,
+        tls: {
+          ca: runCa,
+          hosts: [`127.0.0.1:${h2Origin.port}`],
+          trustedOriginCerts: [originCa.certPem],
+          maxCapturedBytes: 32,
+          onNetExchange: (e) => void netExchanges.push(e),
+        },
+      });
+      proxy = handle;
+
+      const session = await h2Through({
+        proxyPort: handle.port,
+        host: '127.0.0.1',
+        port: h2Origin.port,
+        trust: [runCa.certPem],
+      });
+      const request = session.request({ ':method': 'POST', ':path': '/not-a-model-endpoint' });
+      request.on('data', () => undefined);
+      request.end('{}');
+      await once(request, 'close');
+      session.destroy();
+
+      expect(netExchanges).toHaveLength(1);
+      expect(netExchanges[0]!.responseTruncated).toBe(true);
+      expect(netExchanges[0]!.responseComplete).toBe(false);
+    });
+
     it('carries the protocol onto a model exchange promoted from an h2 call', async () => {
       // `alpn` has been recorded on `net.request` since the interceptor learned h2, and the
       // reason given was that "did this run go through the h2 path" has to be answerable from the
@@ -693,7 +804,8 @@ describe('TLS interception', () => {
 
       expect(modelExchanges).toHaveLength(1);
       expect(modelExchanges[0]!.alpn).toBe('h2');
-      expect(netExchanges).toHaveLength(0);
+      expect(netExchanges).toHaveLength(1);
+      expect(netExchanges[0]!.modelDialect).toBe('openai');
     });
 
     /**
@@ -703,7 +815,7 @@ describe('TLS interception', () => {
      * separately, so the property has to be pinned on both or it holds only where it was tested.
      */
     it('forwards the app attribution headers untouched over h2 too', async () => {
-      const referer = 'https://github.com/Continuum-AI-Corp/OrcaReplay';
+      const referer = 'https://github.com/askdkc/AgenticReplay';
       const title = 'Some Coding Agent';
       let seen: IncomingHttpHeaders = {};
       h2Origin = await startH2Origin(originCa, { onStream: (h) => void (seen = h) });
@@ -888,7 +1000,7 @@ describe('TLS interception', () => {
   });
 
   // `/v1/embeddings` throughout the opaque-capture tests, and the choice is load-bearing: these
-  // assert what happens to traffic *no dialect recognises*, so the path has to be one orca has no
+  // assert what happens to traffic *no dialect recognises*, so the path has to be one agenticreplay has no
   // translator for. They were written against `/v1/responses`, which stopped being such a path the
   // day the Responses dialect landed — and then failed, correctly, by recording a model exchange.
   it('decrypts an allowlisted host and captures both halves of the exchange', async () => {
@@ -944,14 +1056,14 @@ describe('TLS interception', () => {
       proxyPort: handle.port,
       host: '127.0.0.1',
       port: bank.port,
-      // Only the origin's CA. If orca had terminated this connection the handshake would fail.
+      // Only the origin's CA. If agenticreplay had terminated this connection the handshake would fail.
       trust: [originCa.certPem],
       path: '/accounts',
     });
 
     expect(response.status).toBe(200);
     expect(JSON.parse(response.body).balance).toBe('SUPER-SECRET-BALANCE-42');
-    // The origin's own certificate reached the client untouched. Orca never held the plaintext.
+    // The origin's own certificate reached the client untouched. AgenticReplay never held the plaintext.
     expect(response.peerIssuer).toBe(commonName(originCa.certPem));
     expect(response.peerIssuer).not.toBe(commonName(runCa.certPem));
 
@@ -968,7 +1080,7 @@ describe('TLS interception', () => {
     expect(JSON.stringify(tunnel)).not.toContain('accounts');
   });
 
-  it('records an intercepted model API call as a model exchange, not as net traffic', async () => {
+  it('records an intercepted model API call as both model and authoritative net evidence', async () => {
     const handle = await startProxy([`127.0.0.1:${model.port}`]);
 
     await through({
@@ -988,7 +1100,8 @@ describe('TLS interception', () => {
     expect(modelExchanges[0]!.dialect).toBe('openai');
     expect(modelExchanges[0]!.canonicalRequest.model).toBe('gpt-5.2');
     expect(modelExchanges[0]!.status).toBe(200);
-    expect(netExchanges).toHaveLength(0);
+    expect(netExchanges).toHaveLength(1);
+    expect(netExchanges[0]!.modelDialect).toBe('openai');
   });
 
   it('recognises a model API call whose endpoint carries a query string', async () => {
@@ -1010,7 +1123,8 @@ describe('TLS interception', () => {
     // as a path no dialect claims.
     expect(modelExchanges).toHaveLength(1);
     expect(modelExchanges[0]!.dialect).toBe('openai');
-    expect(netExchanges).toHaveLength(0);
+    expect(netExchanges).toHaveLength(1);
+    expect(netExchanges[0]!.modelDialect).toBe('openai');
     // The query stays in the trace -- it is what the agent asked for; only the match ignores it.
     expect(modelExchanges[0]!.path).toBe('/v1/chat/completions?api-version=2026-02-01');
   });
@@ -1018,7 +1132,7 @@ describe('TLS interception', () => {
   /**
    * A response body reaches the recording compressed only from an origin that ignores the
    * stripped `accept-encoding`. What made it worth fixing is that the fallback was silently wrong
-   * rather than merely large: measured against such an origin, `orca replay` reported
+   * rather than merely large: measured against such an origin, `agenticreplay replay` reported
    * `exact=1 divergences=0` over a response the agent could not read.
    */
   describe('a response the origin compressed anyway', () => {
@@ -1043,7 +1157,7 @@ describe('TLS interception', () => {
       // that body under a `content-type` it synthesises and never a `content-encoding`, so the
       // agent was handed the base64 text as the model's reply.
       expect(exchange.rawResponse).toContain('"content":"hi"');
-      expect(exchange.rawResponse).not.toContain('orca-base64:');
+      expect(exchange.rawResponse).not.toContain('agenticreplay-base64:');
       expect(exchange.usage?.input_tokens).toBe(3);
       expect(exchange.usage?.output_tokens).toBe(1);
       expect(exchange.responseDecodedFrom).toBe('gzip');
@@ -1292,14 +1406,14 @@ describe('TLS interception', () => {
    * `HTTP-Referer` and `X-Title` are how a provider attributes a request to the app that made it —
    * OpenRouter builds its public app leaderboard from exactly these. A proxy that rewrote or
    * dropped them would re-attribute the agent's tokens to whoever ran the recording, silently
-   * changing a third party's published ranking; that is not orca's to alter, and a debugger is the
+   * changing a third party's published ranking; that is not agenticreplay's to alter, and a debugger is the
    * last thing that should be editing attribution. Recording them, unlike recording a credential,
    * is the right call: they say which app produced the exchange, which is the one thing a trace
    * holding several agents' traffic cannot otherwise recover.
    */
   it('forwards the app attribution headers untouched, and records them', async () => {
     const handle = await startProxy([`127.0.0.1:${model.port}`]);
-    const referer = 'https://github.com/Continuum-AI-Corp/OrcaReplay';
+    const referer = 'https://github.com/askdkc/AgenticReplay';
     const title = 'Some Coding Agent';
 
     const response = await through({
@@ -1318,7 +1432,7 @@ describe('TLS interception', () => {
     });
 
     expect(response.status).toBe(200);
-    // Byte-identical at the origin: not re-cased, not re-written, not orca's own.
+    // Byte-identical at the origin: not re-cased, not re-written, not agenticreplay's own.
     expect(originSawAttribution['http-referer']).toBe(referer);
     expect(originSawAttribution['x-title']).toBe(title);
     // And present in the trace, which is what lets one recording separate two agents.
@@ -1329,7 +1443,7 @@ describe('TLS interception', () => {
   });
 
   it('never lets the run CA private key reach anything it records', async () => {
-    // The property this whole feature stands on. The key exists so orca can impersonate a host to
+    // The property this whole feature stands on. The key exists so agenticreplay can impersonate a host to
     // the child; a copy of it in a trace someone attaches to an issue is a signing key handed to
     // whoever reads the issue. Nothing in the capture path has any reason to touch it, which is
     // exactly why this is worth asserting: it is the kind of invariant a later refactor breaks
@@ -1397,7 +1511,7 @@ describe('TLS interception', () => {
    *
    * Recording used to happen only when the response reached `end`, so a client that stopped
    * reading a streaming reply the moment it had its answer left nothing behind -- and the run
-   * reported `capture.empty` with "the agent never called the proxy", about a request orca had
+   * reported `capture.empty` with "the agent never called the proxy", about a request agenticreplay had
    * decrypted and forwarded itself. The prefix is the evidence, and the prefix is what gets kept.
    */
   it('records a streaming exchange the client walks away from mid-flight', async () => {
@@ -1422,7 +1536,7 @@ describe('TLS interception', () => {
     expect(captured.abandoned).toBe(true);
     expect(captured.status).toBe(200);
     expect(captured.responseBody).toContain('first');
-    // Not a capture-limit truncation: orca kept everything it was handed.
+    // Not a capture-limit truncation: agenticreplay kept everything it was handed.
     expect(captured.responseTruncated).toBe(false);
   });
 
@@ -1463,7 +1577,7 @@ describe('TLS interception', () => {
   /**
    * An origin that dies is not a client that left, and only one of the two may go unanswered.
    *
-   * The client is still connected and waiting for the rest of a response orca already began
+   * The client is still connected and waiting for the rest of a response agenticreplay already began
    * forwarding. Treating the origin's abort as abandonment settles the forward promise, so the
    * caller's `.catch` -- the only thing that ends the client's response -- never runs, and the
    * agent's in-flight call waits for a stream that will never continue. Recording it as
@@ -1501,7 +1615,7 @@ describe('TLS interception', () => {
   it('refuses an origin whose certificate it cannot verify instead of downgrading', async () => {
     // A CA the proxy was never told about — the shape of a real MITM sitting in front of the
     // origin. Interception must not become an excuse to stop checking.
-    const strangerDir = await mkdtemp(join(tmpdir(), 'orca-mitm-stranger-'));
+    const strangerDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mitm-stranger-'));
     const stranger = await RunCa.create({ runDir: strangerDir });
     const impostor = await startOrigin(stranger, (_req, res) => res.end('{}'));
     try {

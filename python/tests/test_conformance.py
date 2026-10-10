@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_trace import (
+from agenticreplay_trace import (
     ACTORS,
     EVENT_TYPES,
     INLINE_PAYLOAD_LIMIT,

@@ -7,7 +7,7 @@ recorded frame is visible in the output rather than only in a count.
 
 from mcp.server.fastmcp import FastMCP
 
-app = FastMCP("orca-check")
+app = FastMCP("agenticreplay-check")
 
 
 @app.tool()

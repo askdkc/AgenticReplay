@@ -7,7 +7,7 @@
  *
  * Neither needs a dependency in `package.json`, and deliberately does not have one.
  * `docs/media/README.md` keeps `playwright-core`, `pngjs` and `gifenc` out so that everyone running
- * `npm ci` to work on orca does not pay for a browser download, and a picture command is not a
+ * `npm ci` to work on agenticreplay does not pay for a browser download, and a picture command is not a
  * reason to reverse that. They are imported at the moment of use and their absence is an
  * actionable message naming the one line that fixes it — the same line the docs already give for
  * regenerating README art.
@@ -19,7 +19,7 @@
  */
 
 /**
- * Import a package orca does not depend on.
+ * Import a package agenticreplay does not depend on.
  *
  * The specifier is a variable on purpose: a literal makes TypeScript resolve the module at build
  * time, and these are precisely the modules that are not there. Typing the result as `unknown`
@@ -40,7 +40,7 @@ export interface CardTarget {
 }
 
 /**
- * The path and format to write a card to, or a refusal naming what orca can write.
+ * The path and format to write a card to, or a refusal naming what agenticreplay can write.
  *
  * Refusing beats succeeding falsely. Writing SVG bytes into a file called `.png` produced a file
  * no image viewer opens and a success line explaining nothing, and `.png` is precisely the request
@@ -97,7 +97,7 @@ export async function missingRenderDeps(): Promise<string[]> {
 /** The message shown when a raster was asked for and the toolchain is not here. */
 export function installHint(missing: string[], format: CardFormat): string {
   return (
-    `writing a .${format} needs ${missing.join(', ')}, which orca does not depend on: ` +
+    `writing a .${format} needs ${missing.join(', ')}, which agenticreplay does not depend on: ` +
     'a browser download is not something everyone running `npm ci` should pay for.\n' +
     `  npm i --no-save ${RENDER_DEPS.join(' ')}\n` +
     '  …then run this again, or write a .svg, which never needs anything.'
@@ -126,7 +126,8 @@ async function launchChromium(): Promise<{
       }>;
     };
   };
-  const exe = process.env['ORCA_CHROMIUM'] ?? process.env['PLAYWRIGHT_CHROMIUM_EXECUTABLE'];
+  const exe =
+    process.env['AGENTICREPLAY_CHROMIUM'] ?? process.env['PLAYWRIGHT_CHROMIUM_EXECUTABLE'];
   const browser = await chromium.launch(exe === undefined ? {} : { executablePath: exe });
   return {
     async shot(svg: string) {

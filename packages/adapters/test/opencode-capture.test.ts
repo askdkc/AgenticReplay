@@ -99,7 +99,7 @@ describe('OpenCode final fetch capture', () => {
 
 describe('OpenCode capture plugin configuration', () => {
   it('appends a loadable local plugin while preserving JSONC config and existing plugins', async () => {
-    const scratch = await mkdtemp(join(tmpdir(), 'orca opencode-'));
+    const scratch = await mkdtemp(join(tmpdir(), 'agenticreplay opencode-'));
     try {
       const theirs = `{
         // Existing user choices must survive.
@@ -107,7 +107,7 @@ describe('OpenCode capture plugin configuration', () => {
         "plugin": ["user-plugin", ["configured-plugin", {"enabled": true}]],
         "provider": {"openai": {"options": {"baseURL": "https://gateway.example/v1"}}},
       }`;
-      const env = { OPENCODE_CONFIG_CONTENT: theirs };
+      const env = { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_VERSION: '2.0.0' };
       const launch = await openCodeAdapter.prepare({
         runId: 'run_abc123',
         cwd: scratch,
@@ -127,6 +127,9 @@ describe('OpenCode capture plugin configuration', () => {
       const source = await readFile(fileURLToPath(config.plugin[2]), 'utf8');
       expect(source).toContain(installOpenCodeCapture.toString());
       expect(source).not.toContain('import ');
+      const v2Source = await readFile(join(fileURLToPath(config.plugins[0]), 'index.mjs'), 'utf8');
+      expect(v2Source).toContain("id: 'agenticreplay.capture'");
+      expect(v2Source).toContain("session.hook('http.request'");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

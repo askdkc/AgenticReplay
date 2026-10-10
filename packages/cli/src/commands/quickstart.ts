@@ -3,7 +3,7 @@ import { chmod, cp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ensureRunsDir } from '@orcareplay/core';
+import { ensureRunsDir } from '@agenticreplay/core';
 import { parseArgs, type ParsedArgs } from '../args.js';
 import { cdCommand, Output } from '../out.js';
 import { replayCommand } from './replay.js';
@@ -12,7 +12,7 @@ import { showCommand } from './inspect.js';
 /**
  * The first two minutes, with nothing installed and nothing spent.
  *
- * Everything orca does well is visual — a timeline, a causal chain, a comparison — and none of it
+ * Everything agenticreplay does well is visual — a timeline, a causal chain, a comparison — and none of it
  * can be seen until a run exists. Producing one costs an agent, a key, a network and real tokens,
  * so the shortest honest path from `npm i` to "oh, I see what this is" ran through four things a
  * person has to arrange first. Most of them do not.
@@ -23,7 +23,7 @@ import { showCommand } from './inspect.js';
  * product's own guarantee doing the work of its own demonstration.
  *
  * The agent it was recorded from is a Node script that ships with it, which is the reason replay
- * needs nothing installed: orca already requires the runtime that agent runs on.
+ * needs nothing installed: agenticreplay already requires the runtime that agent runs on.
  *
  * The default output fits on one screen, and that is the whole design of it. The first version
  * printed the full timeline and the replayed agent's own chatter — sixty-eight lines, with the
@@ -34,7 +34,7 @@ import { showCommand } from './inspect.js';
 /** Where the shipped asset lives, relative to the built `dist/commands/`. */
 const ASSET = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'quickstart');
 
-const DEFAULT_DIR = 'orca-quickstart';
+const DEFAULT_DIR = 'agenticreplay-quickstart';
 const exec = promisify(execFile);
 
 export interface TraceEvent {
@@ -78,7 +78,7 @@ async function shippedRunId(): Promise<string> {
  */
 async function applyStoreModes(dir: string): Promise<void> {
   // Each one swallowed: a filesystem without permissions ignores `cp`'s modes and rejects
-  // `chmod`, so a fatal call here would abort `orca quickstart` on an exFAT or vfat directory
+  // `chmod`, so a fatal call here would abort `agenticreplay quickstart` on an exFAT or vfat directory
   // rather than leaving it where main already left it. `sync.ts` swallows the same call for the
   // same reason.
   await chmod(dir, 0o700).catch(() => undefined);
@@ -93,7 +93,7 @@ async function applyStoreModes(dir: string): Promise<void> {
  * Whether it is safe to write a project into this path.
  *
  * Only a missing path counts as free. Swallowing every error meant a path that exists and is not a
- * directory read as empty, so `orca quickstart --dir notes.txt` skipped the sentence that explains
+ * directory read as empty, so `agenticreplay quickstart --dir notes.txt` skipped the sentence that explains
  * the problem and surfaced `ENOTDIR: not a directory, mkdir` from three lines further on.
  */
 async function isEmptyish(dir: string): Promise<boolean> {
@@ -112,9 +112,9 @@ async function isEmptyish(dir: string): Promise<boolean> {
  * the directory it is running in, and on a mismatch it declines to restore the recorded filesystem
  * — correctly, since restoring a stranger's tree over yours is not a thing to do on a guess.
  *
- * Left alone, that lands on the first person who follows the tour. `orca quickstart` replays with
+ * Left alone, that lands on the first person who follows the tour. `agenticreplay quickstart` replays with
  * `--in-place` and is unaffected, but the obvious next thing to type is the command from the top of
- * the README, and `orca replay last` in the quickstart directory reported `exact=1` with two
+ * the README, and `agenticreplay replay last` in the quickstart directory reported `exact=1` with two
  * divergences and a warning — the flagship guarantee failing on the second look, against a tree the
  * first replay had already changed.
  *
@@ -152,7 +152,7 @@ async function testSummary(dir: string): Promise<{ line: string; failing: string
     // — got `? passing, ? failing` for both halves of the before-and-after, from a command that
     // still reported success. Naming `tap` on the command line does not fix that on its own:
     // reporters accumulate, and two of them with one destination makes node refuse to start at
-    // all. So the variable goes, which is right regardless — this is orca running a fixed test
+    // all. So the variable goes, which is right regardless — this is agenticreplay running a fixed test
     // file of its own to read two numbers out of it, not the user running their suite.
     ({ stdout: tap } = await exec(
       process.execPath,
@@ -220,7 +220,7 @@ function writtenPaths(all: TraceEvent[]): string[] {
  * What the model said, from the recording rather than from the replayed process.
  *
  * Trimmed to its first sentences and labelled. Unlabelled, eleven lines of an assistant explaining
- * daylight saving read as orca talking — and the recorded reply ends with "If you want, I can also
+ * daylight saving read as agenticreplay talking — and the recorded reply ends with "If you want, I can also
  * explain the DST edge case in more detail", which in an offline replay invites the obvious
  * question of who it is addressed to.
  */
@@ -326,18 +326,18 @@ export async function quickstartCommand(
   if (!(await isEmptyish(target))) {
     throw new Error(
       `${target} already exists and is not an empty directory\n` +
-        '  pick somewhere else: orca quickstart --dir <path>',
+        '  pick somewhere else: agenticreplay quickstart --dir <path>',
     );
   }
 
   // Through core, not a bare mkdir. This is the last caller that made the store by hand, and it
   // is the one the README's first line runs — so what it laid down was the store every later
   // `record`, `attach` and `fork` in that directory writes into. Two things were skipped:
-  // `.orca/.gitignore`, and on Windows the owner-only ACL, which `ensureRunsDir` applies and which
-  // nothing else ever repairs. `orca pull` was moved off its own bare mkdir for the same reasons.
+  // `.agenticreplay/.gitignore`, and on Windows the owner-only ACL, which `ensureRunsDir` applies and which
+  // nothing else ever repairs. `agenticreplay pull` was moved off its own bare mkdir for the same reasons.
   await ensureRunsDir(target);
   await cp(join(ASSET, 'project'), target, { recursive: true });
-  const runDir = join(target, '.orca', 'runs', runId);
+  const runDir = join(target, '.agenticreplay', 'runs', runId);
   await cp(join(ASSET, 'trace'), runDir, { recursive: true });
   // `cp` reproduces the source's permissions, and the source is a shipped npm package: every asset
   // is 0644 in git, so the run landed 0644 under a 0755 directory — world-readable, in the store
@@ -369,11 +369,11 @@ export async function quickstartCommand(
   // of turns the replay was asked about, which is zero when the agent never started — and `0/0`
   // reads like a pass. Counting the model turns in the trace makes that case print `0/3`.
   const turns = all.filter((e) => e.type === 'model.response').length;
-  const ok = replayDemonstrated(turns, replayed.matchedExact, replayed.unmatched);
+  const ok = replayDemonstrated(turns, replayed.canonicalExact, replayed.unmatched);
 
   if (full) out.plain('');
   out.plain(
-    `  Replayed    ${replayed.matchedExact}/${turns} turns from the trace · ` +
+    `  Replayed    ${replayed.canonicalExact}/${turns} turns from the trace · ` +
       `${replayed.divergences} divergences · ${replayed.liveCalls} live calls · network blocked`,
   );
   out.plain('');
@@ -390,7 +390,7 @@ export async function quickstartCommand(
   // success it did not have teaches the opposite of the guarantee it exists to demonstrate.
   if (ok) {
     out.plain('  Nothing above talked to a model. The fix came out of the recording.');
-  } else if (replayed.matchedExact === 0) {
+  } else if (replayed.canonicalExact === 0) {
     out.plain(`  The replay served none of the ${turns} recorded turns — the agent did not run.`);
     out.plain('  Re-run with --full to see what it printed.');
   } else {
@@ -399,13 +399,15 @@ export async function quickstartCommand(
   out.plain('');
   out.plain(`  ${cdCommand(target)}`);
   out.plain('');
-  // `orca` is on PATH only after a global install. Saying so here rather than letting someone
+  // `agenticreplay` is on PATH only after a global install. Saying so here rather than letting someone
   // meet `command not found` as the next thing that happens to them.
-  out.plain('  See it      orca ui                       # the timeline, in a browser');
-  out.plain('  Dig in      orca show · orca graph · orca export -o run.html');
-  out.plain('  Your own    orca record claude -- -p "..."');
+  out.plain('  See it      agenticreplay ui                       # the timeline, in a browser');
+  out.plain(
+    '  Dig in      agenticreplay show · agenticreplay graph · agenticreplay export -o run.html',
+  );
+  out.plain('  Your own    agenticreplay record claude -- -p "..."');
   out.plain('');
-  out.plain('  Installed locally rather than with -g? Put npx in front: npx orca ui');
+  out.plain('  Installed locally rather than with -g? Put npx in front: npx agenticreplay ui');
   if (!full) out.plain('  --full for the whole timeline and the replay as it happened.');
 
   return {
@@ -413,13 +415,13 @@ export async function quickstartCommand(
     runId,
     unmatched: replayed.unmatched,
     turns,
-    served: replayed.matchedExact,
+    served: replayed.canonicalExact,
     ok,
   };
 }
 
 interface ReplayNumbers {
-  matchedExact: number;
+  canonicalExact: number;
   unmatched: number;
   divergences: number;
   liveCalls: number;
@@ -429,11 +431,11 @@ interface ReplayNumbers {
  * Replay the shipped run, printing everything or nothing.
  *
  * `--full` calls the command in process, so the timeline and the replayed agent's own output land
- * on the terminal exactly as they would from `orca replay`.
+ * on the terminal exactly as they would from `agenticreplay replay`.
  *
  * The default passes `--json`, which is what `replay` already keys its quiet mode on: the agent is
  * spawned with inherited stdio, so under anything else its output reaches the terminal without
- * passing through something orca could filter. The result document goes to a discarded `Output`,
+ * passing through something agenticreplay could filter. The result document goes to a discarded `Output`,
  * and this command prints the two numbers worth reading instead.
  *
  * Not a child process. Spawning `../cli.js` resolves from `dist` and not from source, which is a
@@ -455,7 +457,7 @@ async function runReplay(
     out.plain('');
     const result = await replayCommand(parseArgs(['replay', runId, '--in-place']), out, target);
     return {
-      matchedExact: result.matchedExact,
+      canonicalExact: result.canonicalExact,
       unmatched: result.unmatched,
       divergences: result.divergences,
       liveCalls: result.liveCalls,
@@ -469,7 +471,7 @@ async function runReplay(
     target,
   );
   return {
-    matchedExact: result.matchedExact,
+    canonicalExact: result.canonicalExact,
     unmatched: result.unmatched,
     divergences: result.divergences,
     liveCalls: result.liveCalls,

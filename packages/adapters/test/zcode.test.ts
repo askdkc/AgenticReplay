@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
-import { decodeForwardPath } from '@orcareplay/proxy';
+import type { RecordContext } from '@agenticreplay/plugin-api';
+import { decodeForwardPath } from '@agenticreplay/proxy';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { defaultAdapters } from '../src/registry.js';
 import { redirectedConfig, zcodeAdapter } from '../src/zcode.js';
@@ -46,7 +46,7 @@ describe('the zcode adapter', () => {
     });
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-zcode-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-zcode-'));
     await mkdir(join(root, 'work'), { recursive: true });
     await mkdir(join(root, 'run'), { recursive: true });
     await mkdir(join(root, 'home'), { recursive: true });
@@ -97,7 +97,7 @@ describe('the zcode adapter', () => {
       'https://gateway.example/v1',
     );
     // §7: the file lands in the run directory, so the key does not travel with it.
-    expect(provider.access.apiKey).toBe('orca-recorded');
+    expect(provider.access.apiKey).toBe('agenticreplay-recorded');
   });
 
   it('reaches a key by any name and at any depth', () => {
@@ -119,7 +119,7 @@ describe('the zcode adapter', () => {
     );
     expect(out).toBeDefined();
     expect(out).not.toContain('sk-live-');
-    expect([...out!.matchAll(/orca-recorded/g)]).toHaveLength(6);
+    expect([...out!.matchAll(/agenticreplay-recorded/g)]).toHaveLength(6);
   });
 
   it('moves an origin under a key name it has never seen', () => {
@@ -156,7 +156,7 @@ describe('the zcode adapter', () => {
     // The net, and the reason it is not built like the rewrite. `isSecret` is an allowlist and
     // will always be incomplete — review found `APIKEY`, `Authorization` and `jwt` walking
     // through the first version of it — so what gets written is judged by what the values look
-    // like, not by what they are called. Refusing means the run gets orca's own provider instead
+    // like, not by what they are called. Refusing means the run gets agenticreplay's own provider instead
     // of the operator's, which is the side to fail on when the alternative is a key on disk.
     const shapes = [
       'sk-live-CANARY0000000000000000000',
@@ -262,7 +262,7 @@ describe('the zcode adapter', () => {
   it('refuses a model id long enough to be a credential, and says so here', () => {
     // The documented cost of having no name-based exemption: model ids are not a closed set, so a
     // config naming one of twenty-four characters or more is refused and the run falls back to
-    // orca's own provider. That is a capture that still gets the prompt and no longer reaches the
+    // agenticreplay's own provider. That is a capture that still gets the prompt and no longer reaches the
     // operator's gateway — the direction to fail in. Pinned so the trade-off is visible rather
     // than discovered.
     expect(
@@ -300,7 +300,7 @@ describe('the zcode adapter', () => {
     );
     expect(out).toBeDefined();
     expect(out).not.toContain('sk-live-');
-    expect([...out!.matchAll(/orca-recorded/g)]).toHaveLength(6);
+    expect([...out!.matchAll(/agenticreplay-recorded/g)]).toHaveLength(6);
   });
 
   it('leaves a structural field called “key” alone', () => {
@@ -356,7 +356,7 @@ describe('the zcode adapter', () => {
       'https://api.example.com/a/b/cafebabecafebabecafebabecafebabe/v1',
     ]) {
       const out = redirectedConfig(JSON.stringify({ config: { p: { baseUrl: url } } }), PROXY);
-      // Refused outright: the config is written as orca's own single provider instead.
+      // Refused outright: the config is written as agenticreplay's own single provider instead.
       expect(out, url).toBeUndefined();
     }
     // And the shape this must not start refusing: an origin whose path carries nothing, and a
@@ -445,7 +445,7 @@ describe('the zcode adapter', () => {
   });
 
   it('writes its own provider rather than half of the operator’s', async () => {
-    // Two ways a carry can fail, and both end the same way: orca's own single provider, pointed
+    // Two ways a carry can fail, and both end the same way: agenticreplay's own single provider, pointed
     // at the proxy. A partial redirect would leave whichever provider it missed talking to its
     // real host with nothing in the trace to say so.
     for (const body of [
@@ -460,7 +460,7 @@ describe('the zcode adapter', () => {
       );
       const rules = written.config.providerConfigRules.providerRules;
       expect(rules, body.slice(0, 20)).toHaveLength(1);
-      expect(rules[0].providerId).toBe('orca');
+      expect(rules[0].providerId).toBe('agenticreplay');
       expect(rules[0].config.api.baseUrl).toBe(`${PROXY}/v1`);
       expect(JSON.stringify(written)).not.toContain('sk-live-');
       expect(JSON.stringify(written)).not.toContain('pw@');
@@ -468,18 +468,18 @@ describe('the zcode adapter', () => {
   });
 
   it('still names a provider file when there is no config to read', async () => {
-    // What keeps `orca replay` honest. Replay calls this same `prepare` with the operator's
+    // What keeps `agenticreplay replay` honest. Replay calls this same `prepare` with the operator's
     // current environment; an adapter that redirected nothing there would let a replay run live
     // on their real providers, spend money, and report success because nothing reached the proxy.
     await rm(join(root, 'home', 'provider_config.json'));
     const launch = await zcodeAdapter.prepare(ctx);
     expect(launch.env['ZCODE_PERSONAL_PROVIDER_CONFIG_FILE']).toBeDefined();
     const written = JSON.parse(await readFile(launch.tempFiles![0]!, 'utf8'));
-    expect(written.config.providerConfigRules.providerRules[0].providerId).toBe('orca');
+    expect(written.config.providerConfigRules.providerRules[0].providerId).toBe('agenticreplay');
   });
 
   it('asks for a model the catalogue knows', async () => {
-    // ZCode builds the model from its catalogue before it builds a request. An id orca invented
+    // ZCode builds the model from its catalogue before it builds a request. An id agenticreplay invented
     // ends the run at `Model creation failed`, measured, with nothing captured — so the fallback
     // config names a real one and lets `--model` override it.
     await rm(join(root, 'home', 'provider_config.json'));

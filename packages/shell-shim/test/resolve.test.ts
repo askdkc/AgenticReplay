@@ -16,7 +16,7 @@ describe('resolveRealBinary', () => {
   let executable: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-resolve-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-resolve-'));
     shimDir = join(root, 'shims');
     realDir = join(root, 'bin');
     executable = process.platform === 'win32' ? 'bash.exe' : 'bash';
@@ -96,7 +96,7 @@ describe('resolveRealBinary', () => {
       await mkdir(otherRun);
       const shimScript = [
         '#!/bin/sh',
-        '# Written by orca record. Runs the real binary and notes what happened.',
+        '# Written by agenticreplay record. Runs the real binary and notes what happened.',
         `exec node runner-bin.js bash ${otherRun} frames -- "$@"`,
         '',
       ].join('\n');

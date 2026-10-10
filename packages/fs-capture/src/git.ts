@@ -41,7 +41,7 @@ function assertSafeArgs(args: readonly string[]): void {
 
 /**
  * Variables that redirect git at another repository, reinterpret a pathspec, or inject config.
- * Orca can be launched from inside a hook or another git process, and any of these would change
+ * AgenticReplay can be launched from inside a hook or another git process, and any of these would change
  * what a snapshot means: GIT_DIR retargets the store, GIT_LITERAL_PATHSPECS would turn the
  * `:(exclude)` guards into ordinary filenames, and GIT_CONFIG_* can set any option at all.
  * Anything else git puts in the environment (GIT_EXEC_PATH, for one) belongs to the installation

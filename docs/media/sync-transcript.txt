@@ -1,11 +1,11 @@
-$ orca push run_a2a97f8e0218
+$ agenticreplay push run_a2a97f8e0218
 info push.packed run=run_a2a97f8e0218 files=31 bytes=149761
 info push.done run=run_a2a97f8e0218 replaced=false gateway=http://127.0.0.1:45999
 
-$ orca pull run_a2a97f8e0218
-info pull.done run=run_a2a97f8e0218 files=31 dir=/tmp/orcapull4/.orca/runs/run_a2a97f8e0218
+$ agenticreplay pull run_a2a97f8e0218
+info pull.done run=run_a2a97f8e0218 files=31 dir=/tmp/agenticreplay-pull/.agenticreplay/runs/run_a2a97f8e0218
 
-$ orca show run_a2a97f8e0218
+$ agenticreplay show run_a2a97f8e0218
 run_a2a97f8e0218  claude-code@0.1.2  29 events  exit 0
 
 SEQ  KIND     WHAT                                                                    DETAIL

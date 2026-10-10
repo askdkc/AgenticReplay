@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent, homeDirHas } from './detect.js';
 import { passKey, passThrough, proxyBase, readEnv } from './env.js';
 
@@ -14,7 +14,7 @@ export function qwenHasOwnAuth(): boolean {
  * Qwen Code, which reaches four different providers and reads a separate origin for each.
  *
  * Two of the four are redirected, and the other two deliberately are not. The line is not about
- * the harness at all — it is about what orca can put on the other end.
+ * the harness at all — it is about what agenticreplay can put on the other end.
  *
  * `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` are moved, because the proxy can restore those
  * origins: `resolveUpstream` produces `anthropic`, `openai` and `openai-responses` keys, and the
@@ -36,7 +36,7 @@ export function qwenHasOwnAuth(): boolean {
  * So these two join `WEB_SEARCH_BASE_URL` as documented gaps. That one is the web-search tool's
  * endpoint rather than a model origin — off unless `ENABLE_WEB_SEARCH` is set, keyed separately by
  * `WEB_SEARCH_API_KEY` — and pointing it at the proxy without the matching key would break a tool
- * that works today. Different reason, same conclusion: an origin orca cannot serve is one it
+ * that works today. Different reason, same conclusion: an origin agenticreplay cannot serve is one it
  * should not take away.
  *
  * To record Qwen against its own models, terminate the TLS instead of moving the origin. One host
@@ -47,7 +47,7 @@ export function qwenHasOwnAuth(): boolean {
  * `dashscope-us.aliyuncs.com` by region, and the token plan on a different domain again at
  * `token-plan.cn-beijing.maas.aliyuncs.com` / `token-plan.ap-southeast-1.maas.aliyuncs.com`. So:
  *
- *     orca record qwen --tls-intercept --tls-hosts \
+ *     agenticreplay record qwen --tls-intercept --tls-hosts \
  *       '+dashscope.aliyuncs.com,+*.dashscope.aliyuncs.com,+dashscope-intl.aliyuncs.com,+dashscope-us.aliyuncs.com'
  *
  * adding `+token-plan.cn-beijing.maas.aliyuncs.com` or the Singapore one if that is the plan in

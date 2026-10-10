@@ -49,7 +49,7 @@ export const GIT_MISSING_MESSAGE =
 
 /**
  * Paths never captured, in .gitignore syntax. Secrets first, then noise that would bloat every
- * snapshot, then `.orca/` so a run never records its own trace.
+ * snapshot, then `.agenticreplay/` so a run never records its own trace.
  */
 export const SENSITIVE_PATTERNS = [
   '.env*',
@@ -60,7 +60,7 @@ export const SENSITIVE_PATTERNS = [
   '*.key',
   'id_rsa*',
   'id_ed25519*',
-  '.orca/',
+  '.agenticreplay/',
   'node_modules/',
   '.git/',
 ] as const;
@@ -149,7 +149,7 @@ function commitlessNested(stderr: string): string[] {
  *   committed, not ignored   `add -A` stages `data` as a gitlink, and `add -f -- data/cache` then
  *                            dies: "Pathspec 'data/cache' is in submodule 'data'" — every turn of a
  *                            recording, so it held no snapshot at all, and the safety copy before a
- *                            replay, after its `orca-safety-*` directory already existed
+ *                            replay, after its `agenticreplay-safety-*` directory already existed
  *   ignored, or no commit    `add -f -- data/cache` exits 0 having staged nothing and named nothing
  *
  * Neither is an answer anything downstream can use, and the second is silent: a replay whose reset
@@ -184,7 +184,7 @@ async function enclosingRepository(
 /**
  * Whether `dir` has a `.git` — a directory for a repository of its own, a file for a submodule or a
  * linked worktree. A path this process cannot even look at counts as one: what depends on the
- * answer is whether orca may delete inside it, and nothing may conclude "safe" from an error.
+ * answer is whether agenticreplay may delete inside it, and nothing may conclude "safe" from an error.
  */
 async function holdsGitDir(dir: string): Promise<boolean> {
   try {
@@ -360,13 +360,13 @@ export class ShadowIndex {
    * That shape is not exotic: it is what `git init` in a subdirectory leaves behind, which is what
    * anyone starting a second project inside their workspace has until they make the first commit.
    *
-   * Measured on orca before this, both times it can happen:
+   * Measured on agenticreplay before this, both times it can happen:
    *
    *   - there while recording — every turn's snapshot threw, so the trace held no `fs.snapshot`
    *     at all, and the replay then read that absence as `--no-fs` and told the operator the run
    *     was "recorded with --no-fs" when nobody had passed it
-   *   - appearing before a replay — the SAFETY snapshot threw, so `orca replay` exited 1 with
-   *     git's own sentence about a commit checked out, having already made its `orca-safety-*`
+   *   - appearing before a replay — the SAFETY snapshot threw, so `agenticreplay replay` exited 1 with
+   *     git's own sentence about a commit checked out, having already made its `agenticreplay-safety-*`
    *     scratch directory, which nothing then removed and nothing printed the path of
    *
    * Left out and named, which is what git already does with a nested repository that HAS a commit:
@@ -438,7 +438,7 @@ export class ShadowIndex {
    * resolves rather than throws, so nothing upstream could notice. What that produced was a
    * snapshot silently missing the paths the adapter declared: a trace holding every call that
    * built an index and no byte of the index, with no warning anywhere. Worse on the replay side,
-   * where the same hole lands in the safety snapshot `resetArtifacts` depends on — orca may delete
+   * where the same hole lands in the safety snapshot `resetArtifacts` depends on — agenticreplay may delete
    * only what it took a copy of first, so a failure it cannot account for stops the snapshot here.
    *
    * Stopping is safe at both call sites: `snapshotWithRetry` turns a throw during recording into
@@ -499,7 +499,7 @@ export class ShadowIndex {
    * nowhere in this store, and {@link materialize} refuses a tree holding one rather than checking
    * out an empty directory in its place. Before the forced add those paths were never staged, so
    * the restore worked; leaving them staged makes every restore of that workspace fail — including
-   * the one `orca replay` performs *after* deleting the artifacts it could then no longer put back.
+   * the one `agenticreplay replay` performs *after* deleting the artifacts it could then no longer put back.
    *
    * Dropped rather than refused, because the other declared paths are still worth capturing and a
    * recording missing a cloned corpus is a far smaller loss than one that cannot be replayed at
@@ -697,7 +697,7 @@ export class ShadowIndex {
    *
    * The cause worth naming is a run whose store is not all there: one pulled from a gateway it was
    * pushed to without `--fs` — the archive then carries manifest.json, events.jsonl,
-   * redactions.json and blobs/, not this store — or one whose store `orca scrub --drop-fs`
+   * redactions.json and blobs/, not this store — or one whose store `agenticreplay scrub --drop-fs`
    * deleted. Either way its `fs.snapshot` events name trees whose objects are not here.
    * {@link materialize} on one of those dies in `read-tree`, and the caller has no way to tell
    * that from a corrupt store.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runGraph, chainTo, type RunGraph } from '@orcareplay/core';
-import type { EventType, TraceEvent } from '@orcareplay/schema';
-import { CREDIT_MADE_BY, CREDIT_REPO } from '@orcareplay/viewer';
+import { runGraph, chainTo, type RunGraph } from '@agenticreplay/core';
+import type { EventType, TraceEvent } from '@agenticreplay/schema';
+import { CREDIT_MADE_BY, CREDIT_REPO } from '@agenticreplay/viewer';
 import { renderChainCard } from '../src/share-card.js';
 
 function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): TraceEvent {
@@ -11,7 +11,7 @@ function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): Trace
     mono_us: seq,
     turn: 1,
     type,
-    actor: 'orca',
+    actor: 'agenticreplay',
     ...over,
   };
 }
@@ -75,7 +75,7 @@ describe('renderChainCard', () => {
   });
 
   it('prints the command that reproduces it, so the picture is checkable', () => {
-    expect(card()).toContain('orca graph run_6473f858b59e --to 6');
+    expect(card()).toContain('agenticreplay graph run_6473f858b59e --to 6');
   });
 
   it('grows with the chain rather than overflowing a fixed box', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonicalRequest } from '@orcareplay/plugin-api';
-import type { RecordedExchange } from '@orcareplay/proxy';
+import type { CanonicalRequest } from '@agenticreplay/plugin-api';
+import type { RecordedExchange } from '@agenticreplay/proxy';
 import { ExchangeEventDeriver, retrievalContext } from '../src/exchange-events.js';
 
 /**

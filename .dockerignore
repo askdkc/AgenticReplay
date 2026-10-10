@@ -1,0 +1,11 @@
+.git
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/__pycache__
+**/build
+**/.venv
+.agenticreplay
+prompt
+companion-kiokuko-dsh.patch

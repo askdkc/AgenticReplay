@@ -4,11 +4,11 @@ import {
   privatePathIdentity,
   removePrivateDirectory,
   restrictToOwner,
-} from '@orcareplay/core';
+} from '@agenticreplay/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MCP_RECORD_START, objectsOnLine } from '@orcareplay/mcp-shim';
-import { EARLIEST_TS_MS, LATEST_TS_MS } from '@orcareplay/schema';
+import { MCP_RECORD_START, objectsOnLine } from '@agenticreplay/mcp-shim';
+import { EARLIEST_TS_MS, LATEST_TS_MS } from '@agenticreplay/schema';
 
 /**
  * Getting the OpenAI Agents SDK's own run structure into a trace, without editing the agent.
@@ -23,24 +23,24 @@ import { EARLIEST_TS_MS, LATEST_TS_MS } from '@orcareplay/schema';
  *
  * The handoff row is the sharp one. The SDK implements a handoff as a function tool named
  * `transfer_to_<agent>`, so a rule *could* guess one from the tool name — but a user tool may be
- * called that too, and the agent it came **from** never reaches the wire. `orca graph` already
+ * called that too, and the agent it came **from** never reaches the wire. `agenticreplay graph` already
  * separates what a trace records from what a rule infers; this moves handoffs into the first column.
  *
  * Installed the way the fetch hook is, and for the same reason: `sitecustomize.py` is imported by
  * Python at startup from anywhere on `sys.path`, so putting one directory on `PYTHONPATH` attaches
  * the layer to an agent nobody modified. Asking the user to call `set_trace_processors` would make
- * this the SDK wrapper the README says orca does not need.
+ * this the SDK wrapper the README says agenticreplay does not need.
  *
  * The file is self-contained and imports the published package by name, never this repository — it
  * runs inside the agent's interpreter, which resolves imports against its own environment. The
  * shell shim and the fetch hook are written out for the same reason.
  */
 
-export const SPANS_ENV = 'ORCA_AGENT_SPANS';
+export const SPANS_ENV = 'AGENTICREPLAY_AGENT_SPANS';
 export const SPANS_FILENAME = 'agent-spans.jsonl';
 export const SITECUSTOMIZE = 'sitecustomize.py';
 
-/** A Python framework whose own run structure orca can read, and the package that reads it. */
+/** A Python framework whose own run structure agenticreplay can read, and the package that reads it. */
 export interface PythonAdapter {
   /** The framework, as `importlib.metadata` names the distribution that provides it. */
   distribution: string;
@@ -70,15 +70,15 @@ export const PYTHON_ADAPTERS: readonly PythonAdapter[] = [
   {
     distribution: 'openai-agents',
     root: 'agents',
-    module: 'orcareplay_openai_agents',
-    package: 'orcareplay-openai-agents',
+    module: 'agenticreplay_openai_agents',
+    package: 'agenticreplay-openai-agents',
     lost: 'the agents, handoffs and guardrails only it can see',
   },
   {
     distribution: 'langgraph',
     root: 'langgraph',
-    module: 'orcareplay_langgraph',
-    package: 'orcareplay-langgraph',
+    module: 'agenticreplay_langgraph',
+    package: 'agenticreplay-langgraph',
     lost: 'which node produced which call, and the nodes that call no model at all',
   },
 ];
@@ -123,10 +123,10 @@ function installBlock({ module, root, distribution, package: pkg }: PythonAdapte
  * over a site's or a virtualenv's own; silently disabling someone's startup hook to add a debugging
  * layer would be a poor trade.
  */
-export const SITECUSTOMIZE_SOURCE = `# Written by \`orca record\`. Deleted with the run directory.
+export const SITECUSTOMIZE_SOURCE = `# Written by \`agenticreplay record\`. Deleted with the run directory.
 #
-# Attaches OrcaReplay's adapters to the agent frameworks on this interpreter, without editing the
-# agent. Inert unless ORCA_AGENT_SPANS is set, which only \`orca record\` does.
+# Attaches AgenticReplay's adapters to the agent frameworks on this interpreter, without editing the
+# agent. Inert unless AGENTICREPLAY_AGENT_SPANS is set, which only \`agenticreplay record\` does.
 import os
 import sys
 
@@ -144,7 +144,7 @@ def _chain():
             candidate = os.path.join(entry, "sitecustomize.py")
             if not os.path.isfile(candidate):
                 continue
-            spec = importlib.util.spec_from_file_location("_orca_prev_sitecustomize", candidate)
+            spec = importlib.util.spec_from_file_location("_agenticreplay_prev_sitecustomize", candidate)
             if spec is None or spec.loader is None:
                 continue
             module = importlib.util.module_from_spec(spec)
@@ -192,7 +192,7 @@ class _WhenImported:
     Asking \`importlib.metadata\` at startup instead would answer a different question — is the
     framework *installed* — and on an ordinary machine that is yes for frameworks the run never
     touches. One venv here has both langgraph and openai-agents, so every recorded run in it would
-    be told to install two adapters it has no use for, and the count grows with every adapter orca
+    be told to install two adapters it has no use for, and the count grows with every adapter agenticreplay
     ships. A warning that fires when nothing is wrong is how warnings stop being read.
 
     Installed only for the adapters that were *not* importable, so a fully equipped machine carries
@@ -228,7 +228,7 @@ def _install():
     sequence, so an adapter that is present and broken is not reported as one that is missing —
     those send the operator somewhere different.
     """
-    path = os.environ.get("ORCA_AGENT_SPANS")
+    path = os.environ.get("AGENTICREPLAY_AGENT_SPANS")
     if not path:
         return
     missing = {}
@@ -239,7 +239,30 @@ ${PYTHON_ADAPTERS.map(installBlock).join('\n')}    if missing:
             pass
 
 
+def _trust_run_ca():
+    """Add this run's CA to optional OS truststore contexts; never disable verification."""
+    ca = os.environ.get("AGENTICREPLAY_TLS_CA")
+    if not ca:
+        return
+    try:
+        import truststore
+    except ImportError:
+        return  # stdlib/OpenSSL clients already honor SSL_CERT_FILE
+    context = truststore.SSLContext
+    if getattr(context, "_agenticreplay_ca", None) == ca:
+        return
+    original_init = context.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.load_verify_locations(cafile=ca)
+
+    context.__init__ = init
+    context._agenticreplay_ca = ca
+
+
 _chain()
+_trust_run_ca()
 _install()
 `;
 
@@ -255,16 +278,16 @@ export interface AgentSpanCapture {
 /**
  * Write the bootstrap into the run directory and say how to point a child at it.
  *
- * The spans file is **not** in the run directory, and that is the point. It is a transport: orca
+ * The spans file is **not** in the run directory, and that is the point. It is a transport: agenticreplay
  * reads it once, turns what it needs into events, and those go to disk through `TraceWriter`, which
- * redacts. The file itself is written by the agent's own interpreter, so nothing orca owns can
+ * redacts. The file itself is written by the agent's own interpreter, so nothing agenticreplay owns can
  * redact it on the way in — and while it sat in the run directory that made it a sink the write path
- * never touched, `orca scrub` never rewrote (it reaches `events.jsonl`, the manifest and the blobs,
- * and nothing else), and nobody deleted, in a directory people share. `orca scrub --match <secret>`
+ * never touched, `agenticreplay scrub` never rewrote (it reaches `events.jsonl`, the manifest and the blobs,
+ * and nothing else), and nobody deleted, in a directory people share. `agenticreplay scrub --match <secret>`
  * over such a run printed "nothing matched — the trace is unchanged" with the secret still beside
  * the trace, which is the one failure mode SECURITY.md says a scrubber must not have.
  *
- * Somewhere orca owns fixes it. `mkdtemp` gives a directory only this user can enter, with a name
+ * Somewhere agenticreplay owns fixes it. `mkdtemp` gives a directory only this user can enter, with a name
  * nobody can guess ahead of it, and {@link discardAgentSpanTransport} takes the whole thing away
  * when the run is done. The file is pre-created here rather than left to the child, so it carries
  * the 0600 SECURITY.md promises instead of whatever the agent's umask happens to be — the same thing
@@ -274,7 +297,7 @@ export async function installAgentSpans(runDir: string): Promise<AgentSpanCaptur
   const dir = join(runDir, 'py');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, SITECUSTOMIZE), SITECUSTOMIZE_SOURCE, 'utf8');
-  const transportDir = await mkdtemp(join(tmpdir(), 'orca-spans-'));
+  const transportDir = await mkdtemp(join(tmpdir(), 'agenticreplay-spans-'));
   const spansPath = join(transportDir, SPANS_FILENAME);
   const was = process.platform === 'win32' ? await privatePathIdentity(transportDir) : undefined;
   // Narrowed before the first write, for the reason the comment above no longer gets to assume:
@@ -312,8 +335,8 @@ export async function installAgentSpans(runDir: string): Promise<AgentSpanCaptur
   return { spansPath, pythonPath: dir, transportDir };
 }
 
-/** Prefixes of the transport directories orca mints, for {@link sweepStaleTransports}. */
-const TRANSPORT_PREFIXES = ['orca-spans-', 'orca-shell-'];
+/** Prefixes of the transport directories agenticreplay mints, for {@link sweepStaleTransports}. */
+const TRANSPORT_PREFIXES = ['agenticreplay-spans-', 'agenticreplay-shell-'];
 
 /** Names the process that minted a transport, so a sweep can ask whether it is still running. */
 export const TRANSPORT_OWNER = 'owner.pid';
@@ -347,11 +370,11 @@ const TRANSPORT_HEARTBEAT_MS = 5 * 60 * 1000;
  * agent *runs a command*. An agent that spends a day on one model turn, or on one long command,
  * writes nothing for a day while being entirely alive.
  *
- * The consequence was not a stale directory: the next `orca record` anywhere on that machine would
+ * The consequence was not a stale directory: the next `agenticreplay record` anywhere on that machine would
  * delete a live run's transport, and both writers swallow the `ENOENT` that follows by design
  * (`shell-shim/src/runner.ts`, `processor.py`). Every remaining frame and span would be lost
  * without a word, the trace would still report success, and `shell.ineffective` would go on to
- * blame the harness for commands orca itself had deleted the evidence of.
+ * blame the harness for commands agenticreplay itself had deleted the evidence of.
  *
  * A heartbeat answers the question instead of widening the window it is asked in. While the owner
  * lives it keeps saying so, in the one way a sweep in another pid namespace can still read; an
@@ -384,7 +407,7 @@ export function touchTransports(
 /**
  * Remove transports that outlived the run that made them.
  *
- * The drain removes one, and `recordCommand` removes one whose run threw. Neither runs when orca
+ * The drain removes one, and `recordCommand` removes one whose run threw. Neither runs when agenticreplay
  * itself is killed — `SIGKILL`, a `taskkill`, a power cut — and then the directory stays, holding
  * every command line the agent ran, un-redacted, under a name nobody was ever shown. Deleting
  * harder at exit does not help, because nothing gets to run at exit; the only thing that can
@@ -394,7 +417,7 @@ export function touchTransports(
  * directory's mtime is set when `mkdtemp` creates it and never moves again, because everything
  * after that is an *append* to the one file inside, and appending does not touch the containing
  * directory. So "older than a day" meant "this recording started more than a day ago", and any
- * other `orca record` on the machine would collect the live transport of a recording still in
+ * other `agenticreplay record` on the machine would collect the live transport of a recording still in
  * progress — after which that run silently captures nothing, because both writers swallow their
  * errors by design.
  *

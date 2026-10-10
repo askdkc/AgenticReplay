@@ -1,6 +1,6 @@
 # Integration checks
 
-`orca record generic-openai -- python your_agent.py` is documented as working for LangGraph,
+`agenticreplay record generic-openai -- python your_agent.py` is documented as working for LangGraph,
 CrewAI, the OpenAI Agents SDK and anything else that reads a base-URL variable. Until this
 directory existed, that was a sentence.
 
@@ -13,7 +13,7 @@ in CI that goes red.
 `checkAdapterContract` guards against adapter rot — a harness renames the variable it reads and the
 adapter keeps setting the old one. It cannot see whether anything was actually captured.
 
-`orca record opencode` once produced a trace with two events and no model exchange, twice over, for
+`agenticreplay record opencode` once produced a trace with two events and no model exchange, twice over, for
 two independent reasons. The contract was green for both. What catches that shape is running the
 thing and counting what came back.
 
@@ -41,7 +41,7 @@ a matrix that only exercised a plain completion would have said nothing about ei
 | `litellm` | `OPENAI_API_BASE` through LiteLLM | **Aider** — and anything else riding that transport |
 | `openhands-sdk` | the OpenHands SDK's own `LLM`, which wraps LiteLLM | OpenHands |
 | `crewai` | CrewAI's own `Agent`, `Task` and `Crew` | CrewAI, which since 1.x does **not** use LiteLLM |
-| `openai-agents` | the Agents SDK on the **Responses API**, its default | the Agents SDK, and orca's `responses` dialect |
+| `openai-agents` | the Agents SDK on the **Responses API**, its default | the Agents SDK, and agenticreplay's `responses` dialect |
 | `openai-agents-handoff` | two agents, a handoff and a guardrail — reported by the SDK, not seen on the wire | the sixth capture layer |
 | `langgraph-stream` | LangChain's own `OPENAI_API_BASE`, over SSE | LangGraph, LangChain |
 | `langgraph-tools` | the same, with a bound tool | tool-calling graphs |

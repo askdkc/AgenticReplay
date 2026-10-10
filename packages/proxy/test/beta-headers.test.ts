@@ -5,7 +5,7 @@ import { betasForModelChange } from '../src/server.js';
  * `anthropic-beta` is a header, so substituting a model in the request body leaves it behind. A
  * fork of a run made on a 1M-context model onto one without that entitlement came back
  * `400 The long context beta is not yet available for this subscription` — a failure that names
- * the subscription rather than the flag, and so reads as an account problem rather than as orca
+ * the subscription rather than the flag, and so reads as an account problem rather than as agenticreplay
  * carrying over something it should have dropped.
  */
 describe('betasForModelChange', () => {

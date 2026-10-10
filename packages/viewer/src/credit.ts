@@ -1,5 +1,5 @@
 /**
- * The credit line every artefact orca hands out carries.
+ * The credit line every artefact agenticreplay hands out carries.
  *
  * Two surfaces show it — the exported HTML page (`html.ts`) and the SVG cards the CLI renders
  * (`cli/src/share-card.ts`) — and they have to agree, because a run someone forwards is often the
@@ -15,10 +15,10 @@
  */
 
 /** Who made the thing you are looking at. */
-export const CREDIT_MADE_BY = 'Recorded with OrcaReplay · built by the OrcaRouter.ai team';
+export const CREDIT_MADE_BY = 'Recorded with AgenticReplay';
 
 /** Where to go next. Deliberately the repository, not a product page. */
-export const CREDIT_REPO = 'github.com/Continuum-AI-Corp/OrcaReplay';
+export const CREDIT_REPO = 'github.com/askdkc/AgenticReplay';
 
 /** Both halves, for a surface with room for one line. */
 export const CREDIT_LINE = `${CREDIT_MADE_BY} · ${CREDIT_REPO}`;

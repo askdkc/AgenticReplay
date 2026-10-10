@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "orcareplay": {
+    "agenticreplay": {
       "command": "npx",
-      "args": ["-y", "orcareplay", "mcp"]
+      "args": ["-y", "agenticreplay", "mcp"]
     }
   }
 }

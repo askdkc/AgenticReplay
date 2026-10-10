@@ -1,24 +1,24 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SessionSupport } from '@orcareplay/plugin-api';
+import type { SessionSupport } from '@agenticreplay/plugin-api';
 
 export type { SessionSupport };
 
 /**
  * Capturing what the harness itself wrote about the session.
  *
- * Orca's own capture layers record the *effects* of a run — model calls, tool calls, file writes,
+ * AgenticReplay's own capture layers record the *effects* of a run — model calls, tool calls, file writes,
  * shell commands. None of them record the *stimulus*: what the person typed. A run started as
- * `orca record claude` and driven by hand therefore replays into an agent with nothing to make it
+ * `agenticreplay record claude` and driven by hand therefore replays into an agent with nothing to make it
  * ask anything, which is why an interactive recording came back blank while an `-p` one replayed
  * perfectly.
  *
  * Both harnesses already write that missing half to disk themselves, in their own transcript, and
- * both can be pointed back at a session by id. So orca does not need to intercept a terminal: it
+ * both can be pointed back at a session by id. So agenticreplay does not need to intercept a terminal: it
  * needs to notice which file the harness just wrote, keep a copy, and read the prompts back out.
  */
 
-/** What a harness recorded about one session, in the two forms orca needs. */
+/** What a harness recorded about one session, in the two forms agenticreplay needs. */
 export interface SessionCapture {
   /** Harness session id, where the harness has one. This is what `--resume` takes. */
   id?: string;
@@ -26,7 +26,7 @@ export interface SessionCapture {
   relPath: string;
   /** The harness's own file, verbatim. Restoring it is what makes a native fork possible. */
   bytes: Uint8Array;
-  /** The user's turns, in order — the stimulus orca could not otherwise reconstruct. */
+  /** The user's turns, in order — the stimulus agenticreplay could not otherwise reconstruct. */
   prompts: string[];
 }
 
@@ -101,7 +101,7 @@ export async function captureSession(
   try {
     parsed = support.parse(bytes);
   } catch {
-    // A format orca does not recognise still has value as bytes a human can read; losing the
+    // A format agenticreplay does not recognise still has value as bytes a human can read; losing the
     // prompts is a degraded capture, not a failed one.
   }
   return { id: parsed.id, relPath: best.relPath, bytes, prompts: parsed.prompts };

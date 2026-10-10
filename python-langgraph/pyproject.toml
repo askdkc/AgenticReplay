@@ -3,13 +3,13 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orcareplay-langgraph"
+name = "agenticreplay-langgraph"
 version = "0.1.0"
-description = "Record a LangGraph run's own structure — which node ran, in which superstep, and how it ended — into an OrcaReplay trace."
+description = "Record a LangGraph run's own structure — which node ran, in which superstep, and how it ended — into an AgenticReplay trace."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-keywords = ["langgraph", "langchain", "tracing", "replay", "debugging", "orcareplay"]
+keywords = ["langgraph", "langchain", "tracing", "replay", "debugging", "agenticreplay"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -20,7 +20,7 @@ classifiers = [
 
 # Neither `langgraph` nor `langchain-core` is a dependency, on purpose. This package is inert
 # without them, and installing a framework as a side effect of installing a debugging aid is the
-# kind of thing that makes people uninstall the debugging aid. It is also what lets `orca record`
+# kind of thing that makes people uninstall the debugging aid. It is also what lets `agenticreplay record`
 # leave the bootstrap in front of every Python process in a run: importing this costs nothing.
 dependencies = []
 
@@ -28,8 +28,8 @@ dependencies = []
 dev = ["pytest>=7.0", "langgraph>=0.2", "langchain-core>=0.3"]
 
 [project.urls]
-Homepage = "https://github.com/Continuum-AI-Corp/OrcaReplay"
-Source = "https://github.com/Continuum-AI-Corp/OrcaReplay/tree/main/python-langgraph"
+Homepage = "https://github.com/askdkc/AgenticReplay"
+Source = "https://github.com/askdkc/AgenticReplay/tree/main/python-langgraph"
 
 [tool.setuptools]
-packages = ["orcareplay_langgraph"]
+packages = ["agenticreplay_langgraph"]

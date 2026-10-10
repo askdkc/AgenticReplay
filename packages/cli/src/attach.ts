@@ -1,15 +1,15 @@
 import { isIP } from 'node:net';
 
 /**
- * Recording an agent orca does not launch.
+ * Recording an agent agenticreplay does not launch.
  *
- * Every other capture path here ends in a child process: an adapter builds an environment and orca
+ * Every other capture path here ends in a child process: an adapter builds an environment and agenticreplay
  * spawns the agent inside it. That is the design, and it has exactly one boundary it cannot cross
  * — an agent that is not on this machine. A bot on a VPS, an agent inside a dev container or a
  * cloud sandbox, a harness someone else's CI runs: there is no process to spawn, so there is no
  * environment to build.
  *
- * Orca can still be reachable, and can still say precisely what to set. The proxy already accepts
+ * AgenticReplay can still be reachable, and can still say precisely what to set. The proxy already accepts
  * a bind address. What was missing is this half: the block of variables the operator pastes on the
  * far side, which has to be right or the run comes back empty with nothing to explain why.
  *
@@ -26,8 +26,8 @@ import { isIP } from 'node:net';
  * somebody's API key, so the pattern is deliberately broad.
  *
  * Omitting them is also simply correct. The agent in the sandbox already holds whatever credential
- * it authenticates with, and orca forwards it upstream untouched. Exporting the local machine's
- * key would leak it; exporting the `orca-recorded` placeholder an adapter substitutes when the
+ * it authenticates with, and agenticreplay forwards it upstream untouched. Exporting the local machine's
+ * key would leak it; exporting the `agenticreplay-recorded` placeholder an adapter substitutes when the
  * local environment has none would be worse — it would overwrite a working key over there and turn
  * a functioning setup into a 401.
  */
@@ -49,9 +49,9 @@ export interface AdvertiseRequest {
  * The origin a remote agent should be pointed at.
  *
  * `0.0.0.0` is a statement about listening, not an address: an agent handed `http://0.0.0.0:8080`
- * fails in a way that looks like orca is broken rather than like the invocation was incomplete. So
+ * fails in a way that looks like agenticreplay is broken rather than like the invocation was incomplete. So
  * a wildcard bind must be paired with the name the sandbox actually reaches this machine by, and
- * refusing is the only honest option — orca cannot discover that name, and guessing one produces a
+ * refusing is the only honest option — agenticreplay cannot discover that name, and guessing one produces a
  * run that records nothing.
  */
 export function advertisedUrl(req: AdvertiseRequest): string {
@@ -61,7 +61,7 @@ export function advertisedUrl(req: AdvertiseRequest): string {
       .replace(/^https?:\/\//, '')
       .replace(/\/+$/, '');
     // A host the operator wrote a port into is used as-is: behind a port-mapped container the
-    // reachable port is not the one orca bound, and orca has no way to learn the mapping.
+    // reachable port is not the one agenticreplay bound, and agenticreplay has no way to learn the mapping.
     return `http://${hasPort(host) ? host : `${bracketed(host)}:${req.port}`}`;
   }
   if (WILDCARD_BINDS.has(req.bind)) {
@@ -128,7 +128,7 @@ export function attachExports(req: AttachRequest): Record<string, string> {
   env.HTTPS_PROXY = req.proxyUrl;
   env.https_proxy = req.proxyUrl;
   // One path for all of them, unlike a local run. The bundle exists so an intercepted child keeps
-  // reaching the hosts orca deliberately does not decrypt; a sandbox that already trusts the
+  // reaching the hosts agenticreplay deliberately does not decrypt; a sandbox that already trusts the
   // public roots needs only the run CA added, and shipping one file is what makes the copy step a
   // single line the operator will actually run.
   for (const name of [
@@ -173,6 +173,6 @@ export function attachInstructions(req: AttachRequest): string[] {
     lines.push(`export ${name}=${shellQuote(value)}`);
   }
   // Said out loud, because a block with no key in it reads as an incomplete one.
-  lines.push(`# your agent's own credential is unchanged — orca forwards it upstream`);
+  lines.push(`# your agent's own credential is unchanged — agenticreplay forwards it upstream`);
   return lines;
 }

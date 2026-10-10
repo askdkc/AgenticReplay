@@ -10,17 +10,17 @@ export default defineConfig({
     // CONTRIBUTING promises a five-minute dev loop; a mandatory build step is how that promise
     // quietly becomes twenty.
     alias: {
-      '@orcareplay/schema': pkg('schema'),
-      '@orcareplay/plugin-api': pkg('plugin-api'),
-      '@orcareplay/core': pkg('core'),
-      '@orcareplay/fs-capture': pkg('fs-capture'),
-      '@orcareplay/providers': pkg('providers'),
-      '@orcareplay/proxy': pkg('proxy'),
-      '@orcareplay/adapters': pkg('adapters'),
-      '@orcareplay/node-instrument': pkg('node-instrument'),
-      '@orcareplay/mcp-shim': pkg('mcp-shim'),
-      '@orcareplay/shell-shim': pkg('shell-shim'),
-      '@orcareplay/viewer': pkg('viewer'),
+      '@agenticreplay/schema': pkg('schema'),
+      '@agenticreplay/plugin-api': pkg('plugin-api'),
+      '@agenticreplay/core': pkg('core'),
+      '@agenticreplay/fs-capture': pkg('fs-capture'),
+      '@agenticreplay/providers': pkg('providers'),
+      '@agenticreplay/proxy': pkg('proxy'),
+      '@agenticreplay/adapters': pkg('adapters'),
+      '@agenticreplay/node-instrument': pkg('node-instrument'),
+      '@agenticreplay/mcp-shim': pkg('mcp-shim'),
+      '@agenticreplay/shell-shim': pkg('shell-shim'),
+      '@agenticreplay/viewer': pkg('viewer'),
     },
   },
   test: {

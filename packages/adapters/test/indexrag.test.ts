@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
-import { decodeForwardPath } from '@orcareplay/proxy';
+import type { RecordContext } from '@agenticreplay/plugin-api';
+import { decodeForwardPath } from '@agenticreplay/proxy';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { indexRagAdapter } from '../src/indexrag.js';
 import { defaultAdapters } from '../src/registry.js';
@@ -20,7 +20,7 @@ describe('the indexrag adapter', () => {
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-indexrag-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-indexrag-'));
     await mkdir(join(root, 'work'), { recursive: true });
     await mkdir(join(root, 'run'), { recursive: true });
     ctx = {
@@ -85,7 +85,7 @@ describe('the indexrag adapter', () => {
     });
 
     /**
-     * The second origin keeps its destination. Orca's upstream map is keyed by wire dialect, so
+     * The second origin keeps its destination. AgenticReplay's upstream map is keyed by wire dialect, so
      * "chat at a gateway, embeddings at a dedicated provider" cannot be expressed by any
      * `--upstream-*`; the request has to carry its own address or the proxy has to guess, and
      * guessing sent the embedding provider's key to `api.openai.com`.

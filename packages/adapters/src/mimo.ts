@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
 
 /**
@@ -7,7 +7,7 @@ import { detectAgent } from './detect.js';
  * Nothing is redirected, and that is inherited rather than chosen: like OpenCode, MiMo keeps its
  * provider origin in a config file (`~/.config/mimocode/mimocode.jsonc`) rather than in an
  * environment variable, so `OPENAI_BASE_URL` leaves the run talking straight past the proxy. The
- * route that works is the one orca built for an origin that cannot be moved — `--tls-intercept`
+ * route that works is the one agenticreplay built for an origin that cannot be moved — `--tls-intercept`
  * terminates the TLS the agent established itself, and the config is left alone.
  *
  * Being a fork does *not* mean it inherits an OpenCode installation. The two read parallel
@@ -17,7 +17,7 @@ import { detectAgent } from './detect.js';
  *
  * `api.xiaomimimo.com` is in `DEFAULT_TLS_HOSTS`, so no extra `--tls-hosts` is needed for the
  * built-in `xiaomi/*` and `mimo/*` models. A provider of your own pointed at a plain-HTTP gateway
- * is a different matter: orca sets `HTTPS_PROXY` and not `HTTP_PROXY`, so that traffic is neither
+ * is a different matter: agenticreplay sets `HTTPS_PROXY` and not `HTTP_PROXY`, so that traffic is neither
  * redirected nor decrypted and the run records nothing.
  *
  * A credential is not required to capture the prompt. MiMo sends the request and lets the server

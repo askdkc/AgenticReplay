@@ -51,7 +51,7 @@ describe.runIf(process.platform === 'win32')('ACL scratch replacement', () => {
   });
 
   it('rechecks identity after the sentinel write before trusting any saved descriptor', async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-scratch-race-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-scratch-race-'));
     const file = join(root, 'secret');
     await writeFile(file, 'original contents');
     attack.enabled = true;

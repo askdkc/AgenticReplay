@@ -7,9 +7,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns } from '@orcareplay/core';
-import { RunCa } from '@orcareplay/proxy';
-import { validateEvent } from '@orcareplay/schema';
+import { TraceReader, listRuns } from '@agenticreplay/core';
+import { RunCa } from '@agenticreplay/proxy';
+import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -23,13 +23,13 @@ const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
 /**
  * `--tls-intercept` on a fork.
  *
- * The parser accepted this flag on every command and only `orca record` did anything with it, so
- * `orca replay --model`, `orca fork` and `orca compare` — the three that also launch a real agent —
+ * The parser accepted this flag on every command and only `agenticreplay record` did anything with it, so
+ * `agenticreplay replay --model`, `agenticreplay fork` and `agenticreplay compare` — the three that also launch a real agent —
  * took it and threw it away. A flag that is accepted and ignored is the worst kind: the operator
  * believes they captured the traffic, and the absence of `net.*` events reads as "the agent made no
- * other calls" rather than as "orca was not looking".
+ * other calls" rather than as "agenticreplay was not looking".
  */
-describe('orca replay --model --tls-intercept', () => {
+describe('agenticreplay replay --model --tls-intercept', () => {
   let workspace: string;
   let originDir: string;
   let scratch: string;
@@ -40,9 +40,9 @@ describe('orca replay --model --tls-intercept', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-forktls-'));
-    originDir = await mkdtemp(join(tmpdir(), 'orca-forktlsorigin-'));
-    scratch = await mkdtemp(join(tmpdir(), 'orca-forktlsscratch-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-forktls-'));
+    originDir = await mkdtemp(join(tmpdir(), 'agenticreplay-forktlsorigin-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-forktlsscratch-'));
     originCa = await RunCa.create({ runDir: originDir });
 
     model = await startFakeModel();
@@ -50,8 +50,8 @@ describe('orca replay --model --tls-intercept', () => {
 
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
-    process.env.ORCA_TLS_UPSTREAM_CA = originCa.certPath;
-    process.env.ORCA_TEST_ORIGIN_CA = originCa.certPath;
+    process.env.AGENTICREPLAY_TLS_UPSTREAM_CA = originCa.certPath;
+    process.env.AGENTICREPLAY_TEST_ORIGIN_CA = originCa.certPath;
 
     // A git repo, so the shadow index can snapshot — a fork needs a checkpoint, and a checkpoint
     // needs a filesystem snapshot.
@@ -62,7 +62,11 @@ describe('orca replay --model --tls-intercept', () => {
   });
 
   afterEach(async () => {
-    for (const key of ['ORCA_TLS_UPSTREAM_CA', 'ORCA_TEST_ORIGIN_CA', 'ORCA_TEST_TARGETS']) {
+    for (const key of [
+      'AGENTICREPLAY_TLS_UPSTREAM_CA',
+      'AGENTICREPLAY_TEST_ORIGIN_CA',
+      'AGENTICREPLAY_TEST_TARGETS',
+    ]) {
       delete process.env[key];
     }
     await model.close();
@@ -105,7 +109,7 @@ describe('orca replay --model --tls-intercept', () => {
 
   it('mints a CA, decrypts the allowlisted host and writes net.* into the fork trace', async () => {
     await record();
-    process.env.ORCA_TEST_TARGETS = JSON.stringify([
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify([
       { host: '127.0.0.1', port: bank.port, path: '/accounts' },
     ]);
 

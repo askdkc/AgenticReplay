@@ -20,8 +20,8 @@ const run = promisify(execFile);
  */
 const declared = vi.hoisted(() => ({ capture: [] as string[], reset: [] as string[] }));
 
-vi.mock('@orcareplay/adapters', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@orcareplay/adapters')>();
+vi.mock('@agenticreplay/adapters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agenticreplay/adapters')>();
   return {
     ...actual,
     defaultAdapters: () => {
@@ -71,7 +71,7 @@ describe('a replay over a declared path inside a nested repository', () => {
   // the process, made under whatever the temp dir was the first time it was needed, and a temp dir
   // removed after the first test took that one with it.
   beforeAll(async () => {
-    scratch = await mkdtemp(join(tmpdir(), 'orca-inside-tmp-'));
+    scratch = await mkdtemp(join(tmpdir(), 'agenticreplay-inside-tmp-'));
     for (const key of ['TMPDIR', 'TMP', 'TEMP']) {
       saved[key] = process.env[key];
       process.env[key] = scratch;
@@ -86,7 +86,7 @@ describe('a replay over a declared path inside a nested repository', () => {
   });
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-inside-e2e-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-inside-e2e-'));
     before = await safetyCopies();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -136,7 +136,7 @@ describe('a replay over a declared path inside a nested repository', () => {
   const mine = (): Promise<string | undefined> =>
     readFile(join(workspace, 'data', 'cache', 'mine.bin'), 'utf8').catch(() => undefined);
   const safetyCopies = async (): Promise<string[]> =>
-    (await readdir(scratch)).filter((entry) => entry.startsWith('orca-safety-'));
+    (await readdir(scratch)).filter((entry) => entry.startsWith('agenticreplay-safety-'));
   /** What this test's replay left, not what an earlier one did. */
   const leftBehind = async (): Promise<string[]> =>
     (await safetyCopies()).filter((entry) => !before.includes(entry));

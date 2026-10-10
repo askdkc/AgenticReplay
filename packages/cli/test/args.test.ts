@@ -9,9 +9,9 @@ describe('flags that never take a value', () => {
    * it, and `bool()` then returned its fallback because the value was a string. So the flag was
    * silently off *and* the positional was gone.
    *
-   * Two of those are dangerous rather than merely wrong. `orca replay --worktree last` is
+   * Two of those are dangerous rather than merely wrong. `agenticreplay replay --worktree last` is
    * documented as "never touches your files", and with `--worktree` swallowed it restores the
-   * recorded tree over the working directory instead. `orca record --tls-intercept codex` turns
+   * recorded tree over the working directory instead. `agenticreplay record --tls-intercept codex` turns
    * interception off and loses the agent name, so record auto-detects and may capture a different
    * harness entirely. Neither warned.
    *
@@ -21,7 +21,7 @@ describe('flags that never take a value', () => {
   /*
    * `--force` was registered in the other half of the flag contract (flags.ts: push and pull both
    * take it) and read with `args.bool('force')`, but never added HERE — so it was value-taking,
-   * and the natural `orca push --force run_abc` swallowed the selector.
+   * and the natural `agenticreplay push --force run_abc` swallowed the selector.
    *
    * That one is worse than the two above, because it DISCLOSES. With the selector gone,
    * pushCommand falls back to `positionals[0] ?? 'last'` and packs a DIFFERENT recording — the

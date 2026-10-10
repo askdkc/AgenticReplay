@@ -11,7 +11,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { isIPv4, isIPv6 } from 'node:net';
 import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
-import { restrictToOwner } from '@orcareplay/core';
+import { restrictToOwner } from '@agenticreplay/core';
 import {
   derBitString,
   derBoolean,
@@ -79,7 +79,7 @@ function signCertificate(tbs: Buffer, issuerKey: KeyObject): string {
 
 function distinguishedName(commonName: string): Buffer {
   return derSequence(
-    derSet(derSequence(derOid(OID.organization), derUtf8String('OrcaReplay'))),
+    derSet(derSequence(derOid(OID.organization), derUtf8String('AgenticReplay'))),
     derSet(derSequence(derOid(OID.commonName), derUtf8String(commonName))),
   );
 }
@@ -243,7 +243,7 @@ export class RunCa {
     const notAfter = new Date(Date.now() + lifetimeMs);
     // Names the run directory it belongs to, so a certificate found in a browser's warning dialog
     // can be traced back to the run that minted it — and so two concurrent runs never collide.
-    const subject = distinguishedName(`OrcaReplay run CA ${randomBytes(4).toString('hex')}`);
+    const subject = distinguishedName(`AgenticReplay run CA ${randomBytes(4).toString('hex')}`);
     const spki = authority.publicKey.export({ type: 'spki', format: 'der' });
     const authorityKeyId = keyIdentifier(authority.publicKey);
 
@@ -369,7 +369,7 @@ export class RunCa {
    */
   async dispose(): Promise<void> {
     // Removed first: a listener left behind would keep the closure — and a reference to this run —
-    // alive for the life of the process, and orca records more than one run per process.
+    // alive for the life of the process, and agenticreplay records more than one run per process.
     process.off('exit', this.#atExit);
     await rm(this.dir, { recursive: true, force: true });
   }

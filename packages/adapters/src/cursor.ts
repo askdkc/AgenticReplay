@@ -1,4 +1,4 @@
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import { detectAgent } from './detect.js';
 
 /**
@@ -22,7 +22,7 @@ const CURSOR_AGENT_PATHS = [
 /**
  * Cursor's terminal agent, which has nothing to redirect.
  *
- * Every other harness here reads an origin from somewhere orca can reach. Cursor reads none: the
+ * Every other harness here reads an origin from somewhere agenticreplay can reach. Cursor reads none: the
  * agent stream goes to hosts of Cursor's own over HTTP/2 exclusively, in Connect-over-protobuf,
  * and the endpoint is compiled in. So this adapter sets no variables at all and the redirect
  * happens underneath it, at the socket, when the run is given `--tls-intercept`.
@@ -48,9 +48,9 @@ const CURSOR_AGENT_PATHS = [
  * two shims sit in one directory, whichever name resolves means both do.
  *
  * On Windows that directory is `%LOCALAPPDATA%\cursor-agent\` and the installer does not add
- * it to PATH, so `orca record cursor` reports ENOENT until it is. Loud rather than silent, which
+ * it to PATH, so `agenticreplay record cursor` reports ENOENT until it is. Loud rather than silent, which
  * is the tradeoff for a fixture that means the same thing on every machine;
- * `orca record exec -- <full path to the shim> ...` is the way round it.
+ * `agenticreplay record exec -- <full path to the shim> ...` is the way round it.
  *
  * `harnessVersions` is deliberately unset: Cursor ships date-stamped builds
  * (`2026.09.02-c22c1a3`), not semver, so a range would be a claim in a vocabulary the harness

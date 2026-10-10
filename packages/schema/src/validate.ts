@@ -45,6 +45,16 @@ export function assertEvent(value: unknown): asserts value is TraceEvent {
 }
 
 export function assertManifest(value: unknown): asserts value is Manifest {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'schema_version' in value &&
+    !/^0\.4\.\d+$/.test(String(value.schema_version))
+  ) {
+    throw new Error(
+      'unsupported trace schema: AgenticReplay requires 0.4.x; legacy recordings are not migrated automatically',
+    );
+  }
   const r = validateManifest(value);
   if (!r.valid) throw new Error(`invalid manifest: ${r.errors.join('; ')}`);
 }

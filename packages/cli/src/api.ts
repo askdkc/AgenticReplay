@@ -9,9 +9,9 @@ import {
   type Checkpoint,
   type RunGraph,
   type RunRef,
-} from '@orcareplay/core';
-import type { TraceEvent } from '@orcareplay/schema';
-import { buildTimeline, detectLoops, exportTraceHtml, summarize } from '@orcareplay/viewer';
+} from '@agenticreplay/core';
+import type { TraceEvent } from '@agenticreplay/schema';
+import { buildTimeline, detectLoops, exportTraceHtml, summarize } from '@agenticreplay/viewer';
 import { parseArgs } from './args.js';
 import { Output, type LogEntry } from './out.js';
 import { recordCommand, type RecordResult } from './commands/record.js';
@@ -19,10 +19,10 @@ import { replayCommand, type ReplayResult } from './commands/replay.js';
 import { compareCommand, type CompareRow } from './commands/compare.js';
 
 /**
- * Driving orca from code.
+ * Driving agenticreplay from code.
  *
- * Everything orca knew was reachable only by running a command and reading a terminal: `orca show`
- * computed a timeline and formatted it away, `orca list` returned `void`. Anyone who wanted to ask
+ * Everything agenticreplay knew was reachable only by running a command and reading a terminal: `agenticreplay show`
+ * computed a timeline and formatted it away, `agenticreplay list` returned `void`. Anyone who wanted to ask
  * "what diverged when I replayed that run?" — a script, a CI job, an agent debugging its own
  * failure — had to parse `info replay.done reused=2/2 exact=2 divergences=0` out of stdout.
  *
@@ -35,14 +35,14 @@ import { compareCommand, type CompareRow } from './commands/compare.js';
  *   - Nothing here calls `process.exit`. Failures throw errors that name the run.
  */
 
-export interface OrcaOptions {
-  /** Project whose `.orca/runs` is being read. Defaults to the current directory. */
+export interface AgenticReplayOptions {
+  /** Project whose `.agenticreplay/runs` is being read. Defaults to the current directory. */
   cwd?: string;
-  /** Receives orca's own log lines as structured records, for a caller that wants progress. */
+  /** Receives agenticreplay's own log lines as structured records, for a caller that wants progress. */
   onLog?: (entry: LogEntry) => void;
 }
 
-/** One row of `orca show`, as data rather than a formatted line. */
+/** One row of `agenticreplay show`, as data rather than a formatted line. */
 export interface TimelineRow {
   seq: number;
   turn?: number;
@@ -86,7 +86,7 @@ export interface RecordOptions {
 }
 
 export interface RecordOutcome extends RecordResult {
-  /** Everything orca warned about during the run, so a caller with no terminal still sees it. */
+  /** Everything agenticreplay warned about during the run, so a caller with no terminal still sees it. */
   warnings: LogEntry[];
 }
 
@@ -109,11 +109,11 @@ export interface CompareOptions {
 }
 
 /**
- * What every command run through this API is told: orca's stdout belongs to someone else.
+ * What every command run through this API is told: agenticreplay's stdout belongs to someone else.
  *
  * `record`, `replay` and `compare` all spawn a real agent, and they spawn it with
  * `stdio: 'inherit'` — the file descriptor, which no in-process substitution can intercept. So an
- * embedded caller got the agent's output written over its own, and under `orca mcp` that
+ * embedded caller got the agent's output written over its own, and under `agenticreplay mcp` that
  * descriptor *is* the JSON-RPC transport: one line of agent chatter ends the session.
  *
  * `--json` is the existing spelling of "stdout is not a terminal here". The commands read it only
@@ -122,11 +122,11 @@ export interface CompareOptions {
  */
 const QUIET = ['--json'] as const;
 
-export class Orca {
+export class AgenticReplay {
   readonly cwd: string;
   readonly #onLog: ((entry: LogEntry) => void) | undefined;
 
-  constructor(options: OrcaOptions = {}) {
+  constructor(options: AgenticReplayOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.#onLog = options.onLog;
   }
@@ -145,7 +145,7 @@ export class Orca {
     return (await this.#reader(selector)).events();
   }
 
-  /** What `orca show` prints, as objects. */
+  /** What `agenticreplay show` prints, as objects. */
   async show(selector = 'last'): Promise<Timeline> {
     const reader = await this.#reader(selector);
     const manifest = reader.manifest();

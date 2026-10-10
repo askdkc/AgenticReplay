@@ -62,7 +62,7 @@ function stream(seen) {
  * The Responses API shape.
  *
  * Here because it is the OpenAI Agents SDK's *default* — not an option it offers — so a check that
- * quietly switched the SDK to chat completions would prove the wrong path works. orca has carried a
+ * quietly switched the SDK to chat completions would prove the wrong path works. agenticreplay has carried a
  * `responses` dialect since early on; until this, nothing end to end exercised it.
  */
 /** How many Responses calls this instance has answered, so a handoff can happen on the first. */
@@ -192,7 +192,7 @@ const server = createServer((req, res) => {
       seen = JSON.parse(body || '{}');
     } catch {
       // A body this stub cannot parse is still a request worth answering; the shape under test is
-      // whether orca captured it, not whether the client sent valid JSON.
+      // whether agenticreplay captured it, not whether the client sent valid JSON.
     }
 
     // Before `/completions`, which it does not end in, but ahead of the generic branch for the

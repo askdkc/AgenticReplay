@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Redactor } from '@orcareplay/core';
-import type { CanonicalRequest } from '@orcareplay/plugin-api';
+import { Redactor } from '@agenticreplay/core';
+import type { CanonicalRequest } from '@agenticreplay/plugin-api';
 import {
   RequestMatcher,
   canonicalHash,
@@ -123,7 +123,7 @@ describe('RequestMatcher — the ladder from spec §4', () => {
     // The failure this locks out: rung 2 used to accept *any* difference within tolerance, and the
     // tolerance has a 64-character floor. On a short request that floor is a large share of the
     // whole body, so replacing "fix the auth test" with "do something completely different" landed
-    // inside it — and OrcaReplay answered a different question with the recorded reply and filed it
+    // inside it — and AgenticReplay answered a different question with the recorded reply and filed it
     // as `minor`. The ask is the one thing that can never be incidental: rung 2 is for drift around
     // the question (a regenerated id, a changed cwd), not the question itself.
     const m = new RequestMatcher(recorded);
@@ -766,7 +766,7 @@ describe('RequestMatcher — how far the ask itself may drift', () => {
 
 describe('RequestMatcher — when the world answers differently', () => {
   /**
-   * Orca does not intercept tool execution, so a replayed agent really re-runs its commands. This
+   * AgenticReplay does not intercept tool execution, so a replayed agent really re-runs its commands. This
    * is the shape that takes in practice: `node --test` reprinting its own durations.
    */
   const output = (ms: string) =>

@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validateEvent } from '@orcareplay/schema';
+import { validateEvent } from '@agenticreplay/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BlobStore } from '../src/blobs.js';
 
@@ -9,7 +9,7 @@ let dir: string;
 let store: BlobStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'orca-blobs-'));
+  dir = await mkdtemp(join(tmpdir(), 'agenticreplay-blobs-'));
   store = new BlobStore(join(dir, 'blobs'));
 });
 
@@ -47,7 +47,7 @@ describe('BlobStore.put', () => {
       mono_us: 0,
       turn: 0,
       type: 'note',
-      actor: 'orca',
+      actor: 'agenticreplay',
       payload: ref,
     });
     expect(r.valid, r.errors.join(',')).toBe(true);

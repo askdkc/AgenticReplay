@@ -1,11 +1,11 @@
 {
-  "name": "@orcareplay/proxy",
+  "name": "@agenticreplay/proxy",
   "version": "0.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Continuum-AI-Corp/OrcaReplay.git",
+    "url": "https://github.com/askdkc/AgenticReplay.git",
     "directory": "packages/proxy"
   },
   "main": "./dist/index.js",
@@ -17,9 +17,12 @@
     "dist"
   ],
   "dependencies": {
-    "@orcareplay/plugin-api": "0.5.0",
-    "@orcareplay/schema": "0.5.0",
-    "@orcareplay/core": "0.5.0",
-    "@orcareplay/providers": "0.5.0"
+    "@agenticreplay/plugin-api": "0.5.0",
+    "@agenticreplay/schema": "0.5.0",
+    "@agenticreplay/core": "0.5.0",
+    "@agenticreplay/providers": "0.5.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

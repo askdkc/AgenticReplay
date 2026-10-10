@@ -9,9 +9,9 @@ const ESC = String.fromCharCode(27);
  */
 describe('--no-color', () => {
   /**
-   * `--no-color` is listed in `orca --help`, and nothing read it: `parseArgs` set the flag and
+   * `--no-color` is listed in `agenticreplay --help`, and nothing read it: `parseArgs` set the flag and
    * `Output` computed colour from `isTTY`/`ci`/`NO_COLOR` alone, so on a terminal the flag was
-   * inert and `orca show --no-color` still emitted ANSI. A documented flag that does nothing is
+   * inert and `agenticreplay show --no-color` still emitted ANSI. A documented flag that does nothing is
    * worse than an undocumented one — it is the flag people pipe through when a log ends up
    * unreadable.
    */
@@ -113,12 +113,12 @@ describe('Output', () => {
       event: 'replay.no_match',
       what: 'no recorded response matched request 14',
       why: 'the agent asked something the recording never saw',
-      next: 'orca replay last --loose',
+      next: 'agenticreplay replay last --loose',
     });
     const text = s.lines.join('');
     expect(text).toContain('no recorded response matched request 14');
     expect(text).toContain('the agent asked something the recording never saw');
-    expect(text).toContain('orca replay last --loose');
+    expect(text).toContain('agenticreplay replay last --loose');
   });
 
   it('never prints a value that looks like a secret, even to a TTY', () => {
@@ -155,7 +155,7 @@ describe('Output', () => {
  *
  * Every string in a row came from somewhere else — the gateway's run listing, a trace's event
  * detail, a trace a colleague sent you — and the renderer printed all of it verbatim. Measured
- * against `orca list --remote` answered by a hostile listing: a newline split one row into two
+ * against `agenticreplay list --remote` answered by a hostile listing: a newline split one row into two
  * and the second was a run the gateway never held, a carriage return rewrote OUTCOME after it
  * was printed, and `ESC [ 2 J` cleared the screen. The fix belongs here rather than at each
  * caller, because "one row is one line" is a property of the table, not of whoever fills it.
@@ -223,7 +223,7 @@ describe('table cells cannot drive the terminal', () => {
    * stopped there. U+202E and its family are not in those ranges and a terminal honours them all
    * the same: they reverse what follows, and the effect runs to the end of the LINE rather than
    * the cell, so one field shuffles the columns beside it and a run key reads as a name it is
-   * not. In a listing whose purpose is to hand `orca pull` an id, that is the same lie a newline
+   * not. In a listing whose purpose is to hand `agenticreplay pull` an id, that is the same lie a newline
    * told, spelled differently.
    */
   describe('bidirectional controls are shown, not obeyed', () => {
@@ -406,7 +406,7 @@ describe('table cells cannot drive the terminal', () => {
 
   /**
    * A thrown message is composed as lines, and `main` hands every line after the first as `why`.
-   * Taming `why` whole spelled those breaks as `\x0a`: `orca export --card x.png` printed
+   * Taming `why` whole spelled those breaks as `\x0a`: `agenticreplay export --card x.png` printed
    * `npm i --no-save playwright-core pngjs gifenc\x0a  …then run this again` as its way out.
    */
   it('keeps the lines a failure was composed with, and still tames inside each one', () => {
@@ -440,8 +440,8 @@ describe('paths printed inside a suggested command', () => {
   const BACKSLASH = String.fromCharCode(92);
 
   it('leaves an ordinary path as it was', () => {
-    expect(shellArg('/home/u/proj/.orca/runs/run_x', 'linux')).toBe(
-      '/home/u/proj/.orca/runs/run_x',
+    expect(shellArg('/home/u/proj/.agenticreplay/runs/run_x', 'linux')).toBe(
+      '/home/u/proj/.agenticreplay/runs/run_x',
     );
     expect(shellArg(win`C:\Users\dev\proj`, 'win32')).toBe(win`C:\Users\dev\proj`);
     expect(shellArg('/home/u/工作区', 'linux')).toBe('/home/u/工作区');

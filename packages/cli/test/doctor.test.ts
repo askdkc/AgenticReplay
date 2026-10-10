@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
+import { TraceWriter } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { stripAnsi } from '../src/out.js';
@@ -10,13 +10,13 @@ import { doctorCommand, type DoctorCheck, type DoctorResult } from '../src/comma
 import { main } from '../src/main.js';
 
 /**
- * `orca doctor` exists because this tool injects environment variables into someone else's
+ * `agenticreplay doctor` exists because this tool injects environment variables into someone else's
  * process and shells out to git. When that does not work the user has no way to see why, so the
  * one thing doctor may never do is be vague — or be wrong about its own verdict.
  */
-describe('orca doctor — the capture layers', () => {
+describe('agenticreplay doctor — the capture layers', () => {
   /**
-   * `orca doctor` answers "will recording actually work here", and it checked node, git, the
+   * `agenticreplay doctor` answers "will recording actually work here", and it checked node, git, the
    * workspace, disk, a port and which agents are installed — but not two of the four capture
    * layers it exists to vouch for. Both fail in the same quiet way: the shim is never reached, the
    * agent runs perfectly, and the trace is simply missing a layer nobody notices until they go
@@ -26,14 +26,14 @@ describe('orca doctor — the capture layers', () => {
    * Nothing imported it.
    */
   // A temp directory, not `process.cwd()`. Both of these used to run doctor against the repository
-  // root, where the `.orca writable` check writes a probe file — a test that mutates the checkout
+  // root, where the `.agenticreplay writable` check writes a probe file — a test that mutates the checkout
   // it is testing. Neither shim check reads the working directory at all; each installs into a
   // temp dir of its own.
   let cwd: string;
   let out: Output;
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-doctor-shims-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-doctor-shims-'));
     out = new Output({ write: () => undefined, isTTY: false });
   });
   afterEach(async () => {
@@ -77,7 +77,7 @@ describe('doctor', () => {
   const realPath = process.env['PATH'];
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'orca-doctor-'));
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-doctor-'));
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
   });
@@ -143,12 +143,21 @@ describe('doctor', () => {
   });
 
   describe('node version', () => {
-    it('fails below 20 and says what to install', async () => {
+    it('fails below 24 and says what to install', async () => {
       Object.defineProperty(process, 'version', { value: 'v18.20.0', configurable: true });
       const check = find(await run(), 'node version');
       expect(check.status).toBe('fail');
       expect(check.detail).toContain('18');
-      expect(check.fix).toMatch(/20/);
+      expect(check.detail).toContain('24 or newer');
+      expect(check.fix).toMatch(/24/);
+    });
+
+    it.each([
+      ['v23.0.0', 'fail'],
+      ['v24.0.0', 'ok'],
+    ] as const)('enforces the Node 24 boundary for %s', async (version, status) => {
+      Object.defineProperty(process, 'version', { value: version, configurable: true });
+      expect(find(await run(), 'node version').status).toBe(status);
     });
 
     it('passes on the version actually running these tests', async () => {
@@ -177,26 +186,26 @@ describe('doctor', () => {
     });
   });
 
-  describe('.orca writable', () => {
+  describe('.agenticreplay writable', () => {
     it('passes against a real writable directory and leaves nothing behind', async () => {
-      const check = find(await run(), '.orca writable');
+      const check = find(await run(), '.agenticreplay writable');
       expect(check.status).toBe('ok');
       expect(await readdir(cwd), 'the probe file must be cleaned up').toEqual([]);
     });
 
-    it('probes inside .orca when it already exists', async () => {
-      await mkdir(join(cwd, '.orca'));
-      const check = find(await run(), '.orca writable');
+    it('probes inside .agenticreplay when it already exists', async () => {
+      await mkdir(join(cwd, '.agenticreplay'));
+      const check = find(await run(), '.agenticreplay writable');
       expect(check.status).toBe('ok');
-      expect(check.detail).toContain('.orca');
-      expect(await readdir(join(cwd, '.orca'))).toEqual([]);
+      expect(check.detail).toContain('.agenticreplay');
+      expect(await readdir(join(cwd, '.agenticreplay'))).toEqual([]);
     });
 
-    it('fails when .orca cannot be written to', async () => {
+    it('fails when .agenticreplay cannot be written to', async () => {
       // A file where the directory belongs: unwritable in a way that does not depend on uid,
       // since tests may well be running as root.
-      await writeFile(join(cwd, '.orca'), 'not a directory');
-      const check = find(await run(), '.orca writable');
+      await writeFile(join(cwd, '.agenticreplay'), 'not a directory');
+      const check = find(await run(), '.agenticreplay writable');
       expect(check.status).toBe('fail');
       expect(check.fix).toBeTruthy();
     });
@@ -246,13 +255,13 @@ describe('doctor', () => {
     });
 
     it('counts the runs already recorded here', async () => {
-      const writer = await TraceWriter.create(join(cwd, '.orca', 'runs'), {
+      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
         adapter: { id: 'test' },
         argv: ['test'],
         cwd,
-        orcaVersion: '0.1.0',
+        agenticreplayVersion: '0.1.0',
       });
-      await writer.append({ type: 'run.start', actor: 'orca', turn: 0 });
+      await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
       await writer.close(0);
 
       const check = find(await run(), 'existing runs');

@@ -2,11 +2,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TraceWriter } from '@orcareplay/core';
+import { TraceWriter } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output, stripAnsi } from '../src/out.js';
 import { graphCommand } from '../src/commands/inspect.js';
-import { Orca } from '../src/api.js';
+import { AgenticReplay } from '../src/api.js';
 
 interface Seed {
   type: string;
@@ -33,12 +33,12 @@ const RUN: Seed[] = [
 ];
 
 async function seed(events: Seed[] = RUN) {
-  const dir = await mkdtemp(join(tmpdir(), 'orca-graph-'));
-  const writer = await TraceWriter.create(join(dir, '.orca', 'runs'), {
+  const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-graph-'));
+  const writer = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
     adapter: { id: 'claude-code', version: '0.0.0' },
     argv: ['claude-code'],
     cwd: dir,
-    orcaVersion: '0.0.0',
+    agenticreplayVersion: '0.0.0',
   });
   for (const e of events) {
     await writer.append({
@@ -60,7 +60,7 @@ async function render(argv: string[], dir: string) {
   return stripAnsi(lines.join('\n'));
 }
 
-describe('orca graph', () => {
+describe('agenticreplay graph', () => {
   it('prints every edge with the event either end, so a row reads on its own', async () => {
     const { dir, runId } = await seed();
     const text = await render(['graph', runId], dir);
@@ -109,10 +109,10 @@ describe('orca graph', () => {
   });
 });
 
-describe('Orca.graph', () => {
+describe('AgenticReplay.graph', () => {
   it('answers as data, since the first consumer is an agent asking why a run failed', async () => {
     const { dir, runId } = await seed();
-    const graph = await new Orca({ cwd: dir }).graph(runId);
+    const graph = await new AgenticReplay({ cwd: dir }).graph(runId);
     expect(graph.edges).toContainEqual({
       from: 3,
       to: 4,
@@ -125,13 +125,13 @@ describe('Orca.graph', () => {
 
   it('narrows to the chain that produced one event', async () => {
     const { dir, runId } = await seed();
-    const graph = await new Orca({ cwd: dir }).graph(runId, { to: 6 });
+    const graph = await new AgenticReplay({ cwd: dir }).graph(runId, { to: 6 });
     expect(graph.nodes.map((n) => n.seq)).toEqual([3, 4, 5, 6]);
     await rm(dir, { recursive: true, force: true });
   });
 });
 
-describe('orca graph is discoverable', () => {
+describe('agenticreplay graph is discoverable', () => {
   it('appears in the help, or nobody finds it', async () => {
     const { main } = await import('../src/main.js');
     const written: string[] = [];
@@ -145,19 +145,19 @@ describe('orca graph is discoverable', () => {
     } finally {
       process.stdout.write = real;
     }
-    expect(stripAnsi(written.join(''))).toContain('orca graph');
+    expect(stripAnsi(written.join(''))).toContain('agenticreplay graph');
   });
 
   it('is offered to an agent over MCP, since that is who asks why a run failed', async () => {
     const { MCP_TOOLS } = await import('../src/mcp-server.js');
-    const tool = MCP_TOOLS.find((t) => t.name === 'orca_graph');
+    const tool = MCP_TOOLS.find((t) => t.name === 'agenticreplay_graph');
     expect(tool).toBeDefined();
     // The model reads this string and nothing else, so it has to say what the answer means.
     expect(tool!.description).toMatch(/inferred|derived/i);
   });
 });
 
-describe('orca export --card', () => {
+describe('agenticreplay export --card', () => {
   async function exportCard(argv: string[], dir: string) {
     const lines: string[] = [];
     const out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -223,7 +223,7 @@ describe('card and share filenames', () => {
     return stripAnsi(lines.join('\n'));
   }
 
-  // PNG and GIF are real formats now; the refusal is for the ones orca genuinely cannot write,
+  // PNG and GIF are real formats now; the refusal is for the ones agenticreplay genuinely cannot write,
   // and for a raster asked for without the optional toolchain installed.
   it('refuses a format it cannot write at all, naming what it can', async () => {
     const { dir } = await seed();

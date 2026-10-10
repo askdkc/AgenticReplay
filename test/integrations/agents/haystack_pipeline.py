@@ -2,7 +2,7 @@
 
 `Pipeline` rather than a bare generator: Haystack's unit of work is the pipeline, and a component
 inside one is constructed and run differently from one called directly. The generator is left
-without an `api_base_url` on purpose — that is the case orca has to capture, because it is what
+without an `api_base_url` on purpose — that is the case agenticreplay has to capture, because it is what
 every Haystack example writes, and it means the origin comes from the environment through the
 OpenAI SDK rather than from the pipeline's own code.
 """

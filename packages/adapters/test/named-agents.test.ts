@@ -2,9 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RecordContext } from '@orcareplay/plugin-api';
-import { HOOK_FILENAME } from '@orcareplay/node-instrument';
-import { decodeForwardPath } from '@orcareplay/proxy';
+import type { RecordContext } from '@agenticreplay/plugin-api';
+import { HOOK_FILENAME } from '@agenticreplay/node-instrument';
+import { decodeForwardPath } from '@agenticreplay/proxy';
 import { checkAdapterContract, formatContractResult } from '../src/contract.js';
 import { defaultAdapters } from '../src/registry.js';
 import { grokAdapter } from '../src/grok.js';
@@ -22,7 +22,7 @@ describe('the grok adapter', () => {
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-grok-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-grok-'));
     ctx = {
       runId: 'run_test',
       cwd: join(root, 'work'),
@@ -71,7 +71,7 @@ describe('the grok adapter', () => {
     // client would slip past a variable the parent read. `api.x.ai` is not in the hook's default
     // host list, so the adapter has to add it or the hook would be inert here.
     const launch = await grokAdapter.prepare(ctx);
-    expect(launch.env.ORCA_INSTRUMENT_HOSTS).toContain('api.x.ai');
+    expect(launch.env.AGENTICREPLAY_INSTRUMENT_HOSTS).toContain('api.x.ai');
     expect(launch.env.NODE_OPTIONS).toContain(HOOK_FILENAME);
     // Bun ignores `--require` inside NODE_OPTIONS, and grok-cli is a Bun program.
     expect(launch.env.BUN_OPTIONS).toContain('--preload');
@@ -83,7 +83,7 @@ describe('the openclaw adapter', () => {
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-openclaw-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-openclaw-'));
     ctx = {
       runId: 'run_test',
       cwd: join(root, 'work'),
@@ -121,12 +121,12 @@ describe('the openclaw adapter', () => {
   });
 });
 
-describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know', () => {
+describe('AGENTICREPLAY_BASE_URL_VARS — naming a base-URL variable agenticreplay does not know', () => {
   let root: string;
   let ctx: RecordContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'orca-named-'));
+    root = await mkdtemp(join(tmpdir(), 'agenticreplay-named-'));
     ctx = {
       runId: 'run_test',
       cwd: join(root, 'work'),
@@ -148,7 +148,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
     // NEBIUS and a dozen more in its own .env.example.
     const launch = await generic().prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'OPENROUTER_BASE_URL' },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'OPENROUTER_BASE_URL' },
     });
     expect(launch.env.OPENROUTER_BASE_URL).toBe('http://127.0.0.1:44100/v1');
   });
@@ -156,7 +156,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
   it('takes several, comma separated', async () => {
     const launch = await generic().prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'GLM_BASE_URL, KIMI_BASE_URL' },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'GLM_BASE_URL, KIMI_BASE_URL' },
     });
     expect(launch.env.GLM_BASE_URL).toBe('http://127.0.0.1:44100/v1');
     expect(launch.env.KIMI_BASE_URL).toBe('http://127.0.0.1:44100/v1');
@@ -165,7 +165,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
   it('lets a path be given, for an origin that is not OpenAI-shaped', async () => {
     const launch = await generic().prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'TOKENPLAN_BASE_URL=/' },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'TOKENPLAN_BASE_URL=/' },
     });
     expect(launch.env.TOKENPLAN_BASE_URL).toBe('http://127.0.0.1:44100');
   });
@@ -173,20 +173,23 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
   it('is consumed, not forwarded — the child has no use for it', async () => {
     const launch = await generic().prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'OPENROUTER_BASE_URL' },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'OPENROUTER_BASE_URL' },
     });
-    expect(launch.env.ORCA_BASE_URL_VARS).toBeUndefined();
+    expect(launch.env.AGENTICREPLAY_BASE_URL_VARS).toBeUndefined();
   });
 
   it('ignores blanks and empty entries rather than setting a variable named ""', async () => {
-    const launch = await generic().prepare({ ...ctx, env: { ORCA_BASE_URL_VARS: ' , ,' } });
+    const launch = await generic().prepare({
+      ...ctx,
+      env: { AGENTICREPLAY_BASE_URL_VARS: ' , ,' },
+    });
     expect(Object.keys(launch.env)).not.toContain('');
   });
 
   it('works on the node adapter too, where a hooked agent may still read a variable', async () => {
     const launch = await defaultAdapters()
       .get('node')
-      .prepare({ ...ctx, env: { ORCA_BASE_URL_VARS: 'LLM_BASE_URL' } });
+      .prepare({ ...ctx, env: { AGENTICREPLAY_BASE_URL_VARS: 'LLM_BASE_URL' } });
     expect(launch.env.LLM_BASE_URL).toBe('http://127.0.0.1:44100/v1');
   });
 
@@ -194,7 +197,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
    * The variable that already pointed somewhere keeps pointing there, through `/forward/`.
    *
    * A retrieval run is the case: chat goes to a gateway and embeddings to a dedicated provider,
-   * and orca's upstream map is keyed by wire dialect — so two origins of the same dialect cannot
+   * and agenticreplay's upstream map is keyed by wire dialect — so two origins of the same dialect cannot
    * be named by any `--upstream-*`. Rewritten to a bare `/v1`, the embedding calls arrived with
    * nothing saying where they had been headed, and `passthroughOrigin` sent them to the chat
    * origin, or to `api.openai.com` with the embedding provider's key on them.
@@ -203,7 +206,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
     const launch = await generic().prepare({
       ...ctx,
       env: {
-        ORCA_BASE_URL_VARS: 'MY_URL',
+        AGENTICREPLAY_BASE_URL_VARS: 'MY_URL',
         MY_URL: 'https://embeddings.example/v1',
       },
     });
@@ -223,7 +226,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
    * read, and the proxy then forwarded the call to the configured upstream — the very
    * readdressing this rewrite exists to stop — with the harness's credential for another gateway
    * on it. The segment is also the request *path*, so `https://tenant:pw@gw.example/v1` wrote the
-   * gateway password into the trace, where `orca show` and `orca export` carry it.
+   * gateway password into the trace, where `agenticreplay show` and `agenticreplay export` carry it.
    *
    * The fallback is what this did before origins could be carried: a bare `/v1` on the proxy. The
    * call is still recorded, and it fails against the wrong origin loudly rather than leaking
@@ -238,7 +241,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
   ])('does not encode a base URL carrying %s', async (_what, value) => {
     const launch = await generic().prepare({
       ...ctx,
-      env: { ORCA_BASE_URL_VARS: 'MY_URL', MY_URL: value },
+      env: { AGENTICREPLAY_BASE_URL_VARS: 'MY_URL', MY_URL: value },
     });
     expect(launch.env.MY_URL).toBe('http://127.0.0.1:44100/v1');
     expect(launch.env.MY_URL).not.toContain('forward');
@@ -250,7 +253,7 @@ describe('ORCA_BASE_URL_VARS — naming a base-URL variable orca does not know',
     const launch = await generic().prepare({
       ...ctx,
       env: {
-        ORCA_BASE_URL_VARS: 'MY_URL=v2',
+        AGENTICREPLAY_BASE_URL_VARS: 'MY_URL=v2',
         MY_URL: 'https://embeddings.example/v1',
       },
     });

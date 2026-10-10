@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Usage } from '@orcareplay/plugin-api';
+import type { Usage } from '@agenticreplay/plugin-api';
 import {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
@@ -22,7 +22,7 @@ const REQUIRED = [
 ];
 
 describe('MODEL_PRICING', () => {
-  it('covers the models OrcaReplay ships with', () => {
+  it('covers the models AgenticReplay ships with', () => {
     for (const id of REQUIRED) expect(MODEL_PRICING[id], id).toBeDefined();
   });
 

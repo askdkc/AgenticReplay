@@ -14,8 +14,14 @@ import {
 import { Agent, request as httpsRequest } from 'node:https';
 import { connect as netConnect, isIP, type Socket } from 'node:net';
 import { createSecureContext, rootCertificates, TLSSocket, type SecureContext } from 'node:tls';
+import { randomUUID } from 'node:crypto';
 import * as zlib from 'node:zlib';
-import { AUTH_REQUEST_HEADERS, AUTH_RESPONSE_HEADERS, BINARY_BODY_PREFIX } from '@orcareplay/core';
+import {
+  AUTH_REQUEST_HEADERS,
+  AUTH_RESPONSE_HEADERS,
+  BINARY_BODY_PREFIX,
+} from '@agenticreplay/core';
+import type { CaptureTransformation } from '@agenticreplay/schema';
 import type { RunCa } from './ca.js';
 import { HostPolicy } from './tls-hosts.js';
 
@@ -63,32 +69,41 @@ const SECRET_RESPONSE_HEADERS = new Set(AUTH_RESPONSE_HEADERS);
  * measure their conversation against. A warning that says "too large" without saying how large is
  * a warning nobody can act on.
  */
-export const DEFAULT_MAX_CAPTURED_BYTES = 1024 * 1024;
-
+export const DEFAULT_MAX_CAPTURED_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_MAX_BUFFERED_BYTES = 256 * 1024 * 1024;
+export type HeaderValue = string | string[];
 /** One decrypted HTTP request and its reply, as seen inside an intercepted TLS session. */
 export interface NetExchange {
+  requestId: string;
+  requestStartedAt: number;
   host: string;
   port: number;
   method: string;
   path: string;
   /** Auth headers removed; see `SECRET_REQUEST_HEADERS`. */
-  requestHeaders: Record<string, string>;
+  requestHeaders: Record<string, HeaderValue>;
   requestBody: string;
+  requestBytes: number;
   requestTruncated: boolean;
   status: number;
   /**
-   * Auth headers removed, and -- when orca decoded the body -- the two headers that described the
+   * Auth headers removed, and -- when agenticreplay decoded the body -- the two headers that described the
    * encoding it removed. See {@link headersWithoutEncoding}.
    */
-  responseHeaders: Record<string, string>;
+  responseHeaders: Record<string, HeaderValue>;
   responseBody: string;
   /**
-   * The `content-encoding` orca decoded away, when there was one. Absent when the recorded body is
+   * The `content-encoding` agenticreplay decoded away, when there was one. Absent when the recorded body is
    * exactly the bytes that arrived, which is the ordinary case: `accept-encoding` is stripped from
    * every intercepted request so an origin that honours it answers in plaintext.
    */
   responseDecodedFrom?: string;
   responseTruncated: boolean;
+  responseComplete: boolean;
+  responseError?: string;
+  transformations?: CaptureTransformation[];
+  /** Set when a recognized model dialect was also projected into a model exchange. */
+  modelDialect?: string;
   /** The full size on the wire, even where the captured body was truncated. */
   responseBytes: number;
   /**
@@ -104,18 +119,18 @@ export interface NetExchange {
    * True when the client went away before the response finished, so the body here is a prefix of
    * what the origin sent rather than the whole of it.
    *
-   * Distinct from `responseTruncated`, which means the capture limit was reached: one says orca
+   * Distinct from `responseTruncated`, which means the capture limit was reached: one says agenticreplay
    * stopped keeping bytes, the other says the agent stopped asking for them. A harness that reads
    * a streaming reply only until it has its answer produces this on every turn, and an exchange
    * recorded this way is the only evidence such a run leaves behind.
    */
   abandoned?: boolean;
   /**
-   * Whether orca held the plaintext because it terminated TLS, or because the call arrived in
+   * Whether agenticreplay held the plaintext because it terminated TLS, or because the call arrived in
    * plaintext to begin with.
    *
    * Absent means intercepted, which is what every exchange this module produces is. The proxy's
-   * own passthrough route reports the same shape for a POST on a path no dialect claims — orca
+   * own passthrough route reports the same shape for a POST on a path no dialect claims — agenticreplay
    * did not decrypt anything there, the harness dialled a local http origin — and the trace said
    * `intercepted=true` over it, claiming a capability that was never used on a host it was never
    * used against.
@@ -146,11 +161,13 @@ export interface NetExchange {
 
 /** A decrypted request before it is sent to the origin. */
 export interface NetRequest {
+  requestId: string;
+  requestStartedAt: number;
   host: string;
   port: number;
   method: string;
   path: string;
-  requestHeaders: Record<string, string>;
+  requestHeaders: Record<string, HeaderValue>;
   /** The original bytes, needed for clients that use a binary content encoding such as zstd. */
   requestBytes: Buffer;
   requestTruncated: boolean;
@@ -168,7 +185,7 @@ export interface InterceptResponse {
  *
  * The CONNECT target stays the recorded host — a TLS-intercepted harness is still talking to the
  * origin it named — while a fork's `--model` has to change what that origin is asked. Returning a
- * full {@link InterceptResponse} would answer from orca and never reach the origin; returning
+ * full {@link InterceptResponse} would answer from agenticreplay and never reach the origin; returning
  * nothing would reach it with the recorded model. This is the third option that `--model` needs.
  */
 export interface InterceptForward {
@@ -204,32 +221,42 @@ export function readRecordedBody(body: string): Buffer {
  * Named for the body, not for the half of the exchange: responses arrive compressed too, and a
  * function called `decodeRequestBody` decoding one would be a name that has to be read past.
  */
-export function decodeBody(bytes: Buffer, contentEncoding?: string): string {
-  const encoding = contentEncoding?.split(',')[0]?.trim().toLowerCase();
-  // The three Node has always been able to decode. Without them a gzipped model request was
-  // recorded as base64 of its compressed bytes, so no dialect could read it, the exchange was
-  // never promoted to a model call, and the run said `capture.empty` without ever mentioning an
-  // encoding -- the same silent shape as the bugs above it in this file.
-  if (encoding === 'gzip') return recordableBody(zlib.gunzipSync(bytes));
-  if (encoding === 'deflate') return recordableBody(zlib.inflateSync(bytes));
-  if (encoding === 'br') return recordableBody(zlib.brotliDecompressSync(bytes));
-  if (encoding === 'zstd') {
-    // zstd was added to Node's built-in zlib API after the oldest runtime Orca supports. Keep the
-    // import compatible there; a Codex call degrades to opaque net capture with a clear error.
-    const decompress = (
-      zlib as typeof zlib & {
-        zstdDecompressSync?: (input: Buffer) => Buffer;
-      }
-    ).zstdDecompressSync;
-    if (!decompress)
-      throw new Error('zstd request encoding requires a Node runtime with zstd support');
-    return recordableBody(decompress(bytes));
+export function decodeBody(
+  bytes: Buffer,
+  contentEncoding?: string,
+  maxOutputBytes?: number,
+): string {
+  const encodings = (contentEncoding ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value !== '' && value !== 'identity');
+  let decoded = bytes;
+  for (const encoding of encodings.reverse()) {
+    const limits = maxOutputBytes === undefined ? undefined : { maxOutputLength: maxOutputBytes };
+    if (encoding === 'gzip') decoded = zlib.gunzipSync(decoded, limits);
+    else if (encoding === 'deflate') decoded = zlib.inflateSync(decoded, limits);
+    else if (encoding === 'br') decoded = zlib.brotliDecompressSync(decoded, limits);
+    else if (encoding === 'zstd') {
+      const decompress = (
+        zlib as typeof zlib & {
+          zstdDecompressSync?: (input: Buffer, options?: { maxOutputLength?: number }) => Buffer;
+        }
+      ).zstdDecompressSync;
+      if (!decompress)
+        throw new Error('zstd request encoding requires a Node runtime with zstd support');
+      decoded = decompress(
+        decoded,
+        maxOutputBytes === undefined ? undefined : { maxOutputLength: maxOutputBytes },
+      );
+    } else {
+      throw new Error(`unsupported content encoding: ${encoding}`);
+    }
   }
-  return recordableBody(bytes);
+  return recordableBody(decoded);
 }
 
 /**
- * The response body as the client saw it, plus the encoding orca took off to get there.
+ * The response body as the client saw it, plus the encoding agenticreplay took off to get there.
  *
  * Not attempted on a capture that is a prefix rather than the whole stream: half a deflate member
  * cannot be inflated, and `truncated` / `abandoned` already say the record is incomplete. Nor on a
@@ -244,7 +271,11 @@ function recordableResponseBody(
   contentEncoding: string | undefined,
   whole: boolean,
 ): { body: string; decodedFrom?: string; error?: string } {
-  const encoding = contentEncoding?.split(',')[0]?.trim().toLowerCase();
+  const encoding = contentEncoding
+    ?.split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value !== '' && value !== 'identity')
+    .join(', ');
   if (
     encoding === undefined ||
     encoding === '' ||
@@ -255,7 +286,10 @@ function recordableResponseBody(
     return { body: captured.text() };
   }
   try {
-    return { body: decodeBody(captured.buffer(), contentEncoding), decodedFrom: encoding };
+    return {
+      body: decodeBody(captured.buffer(), contentEncoding, captured.limit),
+      decodedFrom: encoding,
+    };
   } catch (err) {
     return { body: captured.text(), error: String(err) };
   }
@@ -266,12 +300,26 @@ function recordableResponseBody(
  *
  * `content-encoding: gzip` beside a decoded body is a claim the recording no longer supports, and
  * a `content-length` counting compressed bytes is another. Neither fact is lost: the wire size is
- * already on the event as `bytes`, and what orca removed is recorded as `decoded_from`. Only the
+ * already on the event as `bytes`, and what agenticreplay removed is recorded as `decoded_from`. Only the
  * recorded copy is touched -- the client is served the origin's own header set, from `outHeaders`
  * on HTTP/1.1 and `downstream` on h2.
  */
-function headersWithoutEncoding(headers: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
+function normalizeHeaderValue(
+  value: string | string[] | number | undefined,
+): HeaderValue | undefined {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.slice();
+  if (typeof value === 'number') return String(value);
+  return undefined;
+}
+
+function headerText(value: HeaderValue | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
+function headersWithoutEncoding(headers: Record<string, HeaderValue>): Record<string, HeaderValue> {
+  const out: Record<string, HeaderValue> = {};
   for (const [key, value] of Object.entries(headers)) {
     if (key === 'content-encoding' || key === 'content-length') continue;
     out[key] = value;
@@ -286,10 +334,23 @@ function recordableBody(bytes: Buffer): string {
   return `${BINARY_BODY_PREFIX}${bytes.toString('base64')}`;
 }
 
+function binaryBodyTransformation(location: string, body: string): CaptureTransformation[] {
+  if (!body.startsWith(BINARY_BODY_PREFIX)) return [];
+  return [
+    {
+      kind: 'encoding',
+      location,
+      rule: 'binary-body-base64-persistence',
+      count: 1,
+      reason: 'invalid UTF-8 preserved as base64 because the transport body is binary',
+    },
+  ];
+}
+
 /**
- * A connection orca deliberately did not read.
+ * A connection agenticreplay deliberately did not read.
  *
- * Recorded anyway, because "orca opened a tunnel to this host and looked at none of it" is the
+ * Recorded anyway, because "agenticreplay opened a tunnel to this host and looked at none of it" is the
  * evidence for the claim the feature makes about itself — and because it is how an operator finds
  * out which host to add to the allowlist when a harness surprises them.
  */
@@ -308,7 +369,7 @@ export interface TunnelRecord {
  * Every one of these was reported as `tls.handshake_failed`. A body that would not decompress is
  * not a handshake; neither is a WebSocket upgrade this proxy declines to relay. The one that
  * matters most was buried with them: a client refusing OUR certificate reads as a failure between
- * orca and the origin, so the operator goes looking at the network when the fix is to put the run
+ * agenticreplay and the origin, so the operator goes looking at the network when the fix is to put the run
  * CA into the agent's trust store.
  */
 export type InterceptFailureKind =
@@ -344,6 +405,8 @@ export interface TlsInterceptOptions {
    */
   trustedOriginCerts?: readonly string[];
   maxCapturedBytes?: number;
+  maxBufferedBytes?: number;
+  onRequestStart?: (request: NetRequest) => void | Promise<void>;
   /**
    * Answer a decrypted request from a recording, or rewrite it before the origin sees it.
    *
@@ -375,6 +438,27 @@ interface Target {
 interface CaptureCounters {
   intercepted: number;
   tunnelled: number;
+}
+
+function normalizeLimit(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+class CaptureBudget {
+  #used = 0;
+
+  constructor(private readonly limit: number) {}
+
+  reserve(requested: number): number {
+    const available = Math.max(0, this.limit - this.#used);
+    const reserved = Math.min(requested, available);
+    this.#used += reserved;
+    return reserved;
+  }
+
+  release(bytes: number): void {
+    this.#used = Math.max(0, this.#used - bytes);
+  }
 }
 
 /** `host:port` from a CONNECT request line, with the default HTTPS port when it is omitted. */
@@ -410,7 +494,10 @@ export function attachTlsIntercept(
   counters: CaptureCounters,
 ): TlsInterceptHandle {
   const policy = HostPolicy.from(options.hosts ?? []);
-  const maxCaptured = options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES;
+  const maxCaptured = normalizeLimit(options.maxCapturedBytes, DEFAULT_MAX_CAPTURED_BYTES);
+  const budget = new CaptureBudget(
+    normalizeLimit(options.maxBufferedBytes, DEFAULT_MAX_BUFFERED_BYTES),
+  );
   const extraRoots = options.trustedOriginCerts ?? [];
   // `ca` replaces the default store rather than adding to it, so an extra root has to be supplied
   // alongside the whole bundle or the proxy would stop trusting the public web.
@@ -433,7 +520,7 @@ export function attachTlsIntercept(
    * knows -- the lookup silently missed and every h2 stream was rejected as arriving on an unknown
    * connection. A property on the socket survives the Proxy, which forwards unknown reads through.
    */
-  const TARGET = Symbol('orca.intercept.target');
+  const TARGET = Symbol('agenticreplay.intercept.target');
   /**
    * Which origin a decrypted request was destined for.
    *
@@ -465,7 +552,7 @@ export function attachTlsIntercept(
     options.onFailure?.({
       host: target?.host ?? 'unknown',
       port: target?.port ?? 0,
-      reason: `orca cannot relay an ${String(req.headers.upgrade)} upgrade through an intercepted connection`,
+      reason: `agenticreplay cannot relay an ${String(req.headers.upgrade)} upgrade through an intercepted connection`,
       kind: 'upgrade_refused',
     });
     socket.end('HTTP/1.1 501 Not Implemented\r\nconnection: close\r\n\r\n');
@@ -543,7 +630,9 @@ export function attachTlsIntercept(
       const res1 = res as unknown as ServerResponse;
       void forward(req1, res1).catch((err: unknown) => {
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: `orca tls-intercept: ${String(err)}` } }));
+        res.end(
+          JSON.stringify({ error: { message: `agenticreplay tls-intercept: ${String(err)}` } }),
+        );
       });
     });
 
@@ -559,7 +648,9 @@ export function attachTlsIntercept(
         try {
           if (!stream.headersSent) stream.respond({ ':status': 502 });
           stream.end(
-            JSON.stringify({ error: { message: `orca tls-intercept h2: ${String(err)}` } }),
+            JSON.stringify({
+              error: { message: `agenticreplay tls-intercept h2: ${String(err)}` },
+            }),
           );
         } catch {
           stream.destroy();
@@ -622,6 +713,7 @@ export function attachTlsIntercept(
     if (!target) throw new Error('decrypted h2 stream arrived on an unknown connection');
 
     const startedAt = Date.now();
+    const requestId = randomUUID();
     const method = String(headers[H2.HTTP2_HEADER_METHOD] ?? 'GET');
     const path = String(headers[H2.HTTP2_HEADER_PATH] ?? '/');
     const outbound: Record<string, string | string[]> = {
@@ -632,29 +724,72 @@ export function attachTlsIntercept(
         headers[H2.HTTP2_HEADER_AUTHORITY] ?? `${target.host}:${target.port}`,
       ),
     };
-    const recordableHeaders: Record<string, string> = {};
+    const recordableHeaders: Record<string, HeaderValue> = {};
     for (const [name, value] of Object.entries(headers)) {
       const key = name.toLowerCase();
       if (key.startsWith(':') || HOP_BY_HOP.has(key) || value === undefined) continue;
       outbound[key] = value;
-      if (!SECRET_REQUEST_HEADERS.has(key) && typeof value === 'string') {
-        recordableHeaders[key] = value;
+      const recorded = normalizeHeaderValue(value);
+      if (!SECRET_REQUEST_HEADERS.has(key) && recorded !== undefined) {
+        recordableHeaders[key] = recorded;
       }
     }
 
-    const requestBody = new Capture(maxCaptured);
-    const responseBody = new Capture(maxCaptured);
-    const contentEncoding =
-      typeof headers['content-encoding'] === 'string' ? headers['content-encoding'] : undefined;
+    const requestBody = new Capture(maxCaptured, budget);
+    const responseBody = new Capture(maxCaptured, budget);
+    const contentEncoding = headerText(normalizeHeaderValue(headers['content-encoding']));
     let rewrittenBody: Buffer | undefined;
+    const requestStart: NetRequest = {
+      requestId,
+      requestStartedAt: startedAt,
+      host: target.host,
+      port: target.port,
+      method,
+      path,
+      requestHeaders: recordableHeaders,
+      requestBytes: Buffer.alloc(0),
+      requestTruncated: false,
+    };
+    try {
+      await options.onRequestStart?.(requestStart);
+    } catch (err) {
+      // A recorder failure happens before dispatch. Preserve that fact as an incomplete terminal
+      // attempt so a failed append cannot look like a missing request or a successful capture.
+      try {
+        options.onNetExchange?.({
+          ...requestStart,
+          requestBody: '',
+          requestBytes: 0,
+          status: 0,
+          responseHeaders: {},
+          responseBody: '',
+          responseTruncated: false,
+          responseComplete: false,
+          responseError: `request-start recorder failed: ${String(err)}`,
+          responseBytes: 0,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // The persistence callback failed too; the original failure remains the one surfaced.
+      }
+      throw err;
+    }
 
     // Replay answers from the recording and must never reach the origin. The HTTP/1.1 twin has
     // consulted this hook since interception existed; without the same call here, a run recorded
     // over HTTP/1.1 and replayed by a client that now negotiates h2 would be forwarded live --
     // real model calls, on the caller's own credential, during what the operator ran offline.
     if (options.onRequest) {
-      for await (const chunk of stream) requestBody.add(Buffer.from(chunk as Buffer));
-      const decision = await options.onRequest({
+      try {
+        for await (const chunk of stream) requestBody.add(Buffer.from(chunk as Buffer));
+      } catch (err) {
+        requestBody.release();
+        responseBody.release();
+        throw err;
+      }
+      const request: NetRequest = {
+        requestId,
+        requestStartedAt: startedAt,
         host: target.host,
         port: target.port,
         method,
@@ -662,8 +797,10 @@ export function attachTlsIntercept(
         requestHeaders: recordableHeaders,
         requestBytes: requestBody.buffer(),
         requestTruncated: requestBody.truncated,
-      });
+      };
+      const decision = await options.onRequest(request);
       if (decision && isInterceptResponse(decision)) {
+        requestBody.release();
         if (stream.destroyed) return;
         stream.respond({ ':status': decision.status, ...(decision.headers ?? {}) });
         stream.end(decision.body);
@@ -677,6 +814,7 @@ export function attachTlsIntercept(
       // The bounded capture size is also the maximum replayable request size: forwarding a
       // truncated body upstream is worse than refusing clearly, which is what HTTP/1.1 does.
       if (requestBody.truncated) {
+        requestBody.release();
         throw new Error(`request exceeded capture limit of ${maxCaptured} bytes`);
       }
     }
@@ -694,19 +832,20 @@ export function attachTlsIntercept(
        * Response state, hoisted so an abandoned exchange is still recorded.
        *
        * Same gap the HTTP/1.1 path had: recording happened only in `upstream.on('end')`, so a
-       * client that stopped reading a streaming reply mid-flight left no trace of a request orca
+       * client that stopped reading a streaming reply mid-flight left no trace of a request agenticreplay
        * had already decrypted. `status` stays 0 until the origin answers, which is what tells
        * `onDecrypted` this one has no response to replay.
        */
       let status = 0;
       let recorded = false;
-      const recordableResponse: Record<string, string> = {};
+      let responseError: string | undefined;
+      const recordableResponse: Record<string, HeaderValue> = {};
 
       const emit = (abandoned: boolean): void => {
         if (recorded) return;
         recorded = true;
         counters.intercepted += 1;
-        // A body orca cannot decode is still an exchange worth having. `decodeBody` throws
+        // A body agenticreplay cannot decode is still an exchange worth having. `decodeBody` throws
         // for zstd on a runtime without it -- inside `engines`, and why the repo's own zstd test is
         // skipped there -- and an exception in this callback would take the process down with the
         // exchange unrecorded. server.ts already decodes inside a try/catch for the same reason.
@@ -715,7 +854,7 @@ export function attachTlsIntercept(
           recordedRequest = recordableBody(rewrittenBody);
         } else {
           try {
-            recordedRequest = decodeBody(requestBody.buffer(), contentEncoding);
+            recordedRequest = decodeBody(requestBody.buffer(), contentEncoding, requestBody.limit);
           } catch (err) {
             options.onFailure?.({
               host: target.host,
@@ -728,7 +867,7 @@ export function attachTlsIntercept(
         }
         const decoded = recordableResponseBody(
           responseBody,
-          recordableResponse['content-encoding'],
+          headerText(recordableResponse['content-encoding']),
           !abandoned,
         );
         if (decoded.error !== undefined) {
@@ -739,29 +878,61 @@ export function attachTlsIntercept(
             kind: 'body_opaque',
           });
         }
-        options.onNetExchange?.({
-          host: target.host,
-          port: target.port,
-          method,
-          path,
-          requestHeaders: recordableHeaders,
-          requestBody: recordedRequest,
-          requestTruncated: requestBody.truncated,
-          status,
-          alpn: 'h2',
-          responseHeaders:
-            decoded.decodedFrom === undefined
-              ? recordableResponse
-              : headersWithoutEncoding(recordableResponse),
-          responseBody: decoded.body,
-          ...(decoded.decodedFrom === undefined
-            ? {}
-            : { responseDecodedFrom: decoded.decodedFrom }),
-          responseTruncated: responseBody.truncated,
-          responseBytes: responseBody.bytes,
-          abandoned,
-          durationMs: Date.now() - startedAt,
-        });
+        const transformations: CaptureTransformation[] = [];
+        if (decoded.decodedFrom !== undefined) {
+          transformations.push({
+            kind: 'decompression',
+            location: 'response.body',
+            rule: 'content-encoding',
+            count: decoded.decodedFrom.split(',').length,
+            reason: decoded.decodedFrom,
+          });
+        }
+        if (contentEncoding !== undefined) {
+          transformations.push({
+            kind: 'decompression',
+            location: 'request.body',
+            rule: 'content-encoding',
+            count: contentEncoding.split(',').length,
+            reason: contentEncoding,
+          });
+        }
+        transformations.push(...binaryBodyTransformation('request.body', recordedRequest));
+        transformations.push(...binaryBodyTransformation('response.body', decoded.body));
+        try {
+          options.onNetExchange?.({
+            requestId,
+            requestStartedAt: startedAt,
+            host: target.host,
+            port: target.port,
+            method,
+            path,
+            requestHeaders: recordableHeaders,
+            requestBody: recordedRequest,
+            requestBytes: requestBody.bytes,
+            requestTruncated: requestBody.truncated,
+            status,
+            alpn: 'h2',
+            responseHeaders:
+              decoded.decodedFrom === undefined
+                ? recordableResponse
+                : headersWithoutEncoding(recordableResponse),
+            responseBody: decoded.body,
+            ...(decoded.decodedFrom === undefined
+              ? {}
+              : { responseDecodedFrom: decoded.decodedFrom }),
+            responseTruncated: responseBody.truncated,
+            responseComplete: !abandoned && responseError === undefined && !responseBody.truncated,
+            ...(responseError === undefined ? {} : { responseError }),
+            ...(transformations.length === 0 ? {} : { transformations }),
+            responseBytes: responseBody.bytes,
+            abandoned,
+            durationMs: Date.now() - startedAt,
+          });
+        } finally {
+          requestBody.release();
+          responseBody.release();
+        }
       };
 
       /**
@@ -795,9 +966,17 @@ export function attachTlsIntercept(
         // never called, and the origin waits for a body that will not arrive.
         stream.on('end', () => upstream.end());
       }
-      stream.on('error', reject);
+      stream.on('error', (err) => {
+        responseError = String(err);
+        emit(false);
+        reject(err);
+      });
 
-      upstream.on('error', reject);
+      upstream.on('error', (err) => {
+        responseError = String(err);
+        emit(false);
+        reject(err);
+      });
       upstream.on('response', (responseHeaders) => {
         status = Number(responseHeaders[H2.HTTP2_HEADER_STATUS] ?? 0);
         const downstream: Record<string, string | string[] | number> = { ':status': status };
@@ -805,8 +984,9 @@ export function attachTlsIntercept(
           const key = name.toLowerCase();
           if (key.startsWith(':') || HOP_BY_HOP.has(key) || value === undefined) continue;
           downstream[key] = value;
-          if (!SECRET_RESPONSE_HEADERS.has(key) && typeof value === 'string') {
-            recordableResponse[key] = value;
+          const recorded = normalizeHeaderValue(value);
+          if (!SECRET_RESPONSE_HEADERS.has(key) && recorded !== undefined) {
+            recordableResponse[key] = recorded;
           }
         }
         if (stream.destroyed) {
@@ -867,15 +1047,17 @@ export function attachTlsIntercept(
     if (!target) throw new Error('decrypted request arrived on an unknown connection');
 
     const startedAt = Date.now();
+    const requestId = randomUUID();
     const path = req.url ?? '/';
     const outboundHeaders: Record<string, string | string[]> = {};
-    const recordableHeaders: Record<string, string> = {};
+    const recordableHeaders: Record<string, HeaderValue> = {};
     for (const [name, value] of Object.entries(req.headers)) {
       const key = name.toLowerCase();
       if (HOP_BY_HOP.has(key) || value === undefined) continue;
       outboundHeaders[name] = value;
-      if (!SECRET_REQUEST_HEADERS.has(key) && typeof value === 'string') {
-        recordableHeaders[key] = value;
+      const recorded = normalizeHeaderValue(value);
+      if (!SECRET_REQUEST_HEADERS.has(key) && recorded !== undefined) {
+        recordableHeaders[key] = recorded;
       }
     }
     // Node lower-cases every incoming header name, so this replaces the client's own `host`
@@ -883,14 +1065,54 @@ export function attachTlsIntercept(
     // depends on it; the CONNECT target is the fallback for an HTTP/1.0 client that sent none.
     outboundHeaders.host = req.headers.host ?? target.host;
 
-    const requestBody = new Capture(maxCaptured);
+    const requestBody = new Capture(maxCaptured, budget);
     let rewrittenBody: Buffer | undefined;
+    const requestStart: NetRequest = {
+      requestId,
+      requestStartedAt: startedAt,
+      host: target.host,
+      port: target.port,
+      method: req.method ?? 'GET',
+      path,
+      requestHeaders: recordableHeaders,
+      requestBytes: Buffer.alloc(0),
+      requestTruncated: false,
+    };
+    try {
+      await options.onRequestStart?.(requestStart);
+    } catch (err) {
+      try {
+        options.onNetExchange?.({
+          ...requestStart,
+          requestBody: '',
+          requestBytes: 0,
+          status: 0,
+          responseHeaders: {},
+          responseBody: '',
+          responseTruncated: false,
+          responseComplete: false,
+          responseError: `request-start recorder failed: ${String(err)}`,
+          responseBytes: 0,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // Preserve the recorder failure when terminal evidence cannot itself be persisted.
+      }
+      throw err;
+    }
 
     // Replay has to decide before opening an origin connection. Buffer only when that hook is in
     // use; the recording path below retains the original streaming behaviour and bounded capture.
     if (options.onRequest) {
-      for await (const chunk of req) requestBody.add(Buffer.from(chunk as Buffer));
-      const decision = await options.onRequest({
+      try {
+        for await (const chunk of req) requestBody.add(Buffer.from(chunk as Buffer));
+      } catch (err) {
+        requestBody.release();
+        throw err;
+      }
+      const request: NetRequest = {
+        requestId,
+        requestStartedAt: startedAt,
         host: target.host,
         port: target.port,
         method: req.method ?? 'GET',
@@ -898,11 +1120,13 @@ export function attachTlsIntercept(
         requestHeaders: recordableHeaders,
         requestBytes: requestBody.buffer(),
         requestTruncated: requestBody.truncated,
-      });
+      };
+      const decision = await options.onRequest(request);
       if (decision && isInterceptResponse(decision)) {
         res.writeHead(decision.status, decision.headers ?? {});
         res.end(decision.body);
         counters.intercepted += 1;
+        requestBody.release();
         return;
       }
       if (decision) {
@@ -950,14 +1174,15 @@ export function attachTlsIntercept(
        */
       let recorded = false;
       let status = 0;
-      const responseHeaders: Record<string, string> = {};
-      const responseBody = new Capture(maxCaptured);
+      let responseError: string | undefined;
+      const responseHeaders: Record<string, HeaderValue> = {};
+      const responseBody = new Capture(maxCaptured, budget);
 
       const emit = (abandoned: boolean): void => {
         if (recorded) return;
         recorded = true;
         counters.intercepted += 1;
-        // A body orca cannot decode is still an exchange worth having, and an exception thrown in
+        // A body agenticreplay cannot decode is still an exchange worth having, and an exception thrown in
         // this callback would take the process down with it. Same guard, same reason, as h2.
         let recordedRequest: string;
         if (rewrittenBody) {
@@ -969,6 +1194,7 @@ export function attachTlsIntercept(
               typeof req.headers['content-encoding'] === 'string'
                 ? req.headers['content-encoding']
                 : undefined,
+              requestBody.limit,
             );
           } catch (err) {
             options.onFailure?.({
@@ -982,7 +1208,7 @@ export function attachTlsIntercept(
         }
         const decoded = recordableResponseBody(
           responseBody,
-          responseHeaders['content-encoding'],
+          headerText(responseHeaders['content-encoding']),
           !abandoned,
         );
         if (decoded.error !== undefined) {
@@ -993,29 +1219,65 @@ export function attachTlsIntercept(
             kind: 'body_opaque',
           });
         }
-        options.onNetExchange?.({
-          host: target.host,
-          port: target.port,
-          method: req.method ?? 'GET',
-          path,
-          requestHeaders: recordableHeaders,
-          requestBody: recordedRequest,
-          requestTruncated: requestBody.truncated,
-          status,
-          alpn: alpnOf(req.socket),
-          responseHeaders:
-            decoded.decodedFrom === undefined
-              ? responseHeaders
-              : headersWithoutEncoding(responseHeaders),
-          responseBody: decoded.body,
-          ...(decoded.decodedFrom === undefined
-            ? {}
-            : { responseDecodedFrom: decoded.decodedFrom }),
-          responseTruncated: responseBody.truncated,
-          responseBytes: responseBody.bytes,
-          abandoned,
-          durationMs: Date.now() - startedAt,
-        });
+        const transformations: CaptureTransformation[] = [];
+        const requestEncoding =
+          typeof req.headers['content-encoding'] === 'string'
+            ? req.headers['content-encoding']
+            : undefined;
+        if (decoded.decodedFrom !== undefined) {
+          transformations.push({
+            kind: 'decompression',
+            location: 'response.body',
+            rule: 'content-encoding',
+            count: decoded.decodedFrom.split(',').length,
+            reason: decoded.decodedFrom,
+          });
+        }
+        if (requestEncoding !== undefined) {
+          transformations.push({
+            kind: 'decompression',
+            location: 'request.body',
+            rule: 'content-encoding',
+            count: requestEncoding.split(',').length,
+            reason: requestEncoding,
+          });
+        }
+        transformations.push(...binaryBodyTransformation('request.body', recordedRequest));
+        transformations.push(...binaryBodyTransformation('response.body', decoded.body));
+        try {
+          options.onNetExchange?.({
+            requestId,
+            requestStartedAt: startedAt,
+            host: target.host,
+            port: target.port,
+            method: req.method ?? 'GET',
+            path,
+            requestHeaders: recordableHeaders,
+            requestBody: recordedRequest,
+            requestBytes: requestBody.bytes,
+            requestTruncated: requestBody.truncated,
+            status,
+            alpn: alpnOf(req.socket),
+            responseHeaders:
+              decoded.decodedFrom === undefined
+                ? responseHeaders
+                : headersWithoutEncoding(responseHeaders),
+            responseBody: decoded.body,
+            ...(decoded.decodedFrom === undefined
+              ? {}
+              : { responseDecodedFrom: decoded.decodedFrom }),
+            responseTruncated: responseBody.truncated,
+            responseComplete: !abandoned && responseError === undefined && !responseBody.truncated,
+            ...(responseError === undefined ? {} : { responseError }),
+            ...(transformations.length === 0 ? {} : { transformations }),
+            responseBytes: responseBody.bytes,
+            abandoned,
+            durationMs: Date.now() - startedAt,
+          });
+        } finally {
+          requestBody.release();
+          responseBody.release();
+        }
       };
 
       /** The client is gone: keep what was read, stop pulling from the origin, and settle. */
@@ -1032,22 +1294,40 @@ export function attachTlsIntercept(
         // A client that has already left is not an upstream failure to report. Asked of `res`
         // only: `req` destroys itself once its body has been read, so a request with no body has
         // `req.destroyed` set long before anything went wrong, and reading it here turned every
-        // upstream failure -- an origin certificate orca refuses to trust, most of all -- into a
+        // upstream failure -- an origin certificate agenticreplay refuses to trust, most of all -- into a
         // silent abandonment with no 502 for the client to see.
         if (res.destroyed) {
+          responseError = String(err);
           abandon();
           return;
         }
+        responseError = String(err);
+        emit(false);
         reject(err);
       });
       upstream.on('response', (originRes) => {
         const outHeaders: Record<string, string | string[]> = {};
-        for (const [name, value] of Object.entries(originRes.headers)) {
+        const responseHeaderPairs = originRes.rawHeaders;
+        for (let index = 0; index < responseHeaderPairs.length; index += 2) {
+          const name = responseHeaderPairs[index]!;
+          const value = responseHeaderPairs[index + 1]!;
           const key = name.toLowerCase();
-          if (HOP_BY_HOP.has(key) || value === undefined) continue;
-          outHeaders[name] = value;
-          if (!SECRET_RESPONSE_HEADERS.has(key) && typeof value === 'string') {
-            responseHeaders[key] = value;
+          if (HOP_BY_HOP.has(key)) continue;
+          const previousForwarded = outHeaders[name];
+          outHeaders[name] =
+            previousForwarded === undefined
+              ? value
+              : Array.isArray(previousForwarded)
+                ? [...previousForwarded, value]
+                : [previousForwarded, value];
+          if (!SECRET_RESPONSE_HEADERS.has(key)) {
+            const previousRecorded = responseHeaders[key];
+            responseHeaders[key] =
+              previousRecorded === undefined
+                ? value
+                : Array.isArray(previousRecorded)
+                  ? [...previousRecorded, value]
+                  : [previousRecorded, value];
           }
         }
         status = originRes.statusCode ?? 0;
@@ -1078,7 +1358,7 @@ export function attachTlsIntercept(
          *
          * If the client left, this is abandonment: keep the prefix, stop pulling from the origin,
          * settle. If the *origin* died, the client is still connected and waiting for a stream
-         * orca has already started forwarding -- and abandoning there settles this promise, so the
+         * agenticreplay has already started forwarding -- and abandoning there settles this promise, so the
          * caller's `.catch`, the only thing that ends the client's response, never runs. The agent
          * then waits for a continuation that will never come. `originRes.on('aborted', abandon)`
          * did exactly that: a crashing origin or a dropped network hung every in-flight call on
@@ -1095,6 +1375,7 @@ export function attachTlsIntercept(
             abandon();
             return;
           }
+          responseError = String(err);
           emit(false);
           reject(err);
         };
@@ -1130,7 +1411,7 @@ export function attachTlsIntercept(
     let settled = false;
 
     // Counted at the decision, not at the close. The number an operator wants is "how many
-    // connections did orca refuse to look inside", and a connection still open when the run ends
+    // connections did agenticreplay refuse to look inside", and a connection still open when the run ends
     // was refused just as firmly as one that closed.
     counters.tunnelled += 1;
     const origin = netConnect(target.port, target.host);
@@ -1215,8 +1496,12 @@ class Capture {
   #captured = 0;
   #total = 0;
   #truncated = false;
+  #released = false;
 
-  constructor(private readonly limit: number) {}
+  constructor(
+    readonly limit: number,
+    private readonly budget: CaptureBudget,
+  ) {}
 
   add(chunk: Buffer): void {
     this.#total += chunk.length;
@@ -1225,9 +1510,10 @@ class Capture {
       this.#truncated = true;
       return;
     }
-    if (chunk.length > room) {
-      this.#chunks.push(chunk.subarray(0, room));
-      this.#captured += room;
+    const reserved = this.budget.reserve(Math.min(chunk.length, room));
+    if (reserved < chunk.length) {
+      if (reserved > 0) this.#chunks.push(chunk.subarray(0, reserved));
+      this.#captured += reserved;
       this.#truncated = true;
       return;
     }
@@ -1258,5 +1544,11 @@ class Capture {
 
   get bytes(): number {
     return this.#total;
+  }
+
+  release(): void {
+    if (this.#released) return;
+    this.#released = true;
+    this.budget.release(this.#captured);
   }
 }

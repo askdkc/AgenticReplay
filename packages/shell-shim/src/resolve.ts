@@ -16,7 +16,7 @@ import { delimiter, extname, join, resolve } from 'node:path';
  * shim scripts carry a marker comment, so anything carrying it is refused no matter which
  * directory it sits in.
  */
-const SHIM_MARKER = 'orca record';
+const SHIM_MARKER = 'agenticreplay record';
 
 export async function resolveRealBinary(
   name: string,
@@ -33,7 +33,7 @@ export async function resolveRealBinary(
     for (const candidateName of candidateNames(name)) {
       const candidate = join(entry, candidateName);
       if (await isExecutableFile(candidate)) {
-        if (await isOrcaShim(candidate)) continue;
+        if (await isAgenticReplayShim(candidate)) continue;
         return candidate;
       }
     }
@@ -44,14 +44,14 @@ export async function resolveRealBinary(
 }
 
 /**
- * Whether the file is one of orca's own shim scripts, identified by its marker comment.
+ * Whether the file is one of agenticreplay's own shim scripts, identified by its marker comment.
  *
  * Read from the head of the file: a script's shebang-and-comment block sits in the first few
  * hundred bytes, and anything else on PATH is a binary whose first bytes are safe to read and
  * discard. A file that cannot be read is not a shim — the exec attempt will say what is wrong
  * with it.
  */
-async function isOrcaShim(path: string): Promise<boolean> {
+async function isAgenticReplayShim(path: string): Promise<boolean> {
   const handle = await open(path, 'r').catch(() => undefined);
   if (handle === undefined) return false;
   try {

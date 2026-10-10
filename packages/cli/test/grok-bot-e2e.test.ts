@@ -7,8 +7,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns } from '@orcareplay/core';
-import { RunCa } from '@orcareplay/proxy';
+import { TraceReader, listRuns } from '@agenticreplay/core';
+import { RunCa } from '@agenticreplay/proxy';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -30,14 +30,14 @@ const PROXY_CALL = pathToFileURL(join(here, 'fixtures', 'proxy-call.mjs')).href;
 /**
  * A Grok bot, and any other agent whose origin is a string in its own source.
  *
- * Every capture mechanism orca had before this needed the agent's cooperation: a base-URL variable
+ * Every capture mechanism agenticreplay had before this needed the agent's cooperation: a base-URL variable
  * it reads, or a `fetch` it inherits. A bot with `https://api.x.ai/v1` typed into it has neither,
  * and there are a great many of those — it is what someone writes in an afternoon, and it is what
  * the "grok bot" people ask about usually is.
  *
  * `--tls-intercept` was already able to record such a thing. What was missing was a way to say so:
  * `generic-openai` would have injected `OPENAI_BASE_URL` and repointed an agent that never asked,
- * and no test proved the intercept-only path worked end to end for an agent orca knows nothing
+ * and no test proved the intercept-only path worked end to end for an agent agenticreplay knows nothing
  * about. These are that proof, and they are deliberately end to end — a real child process, a real
  * CONNECT, real TLS, and a replay with the origin taken away.
  *
@@ -103,7 +103,7 @@ describe('end to end: an agent whose origin is hardcoded', () => {
    * It CONNECTs through `HTTPS_PROXY` by hand because Node's own client does not honour proxy
    * environment variables before v24 — the same reason the other TLS fixtures here do. That is not
    * a concession: a bot written against `curl`, `requests` or `httpx` gets this behaviour from its
-   * HTTP library, and doing it by hand is what keeps this a test of orca rather than of Node.
+   * HTTP library, and doing it by hand is what keeps this a test of agenticreplay rather than of Node.
    */
   function botSource(port: number): string {
     return `import { callThroughProxy } from ${JSON.stringify(PROXY_CALL)};
@@ -127,15 +127,15 @@ const reply = await callThroughProxy({
 });
 
 console.log('grok-bot: ' + JSON.parse(reply.body).choices[0].message.content);
-if (process.env.ORCA_TEST_RESULT_OUT) {
-  writeFileSync(process.env.ORCA_TEST_RESULT_OUT, JSON.stringify(reply, null, 2));
+if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
+  writeFileSync(process.env.AGENTICREPLAY_TEST_RESULT_OUT, JSON.stringify(reply, null, 2));
 }
 `;
   }
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-grokbot-'));
-    originDir = await mkdtemp(join(tmpdir(), 'orca-grokorigin-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-grokbot-'));
+    originDir = await mkdtemp(join(tmpdir(), 'agenticreplay-grokorigin-'));
     originCa = await RunCa.create({ runDir: originDir });
     xai = await startXai();
     botPath = join(workspace, 'grok-bot.mjs');
@@ -149,12 +149,12 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
 
     // The origin is signed by a CA no machine trusts. Real interception verifies the origin it
     // re-encrypts to, so the proxy is told about that root the way a corporate one would be.
-    process.env.ORCA_TLS_UPSTREAM_CA = originCa.certPath;
+    process.env.AGENTICREPLAY_TLS_UPSTREAM_CA = originCa.certPath;
   });
 
   afterEach(async () => {
-    delete process.env.ORCA_TLS_UPSTREAM_CA;
-    delete process.env.ORCA_TEST_RESULT_OUT;
+    delete process.env.AGENTICREPLAY_TLS_UPSTREAM_CA;
+    delete process.env.AGENTICREPLAY_TEST_RESULT_OUT;
     await xai.close();
     await originCa.dispose();
     await rm(originDir, { recursive: true, force: true });
@@ -196,12 +196,14 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
 
     const events = await (await TraceReader.open(result.runDir)).events();
     expect(events.filter((e) => e.type === 'model.request')).toHaveLength(1);
-    expect(events.filter((e) => e.type === 'net.request')).toHaveLength(0);
+    expect(
+      events.filter((e) => e.type === 'net.request' && e.attrs?.phase === 'body'),
+    ).toHaveLength(1);
   });
 
   it('never repoints the bot at a provider it did not choose', async () => {
     await record();
-    // `exec` injects no origin, so the only reason the call was captured is that orca terminated
+    // `exec` injects no origin, so the only reason the call was captured is that agenticreplay terminated
     // the TLS the bot established itself. An adapter that started setting OPENAI_BASE_URL here
     // would still make this test pass on exchange count — and would have changed where a bot with
     // its own OpenAI client sent its traffic. The origin's own call log is what proves it did not.
@@ -217,7 +219,7 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
     const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
 
     expect(replay.exitCode).toBe(0);
-    expect(replay.matchedExact).toBe(1);
+    expect(replay.canonicalExact).toBe(1);
     expect(replay.unmatched).toBe(0);
     expect(xai.calls.length).toBe(before);
   });
@@ -229,7 +231,7 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
    * proxy with no interception, tunnelled the bot's CONNECT to an origin that was gone, and
    * reported `reused=0/1` as though the recording were at fault. The recording already knew: the
    * run writes a `tls_intercept` note naming the hosts it decrypted. Reading it back is what makes
-   * `orca replay last` work on an intercepted run, which is the only thing anyone types.
+   * `agenticreplay replay last` work on an intercepted run, which is the only thing anyone types.
    */
   it('re-establishes interception from the recording, with no flags repeated', async () => {
     const result = await record();
@@ -239,7 +241,7 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
     const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
 
     expect(replay.exitCode).toBe(0);
-    // Minting a CA is never silent, even when orca decided on it rather than the operator.
+    // Minting a CA is never silent, even when agenticreplay decided on it rather than the operator.
     expect(lines.join('')).toContain('tls.intercepting');
     expect(lines.join('')).toContain(`127.0.0.1:${xai.port}`);
   });
@@ -256,13 +258,13 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
     );
 
     expect(lines.join('')).not.toContain('tls.intercepting');
-    expect(replay.matchedExact).toBe(0);
+    expect(replay.canonicalExact).toBe(0);
   });
 
   /**
    * Codex-in-the-IDE, and the reason it is not above the ceiling.
    *
-   * The editor spawns the agent, so orca never gets to build that process's environment. It does
+   * The editor spawns the agent, so agenticreplay never gets to build that process's environment. It does
    * not need to: the editor inherits the capture and passes it on. This is the same property the
    * gateway test pins for base-URL variables, checked here for the interception half — `HTTPS_PROXY`
    * and the run CA have to survive the same hop, and nothing guarantees that but a test.
@@ -310,12 +312,12 @@ if (process.env.ORCA_TEST_RESULT_OUT) {
     const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
 
     expect(replay.exitCode).toBe(0);
-    expect(replay.matchedExact).toBe(1);
+    expect(replay.canonicalExact).toBe(1);
     expect(replay.unmatched).toBe(0);
   });
 
   /**
-   * Issue #49: `orca replay --from 1 --model <other>` on a TLS-intercepted recording accepted
+   * Issue #49: `agenticreplay replay --from 1 --model <other>` on a TLS-intercepted recording accepted
    * the flag, echoed it, and called the recorded model. `replayed=0 live=0` meant substitution
    * never ran. Forking from before the only exchange is a legitimate thing to ask for.
    */

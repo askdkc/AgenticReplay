@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints, listRuns } from '@orcareplay/core';
+import { TraceReader, deriveCheckpoints, listRuns } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
@@ -19,8 +19,8 @@ const FAKE_AGENT = join(here, 'fixtures', 'fake-agent.mjs');
 describe('compare without --models', () => {
   /**
    * This test used to swap `XDG_CONFIG_HOME` itself, because `compareCommand` falls back to
-   * `readConfig()` and so read the *real* `~/.config/orca`: on a machine where anyone had run
-   * `orca setup`, that config has models in it and this never reached the branch it names.
+   * `readConfig()` and so read the *real* `~/.config/agenticreplay`: on a machine where anyone had run
+   * `agenticreplay setup`, that config has models in it and this never reached the branch it names.
    *
    * vitest.setup.ts now does that for the whole suite, and for a larger reason than this test —
    * the same fallback was sending live requests to the developer's gateway from the fork tests.
@@ -28,10 +28,10 @@ describe('compare without --models', () => {
   it('tells you both ways to supply models when none are available', async () => {
     const lines: string[] = [];
     const out = new Output({ write: (l) => void lines.push(l), isTTY: false });
-    const home = await mkdtemp(join(tmpdir(), 'orca-cmp-cfg-'));
+    const home = await mkdtemp(join(tmpdir(), 'agenticreplay-cmp-cfg-'));
     try {
       await expect(compareCommand(parseArgs(['compare', 'last']), out, home)).rejects.toThrow(
-        /orca setup/,
+        /agenticreplay setup/,
       );
     } finally {
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -46,7 +46,7 @@ describe('compare', () => {
   let lines: string[];
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-cmp-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-cmp-'));
     model = await startFakeModel();
     lines = [];
     out = new Output({ write: (s) => void lines.push(s), isTTY: false });
@@ -81,7 +81,7 @@ describe('compare', () => {
 
   it('needs models, and says how to give them', async () => {
     // Same reason as the block above: without an empty config this reads the developer's own
-    // `orca setup` models, never reaches the branch, and fails on "no runs recorded" instead.
+    // `agenticreplay setup` models, never reaches the branch, and fails on "no runs recorded" instead.
     const previous = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = join(workspace, 'empty-config');
     try {
@@ -128,11 +128,11 @@ describe('compare', () => {
   /**
    * A RUN CAN ARRIVE WITHOUT THE STORE ITS OWN EVENTS POINT AT.
    *
-   * `orca pull` produces one unless the run was pushed with `--fs`: the archive then carries
+   * `agenticreplay pull` produces one unless the run was pushed with `--fs`: the archive then carries
    * manifest.json, events.jsonl, redactions.json and blobs/ — not `fs/` — so a pulled run's
    * `fs.snapshot` events name trees whose objects were never sent. The restore then died inside git with "failed to unpack tree
    * object <40 hex>", which names neither the cause nor anything to do about it, on the exact path
-   * the gateway console prints under "fork it locally": `orca pull <run>`, then `orca compare`.
+   * the gateway console prints under "fork it locally": `agenticreplay pull <run>`, then `agenticreplay compare`.
    *
    * Deleting the store is what the wire leaves behind, so that is what this sets up.
    */
@@ -249,7 +249,7 @@ describe('verify command', () => {
   let out: Output;
 
   beforeEach(async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'orca-verify-'));
+    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-verify-'));
     model = await startFakeModel();
     out = new Output({ write: () => {}, isTTY: false });
     await run('git', ['init', '-q'], { cwd: workspace });

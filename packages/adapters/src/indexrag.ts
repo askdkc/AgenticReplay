@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Adapter, Launch, RecordContext } from '@orcareplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 import {
   applyNamedBaseUrls,
   forwardOrProxyBase,
@@ -19,7 +19,7 @@ import {
  *
  * **Two model origins in one run.** Chat (extraction, bridging, answering) reads
  * `OPENAI_BASE_URL`; embeddings read `INDEXRAG_EMBEDDING_BASE_URL` and may point at a completely
- * different provider — a dedicated embedding vendor, or a local Ollama. Orca's upstream map is
+ * different provider — a dedicated embedding vendor, or a local Ollama. AgenticReplay's upstream map is
  * keyed by wire dialect, so no `--upstream-*` can express "the same dialect at two origins"; the
  * second one is redirected through `/forward/`, which carries its own destination on the request.
  *
@@ -73,7 +73,7 @@ export const indexRagAdapter: Adapter = {
 
     // The second origin. Redirected without its original target it would be forwarded to the chat
     // upstream — a model that endpoint has never heard of, with the embedding provider's key on
-    // it; left alone it bypasses orca entirely and not even a `net.*` pair reaches the trace.
+    // it; left alone it bypasses agenticreplay entirely and not even a `net.*` pair reaches the trace.
     //
     // Read from the environment *or* from the project's own `.env`, because that is where
     // IndexRAG documents it: `indexrag/config.py` loads `.env` from the working directory before
@@ -98,7 +98,7 @@ export const indexRagAdapter: Adapter = {
     // pointing a rerank service or a second gateway somewhere still gets a way to name it.
     applyNamedBaseUrls(env, ctx.env, ctx.proxyUrl);
 
-    // A command the user spelled out wins. `orca record indexrag -- python -m benchmarks.evaluate
+    // A command the user spelled out wins. `agenticreplay record indexrag -- python -m benchmarks.evaluate
     // --dataset mini` records exactly that one stage, which is what someone debugging the query
     // half wants; anything starting with `-` is an argument to the pipeline, not a program.
     const [first, ...rest] = ctx.userArgs;
@@ -106,7 +106,7 @@ export const indexRagAdapter: Adapter = {
       return { command: first, args: rest, env };
     }
 
-    // Otherwise: the whole pipeline, as one recorded run. `orca record` launches one process and
+    // Otherwise: the whole pipeline, as one recorded run. `agenticreplay record` launches one process and
     // IndexRAG's stages are four of them, so the stages are driven in-process from a script
     // written into the run directory — which the contract's `no-foreign-paths` allows precisely
     // so an adapter can do this reproducibly.
@@ -144,7 +144,7 @@ const DRIVER_FILENAME = 'drive_indexrag.py';
  *
  * Only for looking things up — nothing here is copied into the child, which would turn a file
  * Python is about to read for itself into a second, diverging source of truth. What it is for is
- * the one variable orca has to know *before* the harness starts: the embedding origin, which
+ * the one variable agenticreplay has to know *before* the harness starts: the embedding origin, which
  * decides whether that half of the run is captured at all.
  *
  * Deliberately the same small parser: `KEY=VALUE`, `#` comments, optional surrounding quotes, an
@@ -183,7 +183,7 @@ function dotEnv(cwd: string): Record<string, string> {
 /**
  * The pipeline, as one process.
  *
- * `runpy` rather than four subprocesses: `orca record` launches one child and watches it, so four
+ * `runpy` rather than four subprocesses: `agenticreplay record` launches one child and watches it, so four
  * children would be four recordings or none. Running the stages in-process keeps them in one
  * trace, in order, with the filesystem snapshots between turns showing the cache and the index
  * appearing.
@@ -194,7 +194,7 @@ function dotEnv(cwd: string): Record<string, string> {
  */
 const PIPELINE_DRIVER = `"""Drive IndexRAG's stages as one recorded run.
 
-Written by the OrcaReplay 'indexrag' adapter into the run directory. Not part of IndexRAG.
+Written by the AgenticReplay 'indexrag' adapter into the run directory. Not part of IndexRAG.
 """
 
 import argparse

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from orca_trace import Checkpoint, TraceEvent, causal_chain, derive_checkpoints, snap_to_checkpoint, turns_of
+from agenticreplay_trace import Checkpoint, TraceEvent, causal_chain, derive_checkpoints, snap_to_checkpoint, turns_of
 
 
 def ev(seq: int, type_: str, **over: Any) -> TraceEvent:
@@ -20,7 +20,7 @@ def ev(seq: int, type_: str, **over: Any) -> TraceEvent:
         "mono_us": seq * 1000,
         "turn": 0,
         "type": type_,
-        "actor": "orca",
+        "actor": "agenticreplay",
     }
     raw.update(over)
     return TraceEvent.from_json(raw)

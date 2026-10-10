@@ -1,8 +1,8 @@
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BlobRef, TraceEvent } from '@orcareplay/schema';
-import { INLINE_PAYLOAD_LIMIT } from '@orcareplay/schema';
+import type { BlobRef, TraceEvent } from '@agenticreplay/schema';
+import { INLINE_PAYLOAD_LIMIT } from '@agenticreplay/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BlobStore } from '../src/blobs.js';
 import { TraceReader } from '../src/reader.js';
@@ -15,11 +15,11 @@ const INIT = {
   adapter: { id: 'claude-code' },
   argv: ['claude'],
   cwd: '/workspace',
-  orcaVersion: '0.1.0',
+  agenticreplayVersion: '0.1.0',
 };
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'orca-reader-'));
+  root = await mkdtemp(join(tmpdir(), 'agenticreplay-reader-'));
   runs = join(root, 'runs');
 });
 
@@ -33,7 +33,7 @@ function line(over: Partial<TraceEvent> & { seq: number }): string {
     mono_us: over.seq * 1000,
     turn: 0,
     type: 'note',
-    actor: 'orca',
+    actor: 'agenticreplay',
     ...over,
   });
 }
@@ -45,10 +45,10 @@ async function seedRun(runId: string, body: string): Promise<string> {
   await writeFile(
     join(dir, 'manifest.json'),
     JSON.stringify({
-      schema_version: '0.1.0',
+      schema_version: '0.4.0',
       run_id: runId,
       created_at: '2026-08-29T10:00:00.000Z',
-      orca_version: '0.1.0',
+      agenticreplay_version: '0.1.0',
       adapter: { id: 'claude-code' },
       argv: ['claude'],
       cwd: '/workspace',
@@ -79,7 +79,7 @@ describe('TraceReader.open', () => {
 
   it('opens a run that crashed before it was closed', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'run.start', actor: 'orca' });
+    await w.append({ type: 'run.start', actor: 'agenticreplay' });
     const r = await TraceReader.open(w.runDir);
     expect(r.manifest().ended_at).toBeUndefined();
     expect(await r.events()).toHaveLength(1);
@@ -177,7 +177,7 @@ describe('reading events', () => {
 describe('payloads and blobs', () => {
   it('returns an inline payload unchanged', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const e = await w.append({ type: 'note', actor: 'orca', payload: { small: true } });
+    const e = await w.append({ type: 'note', actor: 'agenticreplay', payload: { small: true } });
     await w.close();
     const r = await TraceReader.open(w.runDir);
     expect(await r.resolvePayload(e)).toEqual({ small: true });
@@ -185,7 +185,7 @@ describe('payloads and blobs', () => {
 
   it('returns undefined when there is no payload', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    const e = await w.append({ type: 'note', actor: 'orca' });
+    const e = await w.append({ type: 'note', actor: 'agenticreplay' });
     await w.close();
     const r = await TraceReader.open(w.runDir);
     expect(await r.resolvePayload(e)).toBeUndefined();
@@ -235,7 +235,7 @@ describe('payloads and blobs', () => {
 describe('verifyIntegrity', () => {
   it('accepts an untouched run (spec §6)', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca', payload: { a: 1 } });
+    await w.append({ type: 'note', actor: 'agenticreplay', payload: { a: 1 } });
     await w.close(0);
     const r = await TraceReader.open(w.runDir);
     const v = await r.verifyIntegrity();
@@ -246,7 +246,7 @@ describe('verifyIntegrity', () => {
 
   it('reports tampering rather than repairing it', async () => {
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     const m = await w.close(0);
     await appendFile(join(w.runDir, 'events.jsonl'), `${line({ seq: 99 })}\n`);
     const v = await TraceReader.open(w.runDir).then((r) => r.verifyIntegrity());
@@ -260,7 +260,7 @@ describe('verifyIntegrity', () => {
     // `ok: false` on its own cannot tell a killed recorder from an edited file, and callers that
     // report to a person read it as the second. A crashed run is the one you most want to open.
     const w = await TraceWriter.create(runs, INIT);
-    await w.append({ type: 'note', actor: 'orca' });
+    await w.append({ type: 'note', actor: 'agenticreplay' });
     const v = await TraceReader.open(w.runDir).then((r) => r.verifyIntegrity());
     expect(v.ok).toBe(false);
     expect(v.state).toBe('unsealed');

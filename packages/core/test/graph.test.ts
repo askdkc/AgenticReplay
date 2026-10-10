@@ -1,4 +1,4 @@
-import type { EventType, TraceEvent } from '@orcareplay/schema';
+import type { EventType, TraceEvent } from '@agenticreplay/schema';
 import { describe, expect, it } from 'vitest';
 import {
   causalChain,
@@ -17,7 +17,7 @@ function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): Trace
     mono_us: seq * 1000,
     turn: 0,
     type,
-    actor: 'orca',
+    actor: 'agenticreplay',
     ...over,
   };
 }
@@ -482,10 +482,10 @@ describe('pickChainTarget', () => {
 });
 
 /**
- * Found in review. A graph is about structure, and `orca_graph` answers an agent whose context the
+ * Found in review. A graph is about structure, and `agenticreplay_graph` answers an agent whose context the
  * answer lands in — so copying `attrs` whole put every `tool.call`'s complete `input`, file bodies
- * and all, into the reply. `orca show` clamps every field for the same reason; the full value is a
- * `orca events` away.
+ * and all, into the reply. `agenticreplay show` clamps every field for the same reason; the full value is a
+ * `agenticreplay events` away.
  */
 describe('runGraph node attrs', () => {
   const body = 'x'.repeat(5000);

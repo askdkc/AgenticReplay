@@ -3,12 +3,12 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through
-[GitHub Security Advisories](https://github.com/Continuum-AI-Corp/OrcaReplay/security/advisories/new)
+[GitHub Security Advisories](https://github.com/askdkc/AgenticReplay/security/advisories/new)
 rather than a public issue. We aim to acknowledge within three working days.
 
 ## The threat model, stated plainly
 
-An OrcaReplay trace contains full model requests, tool results, shell output, file contents and
+An AgenticReplay trace contains full model requests, tool results, shell output, file contents and
 selected environment. **That is a near-perfect credential harvester if we get it wrong**, so
 redaction is in the write path from the first commit rather than bolted on later.
 
@@ -25,30 +25,30 @@ What we do:
   yields the same placeholder, so replay still matches structurally and repeated occurrences still
   compare equal, while the secret itself is not recoverable from the trace.
 - Filesystem capture excludes `.env*`, `.ssh/`, `.aws/`, `.netrc`, `*.pem`, `*.key`, `id_rsa*` and
-  `id_ed25519*`, along with `.git/`, `node_modules/` and `.orca/`. That is a fixed list, not a rule
+  `id_ed25519*`, along with `.git/`, `node_modules/` and `.agenticreplay/`. That is a fixed list, not a rule
   that generalises: `id_ecdsa` is not on it. A shape we miss is a bug worth filing — there is an
   issue template for exactly that.
 - Trace files and blobs are written mode `0600`, run directories `0700` — and on Windows,
-  where those are not something the filesystem has, the equivalent ACL: `.orca/runs` grants
+  where those are not something the filesystem has, the equivalent ACL: `.agenticreplay/runs` grants
   only its owner, SYSTEM and Administrators, and everything written beneath it inherits that.
   Said plainly because it did not used to be true: `chmod` on Windows sets the read-only
   attribute and discards the mode, so the store was left with whatever the workspace handed
   down — typically readable by every account on the machine. On Windows the ACL is applied
-  whether or not orca created the store that run, since an inherited one is not a choice
+  whether or not agenticreplay created the store that run, since an inherited one is not a choice
   anybody made. What it cannot do is rewrite runs already on disk from before: those keep the
   ACEs they were written with, and `icacls` on the parent does not re-propagate.
-  The account running orca, SYSTEM and Administrators are the trusted principals. Before
-  changing a Windows ACL, orca also checks the actual owner: another account's ownership can
+  The account running agenticreplay, SYSTEM and Administrators are the trusted principals. Before
+  changing a Windows ACL, agenticreplay also checks the actual owner: another account's ownership can
   otherwise retain the right to restore access even after its ACE is removed. An unreadable or
   foreign owner, a junction, or an entry replaced during setup causes a refusal. Owner lookup
   uses the built-in Windows PowerShell .NET API; it needs neither elevation nor `Get-Acl` module
   loading. If that API is unavailable, private-data setup fails closed.
-- Redaction lives in the writer, so a file orca does not write itself has not been through it. A
+- Redaction lives in the writer, so a file agenticreplay does not write itself has not been through it. A
   capture layer that runs inside the agent's process, or in a child of it, produces exactly that:
-  the bytes are on disk before orca ever reads them. Where nothing reads such a file after the run,
+  the bytes are on disk before agenticreplay ever reads them. Where nothing reads such a file after the run,
   it is kept out of the run directory — the OpenAI Agents tracing layer and the shell shim both
   write to a temporary directory made private the moment it is created and before anything is
-  written into it, orca reads each once and appends what it keeps through the redactor like
+  written into it, agenticreplay reads each once and appends what it keeps through the redactor like
   anything else, and the directory is removed when the run ends. "Private" is `mkdtemp`'s 0700 on
   POSIX and the same owner-only ACL as the store on Windows, where `mkdtemp` alone gives whatever
   `%TEMP%` hands down — which is not always the profile, and `shell-frames.jsonl` holds argv and
@@ -73,7 +73,7 @@ Keep the workspace and temporary-directory ancestors under trusted control. The 
 detect replacements during setup; they are path-based checks, not a filesystem sandbox or an
 atomic handle-based defense against an account that can replace ancestors throughout a run.
 
-`orca scrub` is the second pass, for what the write path missed and for the internal hostname that
+`agenticreplay scrub` is the second pass, for what the write path missed and for the internal hostname that
 is only sensitive in your organisation. It rewrites `events.jsonl`, `manifest.json` and every text
 blob in place, then refreshes the integrity digest. Two things it cannot do, and says out loud
 rather than papering over:
@@ -92,7 +92,7 @@ rather than papering over:
   objects still hold the material; `--drop-fs` deletes the store outright for anyone who would
   rather lose the snapshots than keep what is in them.
 
-`orca export` prints what it is about to write before it writes it.
+`agenticreplay export` prints what it is about to write before it writes it.
 
 ## TLS interception
 
@@ -101,7 +101,7 @@ the agent's traffic arrives in plaintext. A harness that reads no such variable 
 that mechanism — a Codex CLI signed in with a ChatGPT subscription is the concrete case, because it
 talks to its own backend over TLS it established itself.
 
-`orca record --tls-intercept` closes that gap. It is the most invasive thing this tool does, so
+`agenticreplay record --tls-intercept` closes that gap. It is the most invasive thing this tool does, so
 here is exactly what it does and does not do.
 
 **Off by default, and per run.** There is no global switch and no persistent install. Off is the
@@ -112,7 +112,7 @@ will decrypt, and where the CA lives, before the agent starts.
 **The CA is ephemeral and local.** Generated per run into `<run>/tls/` — key `0600`, directory
 `0700`, or the ACL that means the same on Windows — and deleted when the run ends, including when the run fails, is interrupted, or the agent
 binary does not exist. It expires 24 hours after minting regardless. It is **never** installed into
-a system or browser trust store, and orca will not offer to.
+a system or browser trust store, and agenticreplay will not offer to.
 
 **The key never reaches a trace.** Not `events.jsonl`, not a blob, not the manifest. `RunCa` does
 not expose it — it is a private field, and the file is the only place it exists. A test copies the
@@ -121,19 +121,19 @@ real key material out while a run is live and then greps the entire run director
 **The child trusts it, and nothing else does.** `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
 `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `AWS_CA_BUNDLE` and `DENO_CERT` are set on that process
 alone. Note that `SSL_CERT_FILE` *replaces* a trust store rather than adding to it, so the bundle
-those variables point at is the run CA **plus** the public roots — otherwise every host orca
+those variables point at is the run CA **plus** the public roots — otherwise every host agenticreplay
 deliberately does not intercept would stop working.
 
 **Only the allowlist is decrypted.** The default is model API hosts and nothing else.
 `auth.openai.com` and other sign-in origins are deliberately excluded: that flow carries the
 credential itself, and decrypting it would capture the thing we are trying not to record.
-Everything else is tunnelled opaquely — orca records the host, port, byte counts and duration, and
+Everything else is tunnelled opaquely — agenticreplay records the host, port, byte counts and duration, and
 nothing of the contents. `--tls-hosts` overrides the list. A bare `*` is refused, because it is a
 request to decrypt everything.
 
 **Origin verification is never disabled.** The re-encrypt leg to the real origin verifies its
 certificate, and an origin that cannot be verified is refused rather than downgraded.
-`ORCA_TLS_UPSTREAM_CA` *adds* roots, for a machine already behind a TLS-inspecting middlebox.
+`AGENTICREPLAY_TLS_UPSTREAM_CA` *adds* roots, for a machine already behind a TLS-inspecting middlebox.
 Nothing removes the check.
 
 **Auth is handled exactly as on the base-URL path.** Headers are forwarded upstream so the agent

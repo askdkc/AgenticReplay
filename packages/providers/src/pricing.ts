@@ -1,5 +1,5 @@
 /**
- * Open pricing data, usable by OrcaReplay and by any gateway that wants the same numbers.
+ * Open pricing data, usable by AgenticReplay and by any gateway that wants the same numbers.
  *
  * Prices are USD per million tokens, as published by each vendor's pricing page (checked
  * 2026-08-29):
@@ -13,7 +13,7 @@
  * is worse than no cost at all, so unknown ids return null rather than a nearby guess.
  */
 
-import type { ModelInfo, Money, Usage } from '@orcareplay/plugin-api';
+import type { ModelInfo, Money, Usage } from '@agenticreplay/plugin-api';
 
 export interface ModelPrice {
   input_per_mtok: number;
