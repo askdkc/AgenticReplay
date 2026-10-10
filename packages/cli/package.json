@@ -1,6 +1,6 @@
 {
   "name": "agenticreplay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "mcpName": "io.github.askdkc/agenticreplay",
   "type": "module",
   "license": "Apache-2.0",
@@ -37,15 +37,15 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@agenticreplay/schema": "0.1.0",
-    "@agenticreplay/plugin-api": "0.1.0",
-    "@agenticreplay/core": "0.1.0",
-    "@agenticreplay/proxy": "0.1.0",
-    "@agenticreplay/providers": "0.1.0",
-    "@agenticreplay/adapters": "0.1.0",
-    "@agenticreplay/fs-capture": "0.1.0",
-    "@agenticreplay/viewer": "0.1.0",
-    "@agenticreplay/mcp-shim": "0.1.0",
-    "@agenticreplay/shell-shim": "0.1.0"
+    "@agenticreplay/schema": "0.1.1",
+    "@agenticreplay/plugin-api": "0.1.1",
+    "@agenticreplay/core": "0.1.1",
+    "@agenticreplay/proxy": "0.1.1",
+    "@agenticreplay/providers": "0.1.1",
+    "@agenticreplay/adapters": "0.1.1",
+    "@agenticreplay/fs-capture": "0.1.1",
+    "@agenticreplay/viewer": "0.1.1",
+    "@agenticreplay/mcp-shim": "0.1.1",
+    "@agenticreplay/shell-shim": "0.1.1"
   }
 }

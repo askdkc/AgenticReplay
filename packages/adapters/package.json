@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/adapters",
-  "version": "0.5.0",
+  "version": "0.1.1",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,11 +17,11 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/core": "0.5.0",
-    "@agenticreplay/node-instrument": "0.5.0",
-    "@agenticreplay/plugin-api": "0.5.0",
-    "@agenticreplay/proxy": "0.5.0",
-    "@agenticreplay/shell-shim": "0.5.0"
+    "@agenticreplay/core": "0.1.1",
+    "@agenticreplay/node-instrument": "0.1.1",
+    "@agenticreplay/plugin-api": "0.1.1",
+    "@agenticreplay/proxy": "0.1.1",
+    "@agenticreplay/shell-shim": "0.1.1"
   },
   "engines": {
     "node": ">=24.0.0"
