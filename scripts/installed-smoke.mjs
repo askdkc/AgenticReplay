@@ -2,9 +2,8 @@
 /**
  * Smoke-test the packed public surface in a clean consumer directory.
  *
- * This deliberately installs every workspace tarball in one npm invocation. Installing only the
- * CLI tarball can accidentally resolve renamed internal packages from the registry and therefore
- * does not prove that the release is self-contained.
+ * Install only the root CLI tarball, offline with an empty cache. The public package must bundle
+ * its runtime dependencies rather than rely on unpublished workspace packages in the registry.
  */
 import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -19,8 +18,7 @@ const exec = promisify(execFile);
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packDir = await mkdtemp(join(tmpdir(), 'agenticreplay-smoke-pack-'));
 const consumerDir = await mkdtemp(join(tmpdir(), 'agenticreplay-smoke-consumer-'));
-const npmCache =
-  process.env.AGENTICREPLAY_SMOKE_NPM_CACHE ?? join(tmpdir(), 'agenticreplay-npm-cache');
+const npmCache = await mkdtemp(join(tmpdir(), 'agenticreplay-smoke-cache-'));
 const node = process.execPath;
 
 async function run(command, args, options = {}) {
@@ -63,31 +61,23 @@ const packages = manifests.filter((item) => item?.manifest?.name && item.manifes
 if (packages.length === 0 || !rootManifest.workspaces)
   throw new Error('no public workspace packages found');
 
-for (const item of packages) {
-  await run('npm', [
-    'pack',
-    '--workspace',
-    item.manifest.name,
-    '--pack-destination',
-    packDir,
-    '--cache',
-    npmCache,
-    '--silent',
-  ]);
-}
+await run('npm', ['pack', '--pack-destination', packDir, '--cache', npmCache, '--silent']);
 const tarballs = (await readdir(packDir))
   .filter((name) => name.endsWith('.tgz'))
   .map((name) => join(packDir, name));
-if (tarballs.length !== packages.length)
-  throw new Error(`packed ${tarballs.length} packages, expected ${packages.length}`);
+if (tarballs.length !== 1) throw new Error(`packed ${tarballs.length} packages, expected one CLI`);
 
 await writeFile(
   join(consumerDir, 'package.json'),
   JSON.stringify({ name: 'agenticreplay-installed-smoke', private: true, type: 'module' }, null, 2),
 );
-await exec('npm', ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...tarballs], {
-  ...commandOptions(consumerDir, { npm_config_cache: npmCache }),
-});
+await exec(
+  'npm',
+  ['install', '--offline', '--no-audit', '--no-fund', '--ignore-scripts', ...tarballs],
+  {
+    ...commandOptions(consumerDir, { npm_config_cache: npmCache }),
+  },
+);
 
 const bin = join(consumerDir, 'node_modules', '.bin', 'agenticreplay');
 const smokeEnv = {
@@ -106,6 +96,7 @@ for (const item of packages) {
   const packagePath = join(
     consumerDir,
     'node_modules',
+    ...(item.manifest.name === rootManifest.name ? [] : ['agenticreplay', 'node_modules']),
     ...item.manifest.name.split('/'),
     'package.json',
   );

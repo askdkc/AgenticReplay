@@ -1,134 +1,51 @@
 # Releasing
 
-Publishing is irreversible in the way that matters: npm allows an unpublish only briefly, and never
-lets the same version be published twice. So the whole thing is one gated workflow rather than a
-sequence of `npm publish` calls run by hand at the end of a long day.
+## npm CLI
 
-## Once, before the first release
+Publish the repository root as `agenticreplay`. It declares the CLI binary and bundles the
+internal workspace libraries and their runtime dependencies. Publishing the CLI does not require
+an `@agenticreplay` npm organization or separate library uploads.
 
-- An **`NPM_TOKEN`** repository secret, from an npm account that owns the `agenticreplay` name and the
-  `@agenticreplay` scope. An automation token, not a personal one.
-- **Actions enabled** for the repository, and Actions billing active on the org.
-- For the three Python packages, a **pending publisher** registered at pypi.org under
-  *Publishing → Add a pending publisher*, and a repository **environment named `pypi`**. There is
-  no PyPI secret: Trusted Publishing exchanges GitHub's OIDC identity for a short-lived upload
-  token, so there is nothing here to leak or rotate. One registration per package, all four other
-  fields identical:
+Use Node 24 or newer and an npm account authorized to publish `agenticreplay`. The checkout has
+`ci.yml`; it does not currently contain an automatic npm release workflow.
 
-  | PyPI project | owner | repository | workflow | environment |
-  | --- | --- | --- | --- | --- |
-  | `agenticreplay-trace` | `Continuum-AI-Corp` | `AgenticReplay` | `release-python.yml` | `pypi` |
-  | `agenticreplay-openai-agents` | `Continuum-AI-Corp` | `AgenticReplay` | `release-openai-agents.yml` | `pypi` |
-  | `agenticreplay-langgraph` | `Continuum-AI-Corp` | `AgenticReplay` | `release-langgraph.yml` | `pypi` |
-
-  A pending publisher does not reserve the name — it is only honoured on the first upload, and
-  another account registering that name first invalidates it. So publish reasonably soon after
-  registering.
-
-## Two channels
-
-| | what it is | who gets it |
-| --- | --- | --- |
-| `latest` | a version someone decided to release | `npm i agenticreplay` |
-| `next` | main, once a day, as `0.2.4-main.g<sha>` | `npm i agenticreplay@next` |
-
-`next` is published by `.github/workflows/publish-next.yml` on a daily schedule — 04:00 UTC, which
-is noon in Beijing — and needs nothing from you. Every version on it is a **prerelease**, which npm
-excludes from `npm i agenticreplay` even though `0.2.4-main.gabc1234` sorts above `0.2.3`, so main is
-always installable and nobody is opted in to it by accident. `--tag next` never moves `latest`.
-
-It publishes **the newest commit on main that CI passed**, not whatever main happens to be at
-04:00, and it skips a day on which nothing merged — the version it would publish is already on the
-registry, and it asks npm rather than keeping state. Needing main on npm sooner than tomorrow is
-what **Actions → Publish next → Run workflow** is for; uncheck *dry run*.
-
-> **Why daily rather than on every merge.** A version is not free. npm serves a *packument* — the
-> metadata for every version of a package — on each install, and it grows with the version count:
-> `agenticreplay` is 20 KB at seven versions, `typescript` is 15.6 MB at 3820. That is roughly 4 KB
-> each, paid by everyone who installs, including people who only ever ask for `latest`. Publishing
-> per merge at this repository's rate would add ~2900 versions a year and land in that territory
-> inside twelve months. Daily is an eighth of it, and it is what `typescript` does for its own
-> `-dev` builds.
->
-> GitHub's cron is UTC only and best-effort — a scheduled run is commonly minutes late and can be
-> dropped under load — so read the schedule as "some time after noon", not as a clock.
-
-That is what keeps the rest of this page short: releasing is no longer the only way to get main
-into someone's hands, so it can stay deliberate.
-
-## Every release
-
-A release is a pull request that changes a version number. Merging it publishes `latest` and
-creates the tag.
+From a clean checkout, this standard command updates all workspace versions and internal pins,
+reconciles the lockfile, and includes every manifest in the release commit and tag:
 
 ```console
-node scripts/set-version.mjs 0.3.0 --lock   # 13 manifests, every internal pin, and the lockfile
-node scripts/publish-order.mjs              # sanity: prints the order, fails if versions disagree
-npm run check                               # what the workflow runs anyway, faster to find here
-git commit -am "release 0.3.0" && git push  # open a PR, merge it
+npm version patch -m "chore(release): v%s"
+npm ci
+npm run check
+node scripts/installed-smoke.mjs
+npm audit
+npm publish
 ```
 
-Merging that into main fires `.github/workflows/release.yml`, which sees a version with no tag,
-runs the full gate, publishes, and creates `v0.3.0` itself. Nothing else lands a release: every
-other merge leaves the version alone, and the workflow's `decide` job costs seconds to say so.
+The root `version` lifecycle runs `scripts/npm-version.mjs` after npm bumps the root version.
+For a metadata-only bump without staging, committing, or tagging, use
+`npm version patch --no-git-tag-version`. For a specific version without Git operations,
+`node scripts/set-version.mjs 0.1.2 --lock` remains available. Do not disable scripts when using
+`npm version`: that would skip synchronization. Neither version command pushes or publishes.
 
-A `v*` tag pushed by hand still works and does the same thing, for a release made from somewhere
-other than main.
+`npm publish` runs `prepack`, which builds the CLI and validates internal dependency versions.
+The resulting package includes the executable, quickstart assets, and bundled runtime libraries.
+Do not use `--workspace=agenticreplay` for this release: that selects the development CLI
+workspace, whose hoisted dependencies are not bundled into its archive.
 
-> **Why there is a script for what looks like one edit.** Twelve packages name each other by exact
-> version, so a bump is thirty-eight fields across thirteen manifests — and `npm version
-> --workspaces` moves each package's own `version` while leaving its dependants naming the previous
-> release. Publish that and `agenticreplay@0.3.0` depends on `@agenticreplay/core@0.2.0`, which npm will
-> never let you replace.
->
-> **And why `--lock` rather than `npm version`.** When a workspace sits at the new version and its
-> dependants still name the old one, npm stops treating them as satisfiable workspace links and
-> resolves the *published* old version instead, into `packages/<name>/node_modules/`. Those copies
-> shadow the source, `tsc` then checks the CLI against last release's `.d.ts`, and the errors it
-> reports name symbols that plainly do exist. `npm version` writes `package-lock.json` itself at
-> exactly that moment, so the bad resolution is recorded before the pins can be fixed — 0.2.1
-> shipped with correct manifests and two poisoned lockfile entries, and every later `npm ci`
-> honoured them. `set-version.mjs` moves the pins first and reconciles the lockfile after, so the
-> window does not exist.
->
-> Both halves are still checked rather than trusted: `publish-order.mjs` catches a manifest
-> mismatch, and `scripts/set-version.test.ts` asserts the committed lockfile links every
-> `@agenticreplay/*` instead of fetching it. The manifests can be perfectly consistent while the
-> lockfile is not.
+To create an actual archive without publishing:
 
-> **The registry step waits for npm, and has to.** The MCP Registry validates that the npm version
-> it is being told about exists, and npm's own publish output says a tarball "may take a few minutes
-> to become available". 0.2.3 published at `:06` and the registry call ran three seconds later, got
-> a 404 for the version that had just gone out, and failed the release — after npm had succeeded, so
-> re-running the whole workflow was not an option. The step now polls `npm view` for up to five
-> minutes before publishing. `registry-only` exists for the case where it still needs a retry.
+```console
+npm pack
+# agenticreplay-<version>.tgz
+```
 
-`.github/workflows/release.yml`, however it was triggered:
+`npm pack --dry-run` previews the file list without writing an archive. `npm publish --dry-run`
+checks packaging without uploading. Both still run the build lifecycle unless scripts are disabled.
+Avoid `--ignore-scripts` when releasing, because it skips that build.
 
-1. decides whether there is anything to release — from main, a version that already has a tag is
-   not one, which is what makes an ordinary merge cost seconds instead of the whole suite;
-2. runs the full gate — format, build, 1000+ tests, conformance, neutrality;
-3. for a `v*` tag, checks it matches `packages/cli`'s version, so a published version always has a
-   tag pointing at it;
-4. publishes every workspace **in dependency order**, with npm provenance — skipping any package
-   already on npm at that version *from this commit*, so a run that died half way can be retried;
-5. creates the tag, when the release came from main — *after* the publish, so a tag means "this
-   went out" rather than "this was attempted", and so the next merge does not try again.
-
-> **A retry may resume, but only from the same commit.** A release version is a number a human
-> chose, and main can carry it across several commits, so "0.3.0 is on npm" does not mean this
-> commit put it there. If the loop dies at package five and someone then pushes the fix to main —
-> same version, still untagged — resuming would publish 6-12 from the new tree and leave 1-5 from
-> the old one, making `agenticreplay@0.3.0` a mixture no commit corresponds to, permanently. So the
-> skip compares npm's recorded `gitHead` with the commit being published and stops the release when
-> they disagree: bump the version instead.
-
-Both publishing workflows are `concurrency`-grouped and queue rather than cancel. The publish loop
-walks twelve packages one at a time, and a run cancelled half way leaves some of them on the
-registry at a version the rest do not name — which is the one state npm will not let anyone fix.
-
-To rehearse without sending anything: **Actions → Release → Run workflow**, leaving *dry run*
-checked. It packs and validates every tarball and publishes nothing.
+A published version cannot be replaced. After changes to an already published version, choose a
+new version before publishing again. `--tag next` can be used for a prerelease without changing
+`latest`.
 
 ## The three Python packages
 
@@ -156,28 +73,22 @@ the upload, which is how to find out whether a release would work without making
 > else, so one tag publishing several would make every `agenticreplay-trace` fix reissue the adapters — and
 > PyPI does not allow reusing a version number.
 
-## Why order matters
+## Workspace version validation
 
-Internal dependencies are pinned to an exact version — `"@agenticreplay/core": "0.1.0"`, never `"*"`.
-A `*` resolves to whatever is latest on the registry, so a 0.1.0 CLI would silently pull a 0.9.0
-core, and on the very first publish it cannot resolve at all because nothing exists yet.
+`scripts/publish-order.mjs` verifies exact internal dependency pins and rejects mismatched versions
+or dependency cycles. Root `prepack` invokes it with `--quiet`. Its default output is useful if
+publishing individual libraries separately; that route still requires ownership of the scope.
 
-The cost of pinning is that the CLI cannot be published before the core it names. `scripts/publish-order.mjs`
-topologically sorts the workspaces so that order is computed from the manifests rather than written
-down somewhere that quietly goes stale — and it exits non-zero if two packages disagree about a
-version, or if the dependency graph has a cycle.
+## Verifying the installed package
 
-## Verifying a release actually works
+`node scripts/installed-smoke.mjs` creates one root archive, installs it offline in an empty
+consumer directory with a fresh cache, and exercises help, record, show, export, replay, and MCP.
+Installing all workspace tarballs together would mask missing bundled dependencies.
 
-The end-to-end check that matters is not "did npm accept it" but "does a fresh install run":
+After publishing, check the registry installation too:
 
 ```console
-npm pack --workspaces --pack-destination /tmp/tarballs
-mkdir /tmp/verify && cd /tmp/verify && npm init -y
-npm i /tmp/tarballs/*.tgz
-./node_modules/.bin/agenticreplay doctor       # both shims must report ok — they run out of dist/
+npm i -g agenticreplay
+agenticreplay --version
+agenticreplay quickstart
 ```
-
-That last line is the one worth keeping. The MCP shim was resolved through a path that only worked
-inside the monorepo for the whole of v0's development; nothing caught it until a packaged install
-was actually run.

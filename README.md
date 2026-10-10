@@ -784,20 +784,28 @@ agenticreplay doctor                       # checks node, git, and which agents 
 Node 24 or newer. No native dependencies, so there is nothing to compile and nothing fetched at
 install time beyond the tarballs themselves.
 
-Every release from 0.1.1 onward is published by the tagged workflow in
-[`RELEASING.md`](RELEASING.md), with a provenance attestation naming the commit and the run that
-built it — npm shows it on the package page, and `npm audit signatures` checks it.
+The CLI package bundles its runtime dependencies, including the internal workspace libraries.
 
 **From source**, to work on it or to run an unreleased commit:
 
 ```console
 git clone https://github.com/askdkc/AgenticReplay && cd AgenticReplay
 npm ci && npm run build
-npm install -g ./packages/cli     # puts `agenticreplay` (and `agenticreplay`) on PATH
+npm install -g .                 # puts `agenticreplay` on PATH
 ```
 
-`npm install -g .` from the repository root installs nothing: the root is a workspace with no
-binary of its own, and `agenticreplay` lives in `packages/cli`.
+To release from the repository root:
+
+```console
+npm ci
+npm publish
+```
+
+The `prepack` lifecycle builds the CLI and validates the workspace dependency versions. npm packs
+the binary, quickstart assets, and runtime dependencies before uploading them. To create a local
+archive without uploading, run `npm pack`; it writes `agenticreplay-<version>.tgz`. Adding
+`--dry-run` only previews the archive. `node scripts/installed-smoke.mjs` verifies one actual root
+archive in a clean offline installation.
 
 **Node 24+ to run it** (the CLI's `engines` says `>=24.0.0`). Development and CI use Node 24 or
 26. No account, no signup, no API key changes.

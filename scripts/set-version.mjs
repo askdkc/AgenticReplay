@@ -141,11 +141,21 @@ async function main() {
     // has to bring it along. `--ignore-scripts` because nothing here needs a build, and
     // `--package-lock-only` because nothing here needs node_modules touched either.
     console.log('reconciling package-lock.json');
-    execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    });
+    // npm exports allow-scripts into lifecycle environments, but a nested project install rejects
+    // that CLI-only setting. This lock-only install explicitly disables scripts instead.
+    const installEnv = { ...process.env };
+    delete installEnv.npm_config_allow_scripts;
+    delete installEnv.NPM_CONFIG_ALLOW_SCRIPTS;
+    execFileSync(
+      'npm',
+      ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'],
+      {
+        cwd: root,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+        env: installEnv,
+      },
+    );
   }
 }
 

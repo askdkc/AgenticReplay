@@ -1,5 +1,5 @@
 {
-  "name": "agenticreplay-monorepo",
+  "name": "agenticreplay",
   "version": "0.1.1",
   "private": false,
   "type": "module",
@@ -18,7 +18,9 @@
     "test:watch": "vitest",
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
-    "check": "npm run fmt:check && npm run typecheck && npm run test"
+    "check": "npm run fmt:check && npm run typecheck && npm run test",
+    "prepack": "npm run build && node scripts/publish-order.mjs --quiet",
+    "version": "node scripts/npm-version.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -26,5 +28,50 @@
     "prettier": "^3.4.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.11"
+  },
+  "description": "Record, replay and fork debugger for AI agents",
+  "mcpName": "io.github.askdkc/agenticreplay",
+  "keywords": [
+    "ai",
+    "agent",
+    "debugger",
+    "replay",
+    "record",
+    "llm",
+    "observability",
+    "claude",
+    "openai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/askdkc/AgenticReplay.git"
+  },
+  "main": "./packages/cli/dist/index.js",
+  "types": "./packages/cli/dist/index.d.ts",
+  "bin": {
+    "agenticreplay": "bin/agenticreplay.js"
+  },
+  "exports": {
+    ".": "./packages/cli/dist/index.js"
+  },
+  "files": [
+    "bin",
+    "packages/cli/dist",
+    "packages/cli/package.json",
+    "packages/cli/quickstart"
+  ],
+  "bundleDependencies": true,
+  "dependencies": {
+    "@agenticreplay/adapters": "0.1.1",
+    "@agenticreplay/core": "0.1.1",
+    "@agenticreplay/fs-capture": "0.1.1",
+    "@agenticreplay/mcp-shim": "0.1.1",
+    "@agenticreplay/node-instrument": "0.1.1",
+    "@agenticreplay/plugin-api": "0.1.1",
+    "@agenticreplay/providers": "0.1.1",
+    "@agenticreplay/proxy": "0.1.1",
+    "@agenticreplay/schema": "0.1.1",
+    "@agenticreplay/shell-shim": "0.1.1",
+    "@agenticreplay/viewer": "0.1.1"
   }
 }

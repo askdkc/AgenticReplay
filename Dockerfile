@@ -15,14 +15,14 @@ WORKDIR /src
 COPY . .
 RUN npm ci && npm run build \
     && mkdir /artifacts \
-    && npm pack --workspaces --pack-destination /artifacts
+    && npm pack --pack-destination /artifacts
 
 FROM node:24-alpine
 
 ENV NODE_ENV=production
 WORKDIR /work
 
-# Install every matching workspace tarball from this checkout, including unpublished renamed packages.
+# Install the self-contained CLI tarball from this checkout.
 COPY --from=build /artifacts /artifacts
 RUN npm install -g --omit=dev /artifacts/*.tgz && rm -rf /artifacts
 

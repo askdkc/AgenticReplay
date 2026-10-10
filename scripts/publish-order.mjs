@@ -51,7 +51,21 @@ for (const name of packages.keys()) visit(name, []);
 // Two ways an internal dependency ships the wrong thing, both checked here rather than only in the
 // test suite — this script is what the release workflow gates on.
 const problems = [];
-for (const [name, p] of packages) {
+const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const rootDependencies = rootManifest.dependencies ?? {};
+const rootEntry = [
+  `${rootManifest.name} (root)`,
+  {
+    deps: Object.keys(rootDependencies).filter((d) => d.startsWith('@agenticreplay/')),
+    ranges: rootDependencies,
+  },
+];
+if (
+  rootManifest.name === 'agenticreplay' &&
+  rootManifest.version !== packages.get('agenticreplay')?.version
+)
+  problems.push('root and CLI workspace versions must agree');
+for (const [name, p] of [...packages, rootEntry]) {
   for (const dep of p.deps) {
     const target = packages.get(dep);
     if (!target) continue;
@@ -83,7 +97,9 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-if (process.argv.includes('--json')) {
+if (process.argv.includes('--quiet')) {
+  // Lifecycle callers need validation without contaminating npm pack --json output.
+} else if (process.argv.includes('--json')) {
   console.log(JSON.stringify(order.map((n) => packages.get(n).dir)));
 } else if (process.argv.includes('--names')) {
   // `name<TAB>dir`, because a publisher that needs to ask the registry about a package needs its

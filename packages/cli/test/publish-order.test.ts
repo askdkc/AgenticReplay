@@ -25,15 +25,37 @@ const manifest = (
  * public registry.
  */
 describe('publish order', () => {
-  it('prevents publishing the monorepo root as the CLI package', () => {
+  it('publishes the CLI and its runtime dependencies from the root', () => {
     const root = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
     const cli = manifest('packages/cli');
     const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'));
 
-    expect(root.private, 'npm publish from the root must be refused').toBe(true);
-    expect(root.name, 'the root must not shadow the CLI workspace').not.toBe(cli.name);
+    expect(root.private).not.toBe(true);
+    expect(root.name).toBe(cli.name);
+    expect(root.version).toBe(cli.version);
+    expect(root.bin.agenticreplay).toBe('bin/agenticreplay.js');
+    expect(readFileSync(join(repoRoot, root.bin.agenticreplay), 'utf8')).toContain(
+      "import '../packages/cli/dist/cli.js'",
+    );
+    expect(root.files).toContain('bin');
+    expect(root.files).toContain('packages/cli/dist');
+    expect(root.files).toContain('packages/cli/package.json');
+    expect(root.files).toContain('packages/cli/quickstart');
+    expect(root.bundleDependencies).toBe(true);
+    for (const dir of order()) {
+      const pkg = manifest(dir);
+      if (pkg.name.startsWith('@agenticreplay/'))
+        expect(root.dependencies[pkg.name]).toBe(pkg.version);
+    }
+    expect(root.scripts.prepack).toContain('npm run build');
     expect(root.name).toBe(lock.packages[''].name);
     expect(root.version).toBe(lock.packages[''].version);
+  });
+
+  it('validates workspace dependencies silently for the pack lifecycle', () => {
+    expect(
+      execFileSync(process.execPath, [script, '--quiet'], { cwd: repoRoot, encoding: 'utf8' }),
+    ).toBe('');
   });
 
   it('puts every package after all of its internal dependencies', () => {
