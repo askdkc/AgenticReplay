@@ -325,14 +325,19 @@ describe('gc', () => {
         cwd,
         agenticreplayVersion: '0.1.0',
       });
-      await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
-      const store = new BlobStore(join(writer.runDir, 'blobs'));
-      await store.put('a payload whose event has not been written yet');
+      try {
+        await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
+        const store = new BlobStore(join(writer.runDir, 'blobs'));
+        await store.put('a payload whose event has not been written yet');
 
-      const result = await gcCommand(parseArgs(['gc']), out, cwd);
+        const result = await gcCommand(parseArgs(['gc']), out, cwd);
 
-      expect(result.blobsRemoved).toBe(0);
-      expect(await store.count()).toBe(1);
+        expect(result.blobsRemoved).toBe(0);
+        expect(await store.count()).toBe(1);
+      } finally {
+        // Keep the run unsealed during the assertions, but release its file before teardown.
+        await writer.close(0);
+      }
     });
 
     it('leaves blobs alone when events.jsonl cannot be read', async () => {

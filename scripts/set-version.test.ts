@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,15 +114,19 @@ describe('set-version', () => {
   });
 
   it('refuses a range, and build metadata, rather than publishing something unfixable', async () => {
+    const paths = [
+      'package.json',
+      ...(await readdir(join(work, 'packages'))).map((name) => `packages/${name}/package.json`),
+    ];
+    const before = await Promise.all(paths.map((path) => readFile(join(work, path), 'utf8')));
     // A range would resolve to whatever is latest; build metadata is ignored when npm compares
     // versions, so two different trees could claim the same version on the registry.
     for (const bad of ['^1.2.3', '1.2', 'latest', '1.2.3+build']) {
       await expect(setVersion(bad), `"${bad}" should be refused`).rejects.toThrow();
+      // Refusal must preserve every manifest, even if the private root has a different version.
+      const after = await Promise.all(paths.map((path) => readFile(join(work, path), 'utf8')));
+      expect(after, `"${bad}" must not change any manifest`).toEqual(before);
     }
-    // And nothing was written on the way to refusing.
-    expect((await manifest('packages/cli/package.json')).version).toBe(
-      (await manifest('package.json')).version,
-    );
   });
 
   /**
