@@ -144,7 +144,7 @@ describe.each(registry.ids())('%s', (id) => {
   // Version 2 has separate native and launch regressions.
   function fixtureContext(over: Partial<RecordContext> = {}): RecordContext {
     const context = ctx(over);
-    if (id === 'opencode') context.env.AGENTICREPLAY_OPENCODE_VERSION = '1.18.29';
+    if (id === 'opencode') context.env.AGENTICREPLAY_OPENCODE_STANDALONE = 'false';
     return context;
   }
 

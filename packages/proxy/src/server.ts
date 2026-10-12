@@ -844,6 +844,11 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       .catch((err: unknown) => {
         // Whatever failed, its message may name the origin it was given — and this body reaches
         // the agent, which prints it. See {@link withoutCredentials}.
+        if (res.destroyed || res.writableEnded) return;
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
         json(res, 500, { error: { message: withoutCredentials(String(err)) } });
       })
       .finally(closed);
@@ -2321,6 +2326,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       for (;;) {
         if (closed) throw new ResponsePipeAbortedError(partial());
         const { done, value } = await reader.read();
+        if (closed) throw new ResponsePipeAbortedError(partial());
         if (done) break;
         bytes += value.byteLength;
         if (capturedBytes < captureLimit) {
@@ -2367,8 +2373,9 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       throw wrapped;
     } finally {
       res.off('close', onClose);
-      res.end();
+      reader.releaseLock();
     }
+    if (!res.destroyed && !res.writableEnded) res.end();
     const buffer = Buffer.concat(captured);
     const decoded = recordableUtf8(buffer);
     plainBufferedBytes = Math.max(0, plainBufferedBytes - capturedBytes);

@@ -48,13 +48,13 @@ const OPENCODE_FIRST_PARTY_BASE: Record<string, string> = {
 const CONFIG_CONTENT_VAR = 'OPENCODE_CONFIG_CONTENT';
 const execFile = promisify(execFileCallback);
 
-async function isOpenCodeV2(ctx: RecordContext): Promise<boolean> {
-  const explicit = readEnv(ctx.env, 'AGENTICREPLAY_OPENCODE_VERSION');
-  if (explicit !== undefined) return /^\s*(?:opencode\s+v?)?2(?:\.|$)/i.test(explicit);
+async function supportsStandalone(ctx: RecordContext): Promise<boolean> {
+  const explicit = readEnv(ctx.env, 'AGENTICREPLAY_OPENCODE_STANDALONE');
+  if (explicit !== undefined) return explicit === 'true';
   await mkdir(ctx.runDir, { recursive: true });
-  const probe = await mkdtemp(join(ctx.runDir, '.opencode-version-'));
+  const probe = await mkdtemp(join(ctx.runDir, '.opencode-capabilities-'));
   try {
-    const result = await execFile('opencode', ['--version'], {
+    const result = await execFile('opencode', ['--help'], {
       cwd: probe,
       env: {
         PATH: readEnv(ctx.env, 'PATH'),
@@ -66,9 +66,9 @@ async function isOpenCodeV2(ctx: RecordContext): Promise<boolean> {
         XDG_STATE_HOME: join(probe, 'state'),
       },
       timeout: 5000,
-      maxBuffer: 4096,
+      maxBuffer: 64 * 1024,
     });
-    return /^\s*(?:opencode\s+v?)?2(?:\.|$)/i.test(`${result.stdout}\n${result.stderr}`);
+    return /(?:^|\s)--standalone(?:\s|,|$)/m.test(`${result.stdout}\n${result.stderr}`);
   } catch {
     return false;
   } finally {
@@ -215,8 +215,8 @@ export const openCodeAdapter: Adapter = {
   },
 
   async prepare(ctx: RecordContext): Promise<Launch> {
-    const v2 = await isOpenCodeV2(ctx);
-    const args = v2 ? privateServerArgs(ctx.userArgs) : [...ctx.userArgs];
+    const standalone = await supportsStandalone(ctx);
+    const args = standalone ? privateServerArgs(ctx.userArgs) : [...ctx.userArgs];
     const env: Record<string, string> = {
       OPENAI_BASE_URL: proxyBase(ctx.proxyUrl, 'v1'),
       // OpenCode's AI SDK appends /messages, unlike Claude Code's /v1/messages.
@@ -236,14 +236,14 @@ export const openCodeAdapter: Adapter = {
     const hasAny =
       readEnv(ctx.env, 'OPENAI_API_KEY') !== undefined ||
       readEnv(ctx.env, 'ANTHROPIC_API_KEY') !== undefined;
-    if (hasAny || (!v2 && opencodeHasOwnAuth(ctx.env))) {
+    if (hasAny || (!standalone && opencodeHasOwnAuth(ctx.env))) {
       passThrough(env, ctx.env, 'OPENAI_API_KEY');
       passThrough(env, ctx.env, 'ANTHROPIC_API_KEY');
-    } else if (!v2) {
+    } else if (!standalone) {
       passKey(env, ctx.env, 'OPENAI_API_KEY');
       passKey(env, ctx.env, 'ANTHROPIC_API_KEY');
     }
-    Object.assign(env, await baseURLsThroughProxy(ctx, v2));
+    Object.assign(env, await baseURLsThroughProxy(ctx, standalone));
 
     // `SHELL` overrides the user's own only to a shim standing in for a shell OpenCode would have
     // picked anyway. With `--no-shell` there is no shim directory, OpenCode's own resolution

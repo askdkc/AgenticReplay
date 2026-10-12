@@ -1279,3 +1279,125 @@ describe('proxy — compressed plain HTTP requests', () => {
     expect(headers.get('content-length')).toBe(String(Buffer.byteLength(serialized)));
   });
 });
+
+// A failure after headers must remain an incomplete response, never a second HTTP response.
+it.each(['/v1/messages', '/v1/custom', '/v1/embeddings'])(
+  'survives an upstream body failure on %s and serves the next request',
+  async (endpoint) => {
+    const seen: import('../src/server.js').NetExchange[] = [];
+    const recorded: RecordedExchange[] = [];
+    let calls = 0;
+    const proxy = await createProxy({
+      mode: 'record',
+      onNetExchange: (e) => seen.push(e),
+      onExchange: (e) => recorded.push(e),
+      fetchImpl: (async () => {
+        if (++calls > 1) return new Response(JSON.stringify(ANTHROPIC_REPLY));
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: partial\n\n'));
+              setTimeout(() => controller.error(new Error('fixture body failure')), 30);
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+      }) as typeof fetch,
+    });
+    closers.push(proxy.close);
+    const response = await fetch(`${proxy.url}${endpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(ANTHROPIC_BODY),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toThrow();
+    expect(seen[0]).toMatchObject({
+      responseComplete: false,
+      responseBody: 'data: partial\n\n',
+      responseBytes: 15,
+      responseError: expect.stringContaining('fixture body failure'),
+    });
+    expect(recorded).toHaveLength(0);
+    expect((await post(`${proxy.url}${endpoint}`, ANTHROPIC_BODY)).json).toEqual(ANTHROPIC_REPLY);
+    expect(seen[1]?.responseComplete).toBe(true);
+    expect(calls).toBe(2);
+  },
+);
+
+it.each(['/v1/messages', '/v1/custom', '/v1/embeddings'])(
+  'keeps client cancellation on %s incomplete and serves the next request',
+  async (endpoint) => {
+    let report!: (value: import('../src/server.js').NetExchange) => void;
+    const reported = new Promise<import('../src/server.js').NetExchange>((resolve) => {
+      report = resolve;
+    });
+    let cancelled = false;
+    let calls = 0;
+    const proxy = await createProxy({
+      mode: 'record',
+      onNetExchange: report,
+      fetchImpl: (async () => {
+        if (++calls > 1) return new Response(JSON.stringify(ANTHROPIC_REPLY));
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('partial'));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+        );
+      }) as typeof fetch,
+    });
+    closers.push(proxy.close);
+    const abort = new AbortController();
+    const response = await fetch(`${proxy.url}${endpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(ANTHROPIC_BODY),
+      signal: abort.signal,
+    });
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('partial');
+    abort.abort();
+    const exchange = await reported;
+    expect(exchange).toMatchObject({
+      responseComplete: false,
+      abandoned: true,
+      responseBody: 'partial',
+      responseBytes: 7,
+    });
+    expect(cancelled).toBe(true);
+    expect((await post(`${proxy.url}${endpoint}`, ANTHROPIC_BODY)).json).toEqual(ANTHROPIC_REPLY);
+    expect(calls).toBe(2);
+  },
+);
+
+it.each(['/v1/messages', '/v1/custom', '/v1/embeddings'])(
+  'returns one JSON error before headers on %s and survives',
+  async (endpoint) => {
+    const seen: import('../src/server.js').NetExchange[] = [];
+    let calls = 0;
+    const proxy = await createProxy({
+      mode: 'record',
+      onNetExchange: (exchange) => seen.push(exchange),
+      fetchImpl: (async () => {
+        if (++calls === 1) throw new Error('fixture connection failure');
+        return new Response(JSON.stringify(ANTHROPIC_REPLY));
+      }) as typeof fetch,
+    });
+    closers.push(proxy.close);
+    const failure = await post(`${proxy.url}${endpoint}`, ANTHROPIC_BODY);
+    expect(failure.status).toBe(500);
+    expect(failure.json.error.message).toContain('fixture connection failure');
+    expect(seen[0]).toMatchObject({
+      responseComplete: false,
+      responseBytes: 0,
+      responseError: expect.stringContaining('fixture connection failure'),
+    });
+    expect((await post(`${proxy.url}${endpoint}`, ANTHROPIC_BODY)).json).toEqual(ANTHROPIC_REPLY);
+    expect(calls).toBe(2);
+  },
+);

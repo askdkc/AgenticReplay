@@ -107,7 +107,7 @@ describe('OpenCode capture plugin configuration', () => {
         "plugin": ["user-plugin", ["configured-plugin", {"enabled": true}]],
         "provider": {"openai": {"options": {"baseURL": "https://gateway.example/v1"}}},
       }`;
-      const env = { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_VERSION: '2.0.0' };
+      const env = { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_STANDALONE: 'true' };
       const launch = await openCodeAdapter.prepare({
         runId: 'run_abc123',
         cwd: scratch,

@@ -61,7 +61,7 @@ describe('runShim', () => {
     const { stdin, stdout, stderr, out } = io();
     const written = Buffer.from(
       '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"t":"\u{1F419} é"}}\n' +
-        '{"jsonrpc":"2.0","id":2,"method":"ping"}\n',
+        '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"cli","version":"fixture-future"}}}\n',
       'utf8',
     );
     const done = runShim({

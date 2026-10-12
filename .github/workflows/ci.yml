@@ -31,6 +31,52 @@ jobs:
       - run: npx tsc --build
       - run: npx vitest run --reporter=verbose
 
+  opencode-wrapped-contract:
+    name: latest stable OpenCode wrapped contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm }
+      - run: npm ci
+      - name: Build and pack this AgenticReplay revision
+        run: |
+          npm pack --json --pack-destination "${{ runner.temp }}" > "${{ runner.temp }}/agenticreplay-pack.json"
+          node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))[0]; console.log(JSON.stringify({id:p.id,filename:p.filename,integrity:p.integrity}))' "${{ runner.temp }}/agenticreplay-pack.json"
+          git rev-parse HEAD
+      - name: Install the packed wrapper
+        run: |
+          archive=$(node -e 'const fs = require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8"))[0].filename)' "${{ runner.temp }}/agenticreplay-pack.json")
+          npm install --prefix "${{ runner.temp }}/agenticreplay" "${{ runner.temp }}/$archive"
+      - name: Check out the Kiokuko OpenCode contract
+        uses: actions/checkout@v4
+        with:
+          repository: askdkc/kiokuko-ai
+          path: kiokuko-ai-contract
+      - name: Build the contract and resolve latest stable OpenCode
+        working-directory: kiokuko-ai-contract
+        run: |
+          npm ci
+          npm run build
+          git rev-parse HEAD
+          node scripts/install-opencode-release.mjs --platform linux-x64 --output "${{ runner.temp }}/opencode"
+      - name: Verify MCP preparation and interrupted stream recovery
+        working-directory: kiokuko-ai-contract
+        run: node scripts/run-opencode-agenticreplay-e2e.mjs | tee "${{ runner.temp }}/wrapped-contract.log"
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode/package/bin/opencode
+          KIOKUKO_TEST_AGENTICREPLAY: ${{ runner.temp }}/agenticreplay/node_modules/.bin/agenticreplay
+      - name: Retain wrapped contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-wrapped-contract
+          path: |
+            ${{ runner.temp }}/agenticreplay-pack.json
+            ${{ runner.temp }}/wrapped-contract.log
+          if-no-files-found: ignore
+
   conformance:
     name: trace format conformance
     runs-on: ubuntu-latest

@@ -519,7 +519,13 @@ describe('the spans transport is not in the trace', () => {
     let result;
     try {
       result = await recordCommand(
-        parseArgs(['record', 'generic-openai', '--', 'python', agent]),
+        parseArgs([
+          'record',
+          'generic-openai',
+          '--',
+          process.platform === 'win32' ? 'python' : 'python3',
+          agent,
+        ]),
         out,
         workspace,
       );
@@ -629,7 +635,7 @@ describe('the spans transport is not in the trace', () => {
           '--upstream-openai',
           origin.url,
           '--',
-          'python',
+          process.platform === 'win32' ? 'python' : 'python3',
           agent,
         ]),
         out,

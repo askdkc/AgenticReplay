@@ -44,7 +44,7 @@ function ctx(over: Partial<RecordContext> = {}): RecordContext {
     runDir: join(scratch, '.agenticreplay/runs/run_abc123'),
     userArgs: [],
     // Keep the version branch deterministic; production probes the installed binary.
-    env: { AGENTICREPLAY_OPENCODE_VERSION: '1.18.29' },
+    env: { AGENTICREPLAY_OPENCODE_STANDALONE: 'false' },
     ...over,
   };
 }
@@ -62,16 +62,20 @@ function isolate(homeContents: string[] = []): string {
   return home;
 }
 
-describe('OpenCode version-specific capture launch', () => {
-  const v2 = { AGENTICREPLAY_OPENCODE_VERSION: '2.0.18' };
+describe('OpenCode capability-based capture launch', () => {
+  const v2 = { AGENTICREPLAY_OPENCODE_STANDALONE: 'true' };
   it.skipIf(process.platform === 'win32')(
-    'detects the installed CLI version banner in an isolated probe',
+    'detects standalone support from isolated CLI help',
     async () => {
       const bin = join(scratch, 'bin');
       mkdirSync(bin);
-      writeFileSync(join(bin, 'opencode'), '#!/bin/sh\nprintf "opencode v2.0.18\\n"\n', {
-        mode: 0o755,
-      });
+      writeFileSync(
+        join(bin, 'opencode'),
+        '#!/bin/sh\nprintf "FLAGS\\n  --standalone  private server\\n"\n',
+        {
+          mode: 0o755,
+        },
+      );
       const launch = await openCodeAdapter.prepare(
         ctx({ env: { PATH: `${bin}:/usr/bin:/bin`, HOME: scratch }, userArgs: ['run', 'hello'] }),
       );
@@ -104,7 +108,7 @@ describe('OpenCode version-specific capture launch', () => {
     writeFileSync(path, '{"model":"selected/provider"}');
     const legacy = await openCodeAdapter.prepare(
       ctx({
-        env: { AGENTICREPLAY_OPENCODE_VERSION: '1.18.29', OPENCODE_CONFIG: path },
+        env: { AGENTICREPLAY_OPENCODE_STANDALONE: 'false', OPENCODE_CONFIG: path },
         userArgs: ['run', 'hello'],
       }),
     );
@@ -392,7 +396,7 @@ describe('openCodeAdapter', () => {
     // placeholder branch is unreachable, which is not what this test is about.
     isolate();
     const none = await openCodeAdapter.prepare(
-      ctx({ env: { OPENCODE_VERSION: '1.18.29', AGENTICREPLAY_OPENCODE_VERSION: '1.18.29' } }),
+      ctx({ env: { OPENCODE_VERSION: '1.18.29', AGENTICREPLAY_OPENCODE_STANDALONE: 'false' } }),
     );
     expect(none.env.OPENAI_API_KEY).toBe('agenticreplay-recorded');
     expect(none.env.ANTHROPIC_API_KEY).toBe('agenticreplay-recorded');
@@ -422,7 +426,7 @@ describe('openCodeAdapter', () => {
       ctx({
         env: {
           OPENCODE_VERSION: '2.0.18',
-          AGENTICREPLAY_OPENCODE_VERSION: '2.0.18',
+          AGENTICREPLAY_OPENCODE_STANDALONE: 'true',
           HOME: isolate(),
           PATH: BARE_PATH,
         },
@@ -498,7 +502,7 @@ describe('openCodeAdapter', () => {
   it('preserves existing inline config while adding the capture plugin', async () => {
     const theirs = '{"model":"opencode-go/glm-5.3-flash"}';
     const launch = await openCodeAdapter.prepare(
-      ctx({ env: { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_VERSION: '2.0.0' } }),
+      ctx({ env: { OPENCODE_CONFIG_CONTENT: theirs, AGENTICREPLAY_OPENCODE_STANDALONE: 'true' } }),
     );
     const content = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!);
     expect(content.model).toBe('opencode-go/glm-5.3-flash');
