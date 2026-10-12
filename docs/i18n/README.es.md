@@ -2,19 +2,16 @@
 
 <sub>[English](../../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · **Español** · [العربية](README.ar.md)</sub>
 
-AgenticReplay es un registrador de comunicaciones con API de IA, adaptado para depurar harness
-(entornos de ejecución) de IA. Registra las solicitudes y respuestas de los clientes compatibles,
-incluido el contenido o los resúmenes de reasoning/thinking que la API devuelve realmente.
-No puede obtener razonamientos internos que la API no expone. Los datos sensibles de los cuerpos
-capturados se ocultan antes de guardarlos, y las capturas incompletas se marcan.
+AgenticReplay registra las comunicaciones con API de IA para ayudar a depurar y mejorar los
+entornos de ejecución de agentes de IA. Captura las solicitudes y respuestas de los clientes
+compatibles, incluido el contenido o los resúmenes de reasoning/thinking que devuelve la API.
 
-Compara la comunicación con la API con los resultados de las herramientas, los comandos de shell
-capturados y los cambios en archivos para entender el comportamiento real del harness, identificar
-defectos y orientar las mejoras.
+Compara la traza con los resultados de las herramientas, los comandos de shell capturados y los
+cambios en archivos para localizar dónde falló la ejecución.
 
 ## Instalación
 
-Requiere Node.js 24 o posterior, Git y un harness instalado con sus credenciales habituales.
+Requiere Node.js 24 o posterior, Git y un entorno de ejecución de agentes de IA configurado.
 
 ```console
 git clone https://github.com/askdkc/AgenticReplay.git
@@ -35,31 +32,28 @@ agenticreplay show last
 agenticreplay export last -o run.html
 ```
 
-Ejecuta con AgenticReplay el harness que envía las solicitudes a la API de IA, como Claude Code,
-y no solo su servidor MCP. Las grabaciones se guardan en `.agenticreplay/runs/` dentro de ese
-proyecto; `last` selecciona la más reciente. La exportación HTML permite consultar la traza
-en un navegador.
+Registra el proceso que envía las solicitudes a la API, como Claude Code. Las trazas se guardan
+en `.agenticreplay/runs/` dentro del proyecto; `last` selecciona la más reciente.
+Abre `run.html` en un navegador para consultarla.
 
-Para un harness propio que respete `OPENAI_BASE_URL`:
+Si tu entorno utiliza `OPENAI_BASE_URL`, sustituye `node agent.js` por su comando de inicio:
 
 ```console
 agenticreplay record generic-openai -- node agent.js
 ```
 
-Sustituye `node agent.js` por el comando de tu harness. Para Codex con una suscripción de ChatGPT,
-utiliza la interceptación TLS:
+Para Codex con una suscripción de ChatGPT, utiliza la interceptación TLS:
 
 ```console
 agenticreplay record exec --tls-intercept -- codex
 ```
 
-Durante la grabación, el harness funciona normalmente y las llamadas a la API pueden generar costes.
-Las trazas pueden contener datos sensibles del proyecto; revísalas antes de compartirlas.
+Las llamadas a la API durante la grabación pueden generar costes. El filtrado automático puede
+dejar datos sensibles en las trazas; revísalas antes de compartirlas.
 
-Consulta las [integraciones](../integrations.md) para otros harness y
+Consulta la [guía de integración](../integrations.md) para otros entornos y
 [la depuración de una ejecución fallida](../how-to/debug-a-failing-agent-run.md) para un ejemplo.
 
 ## Licencia
 
-Apache-2.0 para el código. La especificación de traza es CC BY 4.0, para que cualquiera pueda
-reimplementarla.
+Apache-2.0. Especificación de trazas: CC BY 4.0.
