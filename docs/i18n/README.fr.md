@@ -36,6 +36,12 @@ Enregistrez le processus qui envoie les requêtes API, par exemple Claude Code. 
 stockées dans `.agenticreplay/runs/` dans le projet ; `last` sélectionne la plus récente.
 Ouvrez `run.html` dans un navigateur pour la consulter.
 
+Les répertoires utilisent `YYYYMMDDHHmmss-agent-title-id` (UTC), avec uniquement des lettres
+ASCII minuscules, des chiffres et des traits d’union : 255 caractères au maximum, dont 80 pour
+le titre. Le titre vient de la session ou, à défaut, de la première demande ; les données sensibles
+sont masquées et le texte est translittéré en ASCII. Le nom définitif est appliqué à la fin de
+l’enregistrement. Les répertoires `run_<id>` existants et les commandes utilisant un run ID restent pris en charge.
+
 Si votre propre environnement utilise `OPENAI_BASE_URL`, remplacez `node agent.js` par sa commande
 de lancement :
 

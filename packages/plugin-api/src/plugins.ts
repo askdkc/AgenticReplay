@@ -240,7 +240,7 @@ export interface SessionSupport {
   /** Directory the harness writes session transcripts into, or undefined if it keeps none. */
   dir(cwd: string, env: Record<string, string | undefined>): string | undefined;
   /** Pull the session id and the user's turns out of one transcript. */
-  parse(bytes: Uint8Array): { id?: string; prompts: string[] };
+  parse(bytes: Uint8Array): { id?: string; title?: string; prompts: string[] };
   /** Arguments that resume that session, for a fork continuing where the run stopped. */
   resumeArgs(id: string): string[];
 }

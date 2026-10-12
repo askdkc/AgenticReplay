@@ -36,6 +36,12 @@ Registra el proceso que envía las solicitudes a la API, como Claude Code. Las t
 en `.agenticreplay/runs/` dentro del proyecto; `last` selecciona la más reciente.
 Abre `run.html` en un navegador para consultarla.
 
+Los directorios usan `YYYYMMDDHHmmss-agent-title-id` (UTC), solo con letras ASCII minúsculas,
+dígitos y guiones: hasta 255 caracteres en total y 80 para el título. Se usa el título de la
+sesión o, si no está disponible, la primera solicitud del usuario; se ocultan los datos sensibles
+y se translitera a ASCII. El nombre definitivo se aplica al terminar la grabación. Los directorios
+`run_<id>` existentes y los comandos que usan un run ID siguen funcionando.
+
 Si tu entorno utiliza `OPENAI_BASE_URL`, sustituye `node agent.js` por su comando de inicio:
 
 ```console

@@ -43,8 +43,14 @@ export const claudeSession: SessionSupport = {
   parse(bytes) {
     const prompts: string[] = [];
     let id: string | undefined;
+    let title: string | undefined;
     for (const entry of parseJsonl(bytes)) {
       if (typeof entry['sessionId'] === 'string') id ??= entry['sessionId'];
+      // Claude writes generated summaries and explicit /rename titles alongside messages.
+      if (entry['type'] === 'summary' && typeof entry['summary'] === 'string')
+        title ??= entry['summary'];
+      if (entry['type'] === 'custom-title' && typeof entry['customTitle'] === 'string')
+        title = entry['customTitle'];
       if (entry['type'] !== 'user') continue;
       const message = entry['message'];
       if (message === null || typeof message !== 'object') continue;
@@ -53,7 +59,7 @@ export const claudeSession: SessionSupport = {
       if (text === '' || text.startsWith('<')) continue;
       prompts.push(text);
     }
-    return { id, prompts };
+    return { id, ...(title === undefined ? {} : { title }), prompts };
   },
 
   resumeArgs(id) {

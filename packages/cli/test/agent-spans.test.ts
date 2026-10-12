@@ -535,7 +535,7 @@ describe('the spans transport is not in the trace', () => {
     }
     expect(result.runId).toBeTruthy();
 
-    const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
+    const runDir = result.runDir;
     const left = await readdir(runDir);
     expect(
       left.filter((f) => f.startsWith('agent-spans')),

@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { mkdir, open, writeFile } from 'node:fs/promises';
+import { mkdir, open, rename, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type {
   Actor,
   AdapterInfo,
@@ -23,6 +23,7 @@ import {
 } from '@agenticreplay/schema';
 import { BlobStore, sha256File } from './blobs.js';
 import { REDACTION_POLICY_VERSION, Redactor } from './redaction.js';
+import { captureDirectoryName, firstUserPrompt } from './run-names.js';
 
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
@@ -81,6 +82,10 @@ export function redactManifest(redactor: Redactor, manifest: Manifest): Manifest
 export interface TraceWriterInit {
   /** Defaults to a fresh `run_<12 hex>`. */
   runId?: string;
+  /** A host-generated session title, when available. Never used as a raw filesystem path. */
+  sessionTitle?: string;
+  /** Session start time; defaults to the moment capture starts. */
+  sessionStartedAt?: Date;
   adapter: AdapterInfo;
   argv: string[];
   cwd: string;
@@ -128,7 +133,9 @@ export interface EventInit {
  * regardless of shape.
  */
 export class TraceWriter {
-  readonly #runDir: string;
+  #runDir: string;
+  #sessionTitle = '';
+  #titlePriority = 0;
   readonly #runId: string;
   readonly #eventsPath: string;
   readonly #blobs: BlobStore;
@@ -168,9 +175,6 @@ export class TraceWriter {
     const runId = init.runId ?? `run_${randomBytes(6).toString('hex')}`;
     if (!RUN_ID_PATTERN.test(runId))
       throw new Error(`not a valid run id: ${JSON.stringify(runId)}`);
-    const runDir = join(runsDir, runId);
-    await mkdir(runDir, { recursive: true, mode: DIR_MODE });
-
     // One redactor for the whole run: the salt stays constant, so a secret seen in the environment
     // and again in a payload gets the same placeholder, and every removal lands in redactions.json.
     const redactor = new Redactor(
@@ -179,7 +183,7 @@ export class TraceWriter {
     const unredactedBase: Manifest = {
       schema_version: SCHEMA_VERSION,
       run_id: runId,
-      created_at: new Date().toISOString(),
+      created_at: (init.sessionStartedAt ?? new Date()).toISOString(),
       agenticreplay_version: init.agenticreplayVersion,
       adapter: init.adapter,
       argv: init.argv,
@@ -195,12 +199,25 @@ export class TraceWriter {
     };
     const base = redactManifest(redactor, unredactedBase);
     assertManifest(base);
+    const title = redactor.redactString(
+      (init.sessionTitle ?? '').normalize('NFKC'),
+      'session.title',
+    ).value;
+    const runDir = join(
+      runsDir,
+      captureDirectoryName(base.created_at, base.adapter.id, title, runId),
+    );
+    await mkdir(runsDir, { recursive: true, mode: DIR_MODE });
+    await mkdir(runDir, { mode: DIR_MODE });
     await writeFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`, {
       mode: FILE_MODE,
     });
 
     const handle = await open(join(runDir, 'events.jsonl'), 'a', FILE_MODE);
-    return new TraceWriter(runId, runDir, base, redactor, handle);
+    const writer = new TraceWriter(runId, runDir, base, redactor, handle);
+    writer.#sessionTitle = title;
+    writer.#titlePriority = title.trim() ? 3 : 0;
+    return writer;
   }
 
   /**
@@ -215,6 +232,7 @@ export class TraceWriter {
     this.#git = info;
   }
 
+  /** Active capture paths stay fixed. After close, this returns the final titled directory. */
   get runDir(): string {
     return this.#runDir;
   }
@@ -343,6 +361,19 @@ export class TraceWriter {
       mode: FILE_MODE,
     });
     this.#sealed = manifest;
+    const titledDir = join(
+      dirname(this.#runDir),
+      captureDirectoryName(
+        this.#base.created_at,
+        this.#base.adapter.id,
+        this.#sessionTitle,
+        this.#runId,
+      ),
+    );
+    if (titledDir !== this.#runDir) {
+      await rename(this.#runDir, titledDir);
+      this.#runDir = titledDir;
+    }
     return manifest;
   }
 
@@ -391,6 +422,9 @@ export class TraceWriter {
     const event: TraceEvent = { seq, ts, mono_us, turn, type: init.type, actor: init.actor };
     if (init.causes !== undefined) event.causes = init.causes;
     if (init.attrs !== undefined) event.attrs = { ...init.attrs };
+    if (init.type === 'run.start' && this.#titlePriority === 3) {
+      event.attrs = { ...event.attrs, session_title: this.#sessionTitle };
+    }
     if (event.type === 'net.request' || event.type === 'net.response') {
       for (const key of ['url', 'path', 'upstream', 'destination']) {
         const value = event.attrs?.[key];
@@ -458,6 +492,29 @@ export class TraceWriter {
 
     assertEvent(out);
     await this.#handle.write(`${JSON.stringify(out)}\n`);
+    if (init.type === 'run.start' || init.type === 'session.snapshot') {
+      const title = init.attrs?.session_title ?? init.attrs?.title;
+      if (typeof title === 'string' && title.trim() && this.#titlePriority < 2) {
+        this.#sessionTitle = this.#redactor.redactString(
+          title.normalize('NFKC'),
+          'session.title',
+        ).value;
+        this.#titlePriority = 2;
+      }
+    }
+    if (
+      this.#titlePriority === 0 &&
+      ['model.request', 'net.request', 'session.snapshot'].includes(init.type)
+    ) {
+      const prompt = firstUserPrompt(init.payload);
+      if (prompt) {
+        this.#sessionTitle = this.#redactor.redactString(
+          prompt.normalize('NFKC'),
+          'session.title',
+        ).value;
+        this.#titlePriority = 1;
+      }
+    }
     // Set after the write, not before it: a bracket that failed to reach disk is not one.
     if (out.type === 'run.start') this.#opened = true;
     if (out.type === 'run.end') this.#closedEvent = true;

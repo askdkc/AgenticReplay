@@ -448,7 +448,11 @@ process.stdin.on('data', chunk => {
       .filter((item) => item.path?.startsWith('/v1/messages'))
       .map((item) => item.body);
     const runId = /run_[0-9a-f]+/.exec(claude.stdout)?.[0];
-    const runDir = runId ? join(process.cwd(), '.agenticreplay', 'runs', runId) : undefined;
+    const readerModule =
+      process.env.AGENTICREPLAY_TEST_TRACE_READER ??
+      join(process.cwd(), 'packages/core/dist/index.js');
+    const { resolveRunSelector } = await import(pathToFileURL(readerModule).href);
+    const runDir = runId ? (await resolveRunSelector(process.cwd(), runId)).dir : undefined;
     const claudeTransport = runId
       ? await installedTransportProof(
           runDir,

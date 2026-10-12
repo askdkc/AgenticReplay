@@ -12,7 +12,14 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import { ensureRunsDir, resolveRunSelector, runDirFor, sha256File } from '@agenticreplay/core';
+import {
+  ensureRunsDir,
+  resolveRunSelector,
+  runDirFor,
+  runIdFromDirectory,
+  runsDir,
+  sha256File,
+} from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
 import { tame, type Output } from '../out.js';
 import {
@@ -1286,6 +1293,20 @@ async function reportAgainstLocal(
   });
 }
 
+/** Locate a capture even in the gap of an interrupted replacement, before taking its lock. */
+async function pullDestination(cwd: string, runId: string): Promise<string> {
+  const legacy = runDirFor(cwd, runId);
+  const entries = await readdir(runsDir(cwd), { withFileTypes: true }).catch(() => []);
+  const names = new Set<string>();
+  for (const entry of entries) {
+    const name = entry.name.replace(/\.(incoming|replaced|lock)$/, '');
+    if (runIdFromDirectory(name) === runId) names.add(name);
+  }
+  if (names.size > 1)
+    throw new Error(`multiple local directories for ${runId}; cannot replace an ambiguous run`);
+  return names.size === 0 ? legacy : join(runsDir(cwd), [...names][0]!);
+}
+
 export async function pullCommand(
   args: ParsedArgs,
   out: Output,
@@ -1312,7 +1333,7 @@ export async function pullCommand(
   await ensureRunsDir(cwd);
 
   try {
-    const early = runDirFor(cwd, runKey);
+    const early = await pullDestination(cwd, runKey);
     await withRunLock(early, (stillHeld) => recoverInterruptedSwap(early, stillHeld));
   } catch {
     // Not a run id — the post-fetch recovery below is the one that matters anyway.
@@ -1355,7 +1376,7 @@ export async function pullCommand(
   //   - `.agenticreplay/.gitignore` containing `*`, git's own idiom for a directory that excludes itself.
   //     Without it the whole store lands in `git status` as untracked, one `git add -A` from being
   //     committed and pushed. That is the accident ensureRunsDir was written to prevent.
-  const dest = runDirFor(cwd, runId);
+  const dest = await pullDestination(cwd, runId);
 
   // Finish or roll back whatever a previous, interrupted pull of this run left behind, BEFORE
   // deciding whether the run exists — otherwise a run stranded by a crash reads as absent and the

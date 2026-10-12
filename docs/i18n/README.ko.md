@@ -34,6 +34,11 @@ Claude Code처럼 API 요청을 보내는 하네스를 실행해 기록합니다
 로그는 프로젝트의 `.agenticreplay/runs/`에 저장되며, `last`는 가장 최근 기록을 선택합니다.
 브라우저에서 `run.html`을 열어 확인할 수 있습니다.
 
+저장 디렉터리 이름은 `YYYYMMDDHHmmss-agent-title-id`(UTC)입니다. 소문자 ASCII 문자, 숫자,
+하이픈만 사용하며 전체는 255자 이하, 제목은 80자 이하입니다. 세션 제목이 없으면 첫 사용자 요청을
+사용하고, 민감한 정보를 가린 뒤 ASCII로 변환합니다. 이름은 기록 종료 시 확정됩니다.
+기존 `run_<id>` 디렉터리와 run ID를 사용하는 명령도 계속 지원합니다.
+
 `OPENAI_BASE_URL`을 읽는 사용자 정의 하네스에서는 `node agent.js`를 실행 명령으로 바꾸세요.
 
 ```console

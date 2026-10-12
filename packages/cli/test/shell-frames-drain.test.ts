@@ -67,7 +67,7 @@ describe('a torn shell frame, through the drain that writes it', () => {
       new Output({ write: () => {}, isTTY: false }),
       workspace,
     );
-    const events = join(workspace, '.agenticreplay', 'runs', result.runId, 'events.jsonl');
+    const events = join(result.runDir, 'events.jsonl');
     return (await readFile(events, 'utf8'))
       .split('\n')
       .filter((line) => line.trim() !== '')

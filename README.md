@@ -36,6 +36,12 @@ Record the harness process that sends the API requests, such as Claude Code. Log
 `.agenticreplay/runs/` in that project; `last` selects the newest recording. Open `run.html` in a
 browser to inspect the trace.
 
+Capture directories use `YYYYMMDDHHmmss-agent-title-id` (UTC). Names contain only lowercase
+ASCII letters, digits and hyphens: at most 255 characters, with titles capped at 80.
+Titles come from the session or, if unavailable, the first user prompt; they are redacted and
+transliterated to ASCII. The final name is applied when recording closes. Existing `run_<id>`
+directories and commands using a run ID remain supported.
+
 For a custom harness that reads `OPENAI_BASE_URL`, replace `node agent.js` with its launch command:
 
 ```console

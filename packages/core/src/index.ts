@@ -4,5 +4,6 @@ export * from './graph.js';
 export * from './paths.js';
 export * from './private-files.js';
 export * from './reader.js';
+export { runIdFromDirectory } from './run-names.js';
 export * from './redaction.js';
 export * from './writer.js';

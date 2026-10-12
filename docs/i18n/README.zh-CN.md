@@ -33,6 +33,10 @@ agenticreplay export last -o run.html
 记录 Claude Code 等发送 API 请求的运行框架。记录保存在项目的 `.agenticreplay/runs/` 中；
 `last` 选择最新的记录。在浏览器中打开 `run.html` 即可查看。
 
+保存目录名采用 `YYYYMMDDHHmmss-agent-title-id`（UTC），仅包含小写 ASCII 字母、数字和连字符，
+总长度不超过255个字符，标题不超过80个字符。优先使用会话标题，否则使用第一条用户请求；
+隐藏敏感信息后转写为 ASCII。名称在记录结束时确定。现有的 `run_<id>` 目录和使用 run ID 的命令仍然可用。
+
 对于读取 `OPENAI_BASE_URL` 的自定义框架，将 `node agent.js` 替换为启动命令：
 
 ```console

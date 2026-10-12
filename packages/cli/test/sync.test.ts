@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -123,6 +133,48 @@ describe('push and pull', () => {
     ]);
     const events = entries.find((e) => e.name === `${runId}/events.jsonl`)!;
     expect(new TextDecoder().decode(events.bytes)).toBe('{"seq":1,"type":"run.start"}\n');
+  });
+
+  it('pushes a named capture using its stable manifest ID', async () => {
+    await seedRun();
+    const store = join(workspace, '.agenticreplay', 'runs');
+    await rename(join(store, runId), join(store, '20261013010203-claude-code-fix-login-abc123'));
+    await pushCommand(parseArgs(['push', runId]), out, workspace, env());
+    expect(received[0]!.path).toBe('/api/replay/runs');
+    const body = received[0]!.body;
+    const entries = await readArchive(
+      new Uint8Array(body.subarray(body.indexOf('PK'), body.lastIndexOf('\r\n--'))),
+    );
+    expect(entries.map((entry) => entry.name)).toContain(`${runId}/manifest.json`);
+  });
+
+  it('replaces a named capture without creating a duplicate legacy directory', async () => {
+    await seedRun();
+    const store = join(workspace, '.agenticreplay', 'runs');
+    const name = '20261013010203-claude-code-fix-login-abc123';
+    await rename(join(store, runId), join(store, name));
+    const zip = await writeArchive([
+      {
+        name: `${runId}/manifest.json`,
+        bytes: new TextEncoder().encode(`{"run_id":"${runId}"}\n`),
+      },
+      { name: `${runId}/events.jsonl`, bytes: new TextEncoder().encode('new events\n') },
+    ]);
+    reply = { status: 200, body: Buffer.from(zip), headers: { 'content-type': 'application/zip' } };
+    await pullCommand(parseArgs(['pull', runId, '--force']), out, workspace, env());
+    expect(await readdir(store)).toEqual([name]);
+    expect(await readFile(join(store, name, 'events.jsonl'), 'utf8')).toBe('new events\n');
+  });
+
+  it('recovers an interrupted named replacement even when the gateway is unavailable', async () => {
+    await seedRun();
+    const store = join(workspace, '.agenticreplay', 'runs');
+    const name = '20261013010203-claude-code-fix-login-abc123';
+    await rename(join(store, runId), join(store, `${name}.replaced`));
+    reply = { status: 404, body: 'unavailable' };
+    await expect(pullCommand(parseArgs(['pull', runId]), out, workspace, env())).rejects.toThrow();
+    expect(await readdir(store)).toEqual([name]);
+    expect(await readFile(join(store, name, 'events.jsonl'), 'utf8')).toContain('run.start');
   });
 
   /**

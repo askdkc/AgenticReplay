@@ -22,6 +22,8 @@ export type { SessionSupport };
 export interface SessionCapture {
   /** Harness session id, where the harness has one. This is what `--resume` takes. */
   id?: string;
+  /** The harness's own session title, when its transcript exposes one. */
+  title?: string;
   /** Path of the transcript relative to the harness session directory. */
   relPath: string;
   /** The harness's own file, verbatim. Restoring it is what makes a native fork possible. */
@@ -97,14 +99,20 @@ export async function captureSession(
     return undefined;
   }
 
-  let parsed: { id?: string; prompts: string[] } = { prompts: [] };
+  let parsed: { id?: string; title?: string; prompts: string[] } = { prompts: [] };
   try {
     parsed = support.parse(bytes);
   } catch {
     // A format agenticreplay does not recognise still has value as bytes a human can read; losing the
     // prompts is a degraded capture, not a failed one.
   }
-  return { id: parsed.id, relPath: best.relPath, bytes, prompts: parsed.prompts };
+  return {
+    id: parsed.id,
+    ...(parsed.title === undefined ? {} : { title: parsed.title }),
+    relPath: best.relPath,
+    bytes,
+    prompts: parsed.prompts,
+  };
 }
 
 /** Read a JSONL transcript into objects, skipping anything that does not parse. */

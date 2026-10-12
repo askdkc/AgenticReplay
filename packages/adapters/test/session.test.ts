@@ -66,6 +66,18 @@ describe('captureSession', () => {
     resumeArgs: (id: string) => ['--resume', id],
   };
 
+  it('carries the harness-generated title through transcript capture', async () => {
+    const before = await snapshotDir(join(scratch, 'sessions'));
+    write('sessions/title.jsonl', 'first prompt', 2_000_000);
+    const captured = await captureSession(
+      { ...support, parse: () => ({ id: 'sid', title: 'Fix login', prompts: ['first prompt'] }) },
+      '/work',
+      {},
+      before,
+    );
+    expect(captured?.title).toBe('Fix login');
+  });
+
   it('picks the transcript this run wrote, not one that was already there', async () => {
     write('sessions/old.jsonl', 'old', 1_000_000);
     const before = await snapshotDir(join(scratch, 'sessions'));
@@ -128,6 +140,16 @@ describe('contentText', () => {
 });
 
 describe('claudeSession', () => {
+  it('prefers an explicit rename over a generated session summary', () => {
+    const bytes = new TextEncoder().encode(
+      [
+        JSON.stringify({ type: 'summary', summary: 'Generated title' }),
+        JSON.stringify({ type: 'custom-title', customTitle: 'My session title' }),
+        JSON.stringify({ type: 'summary', summary: 'Later summary' }),
+      ].join('\n'),
+    );
+    expect(claudeSession.parse(bytes).title).toBe('My session title');
+  });
   it('names the project directory the way Claude Code does', () => {
     expect(claudeProjectSlug('C:\\Users\\d\\proj')).toBe('C--Users-d-proj');
     expect(claudeProjectSlug('/home/d/proj')).toBe('-home-d-proj');

@@ -112,7 +112,7 @@ describe('what a run directory is left holding', () => {
       new Output({ write: () => {}, isTTY: false }),
       workspace,
     );
-    return { runDir: join(workspace, '.agenticreplay', 'runs', result.runId), runId: result.runId };
+    return { runDir: result.runDir, runId: result.runId };
   }
 
   /** Everything `agenticreplay scrub` said, as one string. */
@@ -201,7 +201,7 @@ describe('what a run directory is left holding', () => {
         out,
         workspace,
       );
-      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
+      const runDir = result.runDir;
 
       expect(
         (await readdir(runDir)).filter((f) => f.startsWith('shell-frames')),
@@ -610,7 +610,7 @@ describe('what a run directory is left holding', () => {
         out,
         workspace,
       );
-      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
+      const runDir = result.runDir;
       // As a replay would have left it.
       await writeFile(
         join(runDir, 'mcp-frames.jsonl'),
@@ -660,7 +660,7 @@ describe('what a run directory is left holding', () => {
         new Output({ write: () => {}, isTTY: false }),
         workspace,
       );
-      const runDir = join(workspace, '.agenticreplay', 'runs', result.runId);
+      const runDir = result.runDir;
       expect(
         await readFile(join(runDir, 'manifest.json'), 'utf8'),
         'the fixture never got the literal into a covered file',

@@ -787,6 +787,7 @@ async function runRecording(
       attrs: {
         harness: adapter.id,
         session_id: session.id,
+        ...(session.title === undefined ? {} : { title: session.title }),
         rel_path: session.relPath,
         prompts: session.prompts.length,
         bytes: session.bytes.byteLength,

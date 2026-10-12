@@ -204,7 +204,11 @@ if (
   exported.includes('sk-test-secret-1234567890')
 )
   throw new Error('installed export is incomplete or contains the credential');
-const runDir = join(consumerDir, '.agenticreplay', 'runs', runId);
+const runStore = join(consumerDir, '.agenticreplay', 'runs');
+const runName = (await readdir(runStore)).find((name) => name.endsWith(`-${runId.slice(4)}`));
+if (!runName || !/^\d{14}-generic-openai-tool-sentinel-[0-9a-f]+$/.test(runName))
+  throw new Error(`installed record did not create a readable session directory: ${runName}`);
+const runDir = join(runStore, runName);
 const eventLines = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
   .trim()
   .split('\n')

@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RUN_ID_PATTERN } from '@agenticreplay/schema';
+import { runIdFromDirectory } from './run-names.js';
 import {
   assertPrivatePathIdentity,
   privatePathIdentity,
@@ -126,9 +127,10 @@ export async function listRuns(cwd: string): Promise<RunRef[]> {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const runs: RunRef[] = [];
   for (const e of entries) {
-    if (!e.isDirectory() || !RUN_ID_PATTERN.test(e.name)) continue;
+    const runId = runIdFromDirectory(e.name);
+    if (!e.isDirectory() || runId === undefined) continue;
     const dir = join(root, e.name);
-    runs.push({ runId: e.name, dir, ...(await factsOf(dir)) });
+    runs.push({ runId, dir, ...(await factsOf(dir)) });
   }
   return runs.sort((a, b) =>
     a.createdAt === b.createdAt
@@ -172,8 +174,13 @@ export async function resolveRunSelector(cwd: string, selector: string): Promise
     }
     return newest;
   }
-  const dir = runDirFor(cwd, selector);
-  const found = (await listRuns(cwd)).find((r) => r.dir === dir);
+  if (runIdFromDirectory(selector) === undefined)
+    throw new Error(`not a valid run id: ${JSON.stringify(selector)}`);
+  const found = (await listRuns(cwd)).find(
+    (r) =>
+      r.runId === selector ||
+      r.dir.normalize('NFC') === join(runsDir(cwd), selector).normalize('NFC'),
+  );
   if (!found)
     throw new Error(`no run ${selector} in ${runsDir(cwd)} — list runs with: agenticreplay list`);
   return found;

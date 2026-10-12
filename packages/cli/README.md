@@ -31,6 +31,14 @@ agenticreplay replay last --from 4 --model claude-haiku-4-5 --ui
 The third line is the one people stay for: same files, same conversation prefix, different model
 from step 4 onward. The model is the only variable, which is what makes the answer mean anything.
 
+Logs are stored in `.agenticreplay/runs/` in the project; `last` selects the newest recording.
+
+Capture directories use `YYYYMMDDHHmmss-agent-title-id` (UTC). Names contain only lowercase
+ASCII letters, digits and hyphens: at most 255 characters, with titles capped at 80.
+Titles come from the session or, if unavailable, the first user prompt; they are redacted and
+transliterated to ASCII. The final name is applied when recording closes. Existing `run_<id>`
+directories and commands using a run ID remain supported.
+
 ## What it gives you
 
 **A timeline of what actually happened.** Every model turn with its token counts and stop reason,

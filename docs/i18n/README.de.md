@@ -36,6 +36,13 @@ Zeichne den Harness auf, der die API-Anfragen sendet, etwa Claude Code. Die Aufz
 im Projekt unter `.agenticreplay/runs/`; `last` wählt die neueste. Öffne `run.html` im Browser,
 um den Trace anzusehen.
 
+Aufzeichnungsverzeichnisse heißen `YYYYMMDDHHmmss-agent-title-id` (UTC). Sie enthalten nur
+kleine ASCII-Buchstaben, Ziffern und Bindestriche: höchstens 255 Zeichen insgesamt, davon bis zu
+80 für den Titel. Der Titel stammt aus der Sitzung oder ersatzweise aus der ersten Nutzeranfrage;
+sensible Angaben werden maskiert, der Text nach ASCII transliteriert. Der endgültige Name wird
+beim Abschluss der Aufzeichnung gesetzt. Bestehende `run_<id>`-Verzeichnisse und Befehle mit
+Run-ID werden weiterhin unterstützt.
+
 Liest dein eigener Harness `OPENAI_BASE_URL`, ersetze `node agent.js` durch seinen Startbefehl:
 
 ```console

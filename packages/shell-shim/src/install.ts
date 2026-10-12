@@ -89,14 +89,17 @@ export async function installShellShim(options: InstallOptions): Promise<Install
       ? [
           '@echo off',
           'rem Written by agenticreplay record. Runs the real binary and notes what happened.',
-          `${quoteCmd(node)} ${quoteCmd(runner)} ${quoteCmd(name)} ${quoteCmd(dir)} ${quoteCmd(framesPath)} -- %*`,
+          `${quoteCmd(node)} ${quoteCmd(runner)} ${quoteCmd(name)} "%~dp0." ${quoteCmd(framesPath)} -- %*`,
           'exit /b %ERRORLEVEL%',
           '',
         ].join('\r\n')
       : [
           '#!/bin/sh',
           '# Written by agenticreplay record. Runs the real binary and notes what happened.',
-          `exec ${quotePosix(node)} ${quotePosix(runner)} ${quotePosix(name)} ${quotePosix(dir)} ${quotePosix(framesPath)} -- "$@"`,
+          // Derive our location at launch: a titled run directory may move after capture. Keeping
+          // its name out of this script also keeps operational metadata out of secret detection.
+          'shim_dir=$(CDPATH= cd -- "${0%/*}" && pwd -P) || exit 1',
+          `exec ${quotePosix(node)} ${quotePosix(runner)} ${quotePosix(name)} "$shim_dir" ${quotePosix(framesPath)} -- "$@"`,
           '',
         ].join('\n');
     const path = join(dir, windows ? `${name}.cmd` : name);

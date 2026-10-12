@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
 import {
   INLINE_PAYLOAD_LIMIT,
@@ -140,7 +140,7 @@ describe('TraceWriter.create', () => {
   it('honours a caller-supplied run id and rejects a malformed one', async () => {
     const w = await TraceWriter.create(runs, { ...INIT, runId: 'run_abc123' });
     expect(w.runId).toBe('run_abc123');
-    expect(w.runDir).toBe(join(runs, 'run_abc123'));
+    expect(basename(w.runDir)).toMatch(/^\d{14}-claude-code-session-abc123$/);
     await w.close();
     await expect(TraceWriter.create(runs, { ...INIT, runId: 'nope' })).rejects.toThrow(/run id/i);
   });
