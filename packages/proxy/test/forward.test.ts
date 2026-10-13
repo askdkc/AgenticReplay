@@ -154,10 +154,8 @@ describe('record mode — a forwarded origin', () => {
     expect(up.calls[0]!.headers['authorization']).toBeUndefined();
   });
 
-  it('normalizes the path for an origin agenticreplay chose, so a gateway sees its version segment', async () => {
-    // A bare base url (no `/v1`) reaches this proxy as `/chat/completions`; a gateway handed that
-    // without the version segment answers 404. The dialect's own path is what an origin agenticreplay
-    // picked expects — which is also what an env-redirected request already carries.
+  it('preserves the explicit origin and model even when obsolete substitution fields are supplied', async () => {
+    // Retired runtime fields must not rewrite a recorded client's destination, model or key.
     const up = stubUpstream({ id: 'c1', choices: [] });
     const proxy = await createProxy({
       mode: 'hybrid',
@@ -176,8 +174,9 @@ describe('record mode — a forwarded origin', () => {
       model: 'glm-5.3-flash',
     });
 
-    expect(up.calls[0]!.url).toBe('https://api.orcarouter.ai/v1/chat/completions');
-    expect(up.calls[0]!.headers['authorization']).toBe('Bearer sk-gateway-key');
+    expect(up.calls[0]!.url).toBe(`${ZEN_GO}/chat/completions`);
+    expect(up.calls[0]!.headers['authorization']).toBeUndefined();
+    expect(JSON.parse(up.calls[0]!.body).model).toBe('glm-5.3-flash');
   });
 
   // `/v1/moderations`, not `/v1/embeddings`, and that is the whole point of these two: an

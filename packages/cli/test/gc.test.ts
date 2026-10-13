@@ -205,7 +205,6 @@ describe('gc', () => {
       const result = await gcCommand(parseArgs(['gc']), out, cwd);
       expect(result).toEqual({
         runsRemoved: 0,
-        worktreesRemoved: 0,
         blobsRemoved: 0,
         bytesReclaimed: 0,
       });

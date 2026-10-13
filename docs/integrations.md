@@ -27,3 +27,21 @@ A recorded run is a trace of one live execution. It does not promise determinist
 reconstruct external state. Use `show`, `graph`, `ui`, and `export` to examine the captured API
 exchanges and actions. See [the trace specification](../spec/agenticreplay-trace-v0.md) for event
 and payload details.
+
+## Verified framework capture
+
+CI drives these clients against a local stub and asserts recorded model requests/responses,
+network destinations, and framework events. Counts below are recording checks, not replay metrics.
+
+| Framework | Capture mechanism | CI recording evidence |
+| --- | --- | --- |
+| **OpenAI Agents SDK** | Official client on the Responses API | `openai-agents`, `model_exchanges=1`; [details](#verified-framework-capture) |
+| **Vercel AI SDK** | Environment base URL and Node fetch hook | `ai-sdk-openai`, `fetch-hook`, `model_exchanges=1`; [details](#verified-framework-capture) |
+| **LangGraph / LangChain** | Two-node streaming graph and bound tools | `langgraph-stream`, `langgraph-tools`, `model_exchanges=2`; [details](#verified-framework-capture) |
+| **CrewAI** | Real Agent, Task and Crew using its native provider | `crewai`, `model_exchanges=1`; [details](#verified-framework-capture) |
+| **Aider** | Underlying LiteLLM transport; CI does not run Aider itself | `litellm`, `model_exchanges=1`; [details](#verified-framework-capture) |
+| **browser-use** | LLM layer only; CI does not launch a browser | `browser-use`, `model_exchanges=1`; [details](#verified-framework-capture) |
+
+See the [integration runner](../test/integrations/README.md) for all 22 checks, including
+embedding request counts, split origins, image preservation, MCP arguments/results, handoffs,
+and graph nodes. CI uses `--require-all` so missing dependencies cannot silently skip coverage.

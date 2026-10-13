@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,17 +31,21 @@ describe('a failure prints as the lines it was written in', () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
-  it('lists the choices of a flag one per line', async () => {
-    const code = await main(
-      ['record', 'generic-openai', '--retrieval-store', 'bogus', '--', 'node', '-e', '1'],
-      cwd,
-    );
+  it('prints multiline recovery advice as separate lines', async () => {
+    const target = join(cwd, 'occupied');
+    await mkdir(target);
+    await writeFile(join(target, 'user.txt'), 'keep');
+    const code = await main(['quickstart', '--dir', target], cwd);
     const lines = printed.join('').split('\n');
     expect(code).toBe(1);
-    expect(lines).toContain('  full   keep the response, so the run can be replayed offline');
-    expect(lines).toContain(
-      '  digest keep only its sha256, which proves a later run agreed but cannot serve it',
-    );
+    expect(
+      lines.some((line) => line.includes('already exists and is not an empty directory')),
+    ).toBe(true);
+    expect(
+      lines.some(
+        (line) => line.trim() === 'pick somewhere else: agenticreplay quickstart --dir <path>',
+      ),
+    ).toBe(true);
     expect(lines.join('\n')).not.toContain('\\x0a');
   });
 });

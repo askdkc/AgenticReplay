@@ -286,6 +286,7 @@ async function runRecording(
   const unclaimed = new UnclaimedPaths(captureLimits(args).maxCapturedBytes);
 
   let networkExchanges = 0;
+  let embeddingExchanges = 0;
   const requestTurns = new Map<string, number>();
   const bufferLimit = captureLimits(args).maxBufferedBytes;
   let queuedBodyBytes = 0;
@@ -312,6 +313,7 @@ async function runRecording(
   }
   function finishRequest(exchange: NetExchange): void {
     networkExchanges += 1;
+    if (/\/embeddings(?:\?|$)/.test(exchange.path)) embeddingExchanges += 1;
     unclaimed.note(out, exchange);
     const requestTurn = requestTurns.get(exchange.requestId);
     if (requestTurn === undefined) writer.markCaptureIncomplete('missing_request_correlation');
@@ -810,7 +812,10 @@ async function runRecording(
    * `contract.ts` already names this shape as what the adapter checks exist to prevent. They guard
    * the adapters; this guards the run, which is where a user actually meets it.
    */
-  if (modelExchanges === 0) {
+  if (modelExchanges === 0 && embeddingExchanges > 0) {
+    out.info('capture.embedding_only', { exchanges: 0, embeddings: embeddingExchanges });
+  }
+  if (modelExchanges === 0 && embeddingExchanges === 0) {
     const baseUrls = Object.keys(launch.env)
       .filter((name) => /(?:_BASE_URL|_API_BASE)$/.test(name))
       .sort();

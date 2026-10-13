@@ -4,44 +4,18 @@ import { describe, expect, it } from 'vitest';
 import { parseArgs } from '../src/args.js';
 
 describe('flags that never take a value', () => {
-  /**
-   * The parser had no notion of a value-less flag: any flag followed by a non-flag token consumed
-   * it, and `bool()` then returned its fallback because the value was a string. So the flag was
-   * silently off *and* the positional was gone.
-   *
-   * Two of those are dangerous rather than merely wrong. `agenticreplay replay --worktree last` is
-   * documented as "never touches your files", and with `--worktree` swallowed it restores the
-   * recorded tree over the working directory instead. `agenticreplay record --tls-intercept codex` turns
-   * interception off and loses the agent name, so record auto-detects and may capture a different
-   * harness entirely. Neither warned.
-   *
-   * Flag-then-positional is the more natural order, and every existing test happened to put the
-   * flag last, which is why nothing caught it.
-   */
-  /*
-   * `--force` was registered in the other half of the flag contract (flags.ts: push and pull both
-   * take it) and read with `args.bool('force')`, but never added HERE — so it was value-taking,
-   * and the natural `agenticreplay push --force run_abc` swallowed the selector.
-   *
-   * That one is worse than the two above, because it DISCLOSES. With the selector gone,
-   * pushCommand falls back to `positionals[0] ?? 'last'` and packs a DIFFERENT recording — the
-   * newest one in the workspace — POSTs it to the gateway without `?force=1`, and prints
-   * `push.done run=<the other run>`. A success line naming a run the user did not ask for.
-   *
-   * The list this loop iterates is hand-written, which is exactly how the new flag missed it, so
-   * this is a poor fence — see the invariant test below, which derives the set instead.
-   */
+  // Boolean flags must not swallow a following run selector or harness name.
   it('leaves the positional alone and reads as true', () => {
     for (const flag of [
-      '--worktree',
-      '--in-place',
-      '--loose',
+      '--full',
+      '--json',
+      '--drop-fs',
       '--ui',
       '--dry-run',
       '--verbose',
       '--force',
     ]) {
-      const args = parseArgs(['replay', flag, 'last']);
+      const args = parseArgs(['show', flag, 'last']);
       expect(args.positionals, `${flag} ate the positional`).toEqual(['last']);
       expect(args.bool(flag.slice(2)), `${flag} did not read as true`).toBe(true);
     }
@@ -54,15 +28,15 @@ describe('flags that never take a value', () => {
   });
 
   it('still lets a value-taking flag take its value', () => {
-    const args = parseArgs(['compare', 'last', '--models', 'a,b', '--from', '4']);
-    expect(args.positionals).toEqual(['last']);
-    expect(args.list('models')).toEqual(['a', 'b']);
-    expect(args.num('from')).toBe(4);
+    const args = parseArgs(['list', '--source', 'recorded', '--limit', '4']);
+    expect(args.positionals).toEqual([]);
+    expect(args.str('source')).toBe('recorded');
+    expect(args.num('limit')).toBe(4);
   });
 
   it('still honours an explicit --flag=value for a boolean', () => {
-    expect(parseArgs(['replay', '--loose=false', 'last']).bool('loose')).toBe(false);
-    expect(parseArgs(['replay', '--no-worktree', 'last']).bool('worktree', true)).toBe(false);
+    expect(parseArgs(['list', '--verbose=false', 'last']).bool('verbose')).toBe(false);
+    expect(parseArgs(['record', '--no-fs', 'generic-openai']).bool('fs', true)).toBe(false);
   });
 });
 
@@ -74,8 +48,12 @@ describe('parseArgs', () => {
   });
 
   it('parses long flags with = and with a following value', () => {
-    expect(parseArgs(['replay', 'last', '--model=gpt-5.2']).flags.model).toBe('gpt-5.2');
-    expect(parseArgs(['replay', 'last', '--model', 'gpt-5.2']).flags.model).toBe('gpt-5.2');
+    expect(parseArgs(['setup', '--gateway=https://gateway.example']).flags.gateway).toBe(
+      'https://gateway.example',
+    );
+    expect(parseArgs(['setup', '--gateway', 'https://gateway.example']).flags.gateway).toBe(
+      'https://gateway.example',
+    );
   });
 
   it('parses booleans and --no- negation', () => {
@@ -84,11 +62,11 @@ describe('parseArgs', () => {
   });
 
   it('parses numbers where the value is numeric', () => {
-    expect(parseArgs(['replay', 'last', '--from', '17']).flags.from).toBe(17);
+    expect(parseArgs(['graph', 'last', '--to', '17']).flags.to).toBe(17);
   });
 
   it('splits comma lists', () => {
-    expect(parseArgs(['compare', 'last', '--models', 'a,b,c']).list('models')).toEqual([
+    expect(parseArgs(['scrub', 'last', '--matches', 'a,b,c']).list('matches')).toEqual([
       'a',
       'b',
       'c',
@@ -111,15 +89,14 @@ describe('parseArgs', () => {
   });
 
   it('does not swallow a negative number as a flag value', () => {
-    expect(parseArgs(['replay', 'last', '--from', '-1']).flags.from).toBe(-1);
+    expect(parseArgs(['graph', 'last', '--to', '-1']).flags.to).toBe(-1);
   });
 });
 
 /*
 THE VALUE-LESS SET IS DERIVED, NOT TRUSTED.
 
-Three flags have now shipped value-taking by accident — `--worktree`, `--tls-intercept`, and
-`--force` — and each time the fix was to add one more string to a hand-written list, and each time
+Several flags have shipped value-taking by accident, including `--tls-intercept` and `--force` — and each time the fix was to add one more string to a hand-written list, and each time
 the NEXT flag missed it. The list and the flags are edited in different files by different changes,
 so nothing makes them agree.
 
@@ -129,7 +106,7 @@ flag added tomorrow is covered the day it is written, without anyone remembering
 
 The failure it prevents is not cosmetic. A boolean flag that takes a value reads as FALSE while
 eating the next token, so the feature silently does not happen AND the argument disappears —
-`--worktree` restored over the working directory, `--tls-intercept` captured a different harness,
+`--tls-intercept` captured a different harness,
 `--force` pushed a different recording to a shared gateway and called it success.
 */
 describe('every boolean flag is value-less', () => {

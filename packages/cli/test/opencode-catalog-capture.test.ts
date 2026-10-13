@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openCodeAdapter } from '@agenticreplay/adapters';
-import { TraceWriter } from '@agenticreplay/core';
+import { TraceReader, TraceWriter } from '@agenticreplay/core';
 import { createProxy, type NetExchange } from '@agenticreplay/proxy';
 import { appendDerivedEvents, ExchangeEventDeriver } from '../src/exchange-events.js';
 import { persistNetExchange } from '../src/tls-capture.js';
@@ -30,7 +30,7 @@ const endpoints = [
 ];
 
 describe('OpenCode catalog capture through emitted plugin and real proxy', () => {
-  it('refreshes new APIs, records catalog calls, and replays supported dialects offline', async () => {
+  it('refreshes new APIs and records catalog traffic and supported dialects', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agenticreplay-catalog-e2e-'));
     closers.push(() => rm(root, { recursive: true, force: true }));
     const writer = await TraceWriter.create(join(root, 'runs'), {
@@ -142,34 +142,12 @@ describe('OpenCode catalog capture through emitted plugin and real proxy', () =>
       /provider-fixture|wrong-gateway-fixture/,
     );
 
-    const replay = await createProxy({
-      mode: 'replay',
-      exchanges: proxy.exchanges(),
-      fetchImpl: (async () => {
-        throw new Error('replay went live');
-      }) as typeof fetch,
-    });
-    closers.push(replay.close);
-    const replayLaunch = await openCodeAdapter.prepare({
-      runId: writer.runId,
-      runDir: join(root, 'replay'),
-      cwd: root,
-      proxyUrl: replay.url,
-      userArgs: [],
-      env: { OPENCODE_CONFIG_CONTENT: '{}' },
-    });
-    await exec(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: root,
-      env: {
-        ...env,
-        ...replayLaunch.env,
-        OPENCODE_DISABLE_MODELS_FETCH: '1',
-        TEST_PROXY: replay.url,
-        TEST_CATALOG_CALLS: '0',
-        TEST_URLS: JSON.stringify(endpoints.slice(0, 6)),
-      },
-    });
-    expect(replay.stats().matchedExact).toBe(6);
+    await writer.close(0);
+    await proxy.close();
+    closers.splice(closers.indexOf(proxy.close), 1);
+    const reader = await TraceReader.open(writer.runDir);
+    expect(await reader.events()).toEqual(events);
+    expect(await reader.verifyIntegrity()).toMatchObject({ ok: true });
     expect(calls).toHaveLength(endpoints.length);
   });
 });

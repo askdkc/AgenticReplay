@@ -5,48 +5,35 @@ import { describe, expect, it } from 'vitest';
 import { NUMERIC, VALUELESS, parseArgs } from '../src/args.js';
 import { assertKnownFlags } from '../src/flags.js';
 
-/**
- * A flag whose value the parser could not honour.
- *
- * `assertKnownFlags` settled the names: an invented flag is refused rather than ignored. The values
- * were still taken on trust, and every accessor falls back silently when one is missing or of the
- * wrong shape — so the instruction disappeared and the run reported success having done something
- * else. Four shapes, all of them things a person actually types:
- *
- *   agenticreplay replay last --model            the value forgotten, or eaten by the shell
- *   agenticreplay scrub last --match a --match b the flag repeated, because that is how most CLIs take a list
- *   agenticreplay replay last --from four        a word where a number goes
- *   agenticreplay replay last --json=maybe       a value on a flag that is only ever on or off
- *
- * `agenticreplay gc --keep` already checked its own by hand, which is the argument for doing it here: one
- * command got it right and the other nine did not, and nothing made that visible.
- */
+/** Active CLI flags must reject missing, conflicting and malformed values. */
 describe('flags whose value cannot be honoured', () => {
   const check = (argv: string[]) => () => assertKnownFlags(parseArgs(argv));
 
   describe('a value that was not given', () => {
     it('refuses a value-taking flag left empty at the end of the line', () => {
-      expect(check(['replay', 'last', '--model'])).toThrow(/--model needs a value/);
+      expect(check(['record', 'generic-openai', '--upstream-openai'])).toThrow(
+        /--upstream-openai needs a value/,
+      );
     });
 
     it('refuses one whose value is the next flag, which is the same mistake', () => {
-      expect(check(['replay', 'last', '--model', '--json'])).toThrow(/--model needs a value/);
+      expect(check(['record', 'generic-openai', '--upstream-openai', '--json'])).toThrow(
+        /--upstream-openai needs a value/,
+      );
     });
 
     /**
-     * The silent version of this one changed what the command did: `--model` set nothing, so the
-     * fork the person asked for became a plain replay of the run they already had, and the two
-     * "different models" agreed because only one of them ever ran.
+     * A missing port must not silently select a random listener instead of the requested one.
      */
     it('says what the flag is for, so the message is enough to act on', () => {
-      expect(check(['replay', 'last', '--from'])).toThrow(/--from needs a number/);
+      expect(check(['ui', 'last', '--port'])).toThrow(/--port needs a number/);
     });
 
     it('leaves a flag given a real value alone', () => {
-      expect(check(['replay', 'last', '--model', 'x'])).not.toThrow();
-      expect(check(['replay', 'last', '--model=x'])).not.toThrow();
+      expect(check(['record', 'generic-openai', '--upstream-openai', 'x'])).not.toThrow();
+      expect(check(['record', 'generic-openai', '--upstream-openai=x'])).not.toThrow();
       // An explicitly empty value is a value: the person said so.
-      expect(check(['replay', 'last', '--model='])).not.toThrow();
+      expect(check(['record', 'generic-openai', '--upstream-openai='])).not.toThrow();
     });
 
     /** A negation is not a missing value; it is the value `false`. */
@@ -56,7 +43,7 @@ describe('flags whose value cannot be honoured', () => {
 
     /** And a flag that never takes one is not missing anything. */
     it('leaves a valueless flag alone', () => {
-      expect(check(['replay', 'last', '--json', '--quiet'])).not.toThrow();
+      expect(check(['list', '--json', '--verbose'])).not.toThrow();
     });
   });
 
@@ -84,25 +71,24 @@ describe('flags whose value cannot be honoured', () => {
     /** Repeating a flag with the same value asks for nothing contradictory, so it is allowed. */
     it('allows a repeat that says the same thing twice', () => {
       expect(check(['scrub', 'last', '--match', 'a', '--match', 'a'])).not.toThrow();
-      expect(check(['replay', 'last', '--json', '--json'])).not.toThrow();
+      expect(check(['list', '--json', '--json'])).not.toThrow();
     });
   });
 
   describe('a value of the wrong shape', () => {
     /**
-     * `num()` returns its fallback for a word, so `--from four` replayed the whole run instead of
-     * forking at a checkpoint, and `--port four` bound a random port and printed it as though that
-     * had been the request.
+     * `num()` returns its fallback for a word, so a malformed port must be rejected
+     * before a random port is bound.
      */
     it('refuses a word where a number belongs', () => {
-      expect(check(['replay', 'last', '--from', 'four'])).toThrow(/--from needs a number/);
+      expect(check(['ui', 'last', '--port', 'four'])).toThrow(/--port needs a number/);
       expect(check(['ui', 'last', '--port', 'eighty'])).toThrow(/--port needs a number/);
     });
 
     it('takes a number in either form, including a negative one', () => {
-      expect(check(['replay', 'last', '--from', '4'])).not.toThrow();
-      expect(check(['replay', 'last', '--from=4'])).not.toThrow();
-      expect(check(['replay', 'last', '--from', '-1'])).not.toThrow();
+      expect(check(['ui', 'last', '--port', '4'])).not.toThrow();
+      expect(check(['ui', 'last', '--port=4'])).not.toThrow();
+      expect(check(['ui', 'last', '--port', '-1'])).not.toThrow();
     });
 
     /**
@@ -110,11 +96,11 @@ describe('flags whose value cannot be honoured', () => {
      * the person was asking for it — and a script reading stdout got a human table.
      */
     it('refuses a value on a flag that is only ever on or off', () => {
-      expect(check(['replay', 'last', '--json=maybe'])).toThrow(/--json takes no value/);
+      expect(check(['list', '--json=maybe'])).toThrow(/--json takes no value/);
     });
 
     it('allows the spellings that do mean on and off', () => {
-      expect(check(['replay', 'last', '--json'])).not.toThrow();
+      expect(check(['list', '--json'])).not.toThrow();
       expect(check(['replay', 'last', '--json=true'])).not.toThrow();
       expect(check(['replay', 'last', '--no-json'])).not.toThrow();
     });

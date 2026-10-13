@@ -720,7 +720,8 @@ describe('proxy — health', () => {
     closers.push(proxy.close);
     const res = await fetch(`${proxy.url}/__agenticreplay/health`);
     expect(res.status).toBe(200);
-    expect((await res.json()).mode).toBe('replay');
+    expect(await res.json()).toMatchObject({ ok: true, liveCalls: 0, passedThrough: 0 });
+    expect(proxy.exchanges()).toEqual([]);
   });
 });
 

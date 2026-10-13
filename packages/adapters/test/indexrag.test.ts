@@ -165,28 +165,11 @@ describe('the indexrag adapter', () => {
       expect(indexRagAdapter.artifacts?.capture).toContain('dataset');
     });
 
-    it('never resets the corpus, which is input rather than product', () => {
-      expect(indexRagAdapter.artifacts?.resetBeforeReplay).not.toContain('dataset');
-    });
-
-    /**
-     * Everything reset must also be captured, or a replay deletes something the safety snapshot
-     * never took a copy of — which is the operator's index gone for good.
-     */
-    it('resets nothing it does not also capture', () => {
-      const captured = new Set(indexRagAdapter.artifacts?.capture ?? []);
-      for (const path of indexRagAdapter.artifacts?.resetBeforeReplay ?? []) {
-        expect(captured.has(path), `${path} is reset but never captured`).toBe(true);
-      }
-    });
-
-    it('names the flag that would serialise the pipeline, without applying it', () => {
-      expect(indexRagAdapter.artifacts?.concurrencyFlag).toEqual({
-        flag: '--concurrency',
-        serialValue: '1',
+    it('only declares capture inputs and has no reset or concurrency override', () => {
+      expect(indexRagAdapter.artifacts).toEqual({
+        capture: expect.arrayContaining(['cache', 'vector_store', 'dataset']),
       });
-      // Declared, never imposed: clamping concurrency would change the run being replayed.
-      expect(indexRagAdapter.replayArgs).toBeUndefined();
+      expect('replayArgs' in indexRagAdapter).toBe(false);
     });
   });
 });

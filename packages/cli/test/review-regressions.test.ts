@@ -92,14 +92,15 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
     expect(out).toBe('SENTINEL');
   });
 
-  it('stays silent on stdout while replaying', async () => {
+  it('stays silent on stdout while inspecting recorded events', async () => {
     const out = await stdoutOf(`
       await agenticreplay.record({
         adapter: 'generic-openai',
         command: [process.execPath, ${JSON.stringify(AGENT)}],
         upstream: { openai: ${JSON.stringify(model.url)} },
       });
-      await agenticreplay.replay('last');
+      const events = await agenticreplay.events('last');
+      if (!events.some(e => e.type === 'model.response')) throw new Error('missing recorded response');
       process.stdout.write('SENTINEL');
     `);
     expect(out).toBe('SENTINEL');

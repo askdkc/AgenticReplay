@@ -17,7 +17,7 @@ const RUNNER = join(ROOT, 'test', 'integrations', 'run.mjs');
  *
  * Two failures it is built to catch, both of which have already happened here:
  *
- *   - **A cited check that does not exist**, or an `exact=N` that disagrees with the exchange count
+ *   - **A cited check that does not exist**, or an `model_exchanges=N` that disagrees with the exchange count
  *     the check asserts. Easy to introduce by copying a row.
  *   - **A row that outlives its reason.** The CrewAI row said all of CrewAI, Aider and OpenHands
  *     route through LiteLLM, and CrewAI 1.x stopped doing that — LiteLLM became an optional extra
@@ -60,16 +60,16 @@ describe('the support table is backed by checks that exist', () => {
   }
 
   const CITED = [
-    { framework: 'OpenAI Agents SDK', checks: ['openai-agents'], exact: 1 },
-    { framework: 'Vercel AI SDK', checks: ['ai-sdk-openai', 'fetch-hook'], exact: 1 },
+    { framework: 'OpenAI Agents SDK', checks: ['openai-agents'], exchanges: 1 },
+    { framework: 'Vercel AI SDK', checks: ['ai-sdk-openai', 'fetch-hook'], exchanges: 1 },
     {
       framework: 'LangGraph / LangChain',
       checks: ['langgraph-stream', 'langgraph-tools'],
-      exact: 2,
+      exchanges: 2,
     },
-    { framework: 'CrewAI', checks: ['crewai'], exact: 1 },
-    { framework: 'Aider', checks: ['litellm'], exact: 1 },
-    { framework: 'browser-use', checks: ['browser-use'], exact: 1 },
+    { framework: 'CrewAI', checks: ['crewai'], exchanges: 1 },
+    { framework: 'Aider', checks: ['litellm'], exchanges: 1 },
+    { framework: 'browser-use', checks: ['browser-use'], exchanges: 1 },
   ];
 
   it.each(CITED)('$framework cites a check that exists and agrees on the count', async (c) => {
@@ -79,10 +79,10 @@ describe('the support table is backed by checks that exist', () => {
 
     for (const id of c.checks) {
       expect(checks.has(id), `run.mjs has no check called ${id}`).toBe(true);
-      expect(checks.get(id), `${id} asserts a different exchange count`).toBe(c.exact);
+      expect(checks.get(id), `${id} asserts a different exchange count`).toBe(c.exchanges);
       expect(row).toContain(`\`${id}\``);
     }
-    expect(row).toContain(`\`canonical_exact=${c.exact}\``);
+    expect(row).toContain(`\`model_exchanges=${c.exchanges}\``);
   });
 
   it('every docs/integrations.md anchor a row links to resolves', async () => {

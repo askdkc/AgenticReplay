@@ -84,7 +84,10 @@ describe('agenticreplay setup', () => {
         },
       );
       // The ask above accepts the offered default, so a model list is stored and the line is short.
-      expect(text()).toContain('agenticreplay compare last --verify');
+      expect(text()).toContain('agenticreplay record claude');
+      expect(text()).toContain('3 models available:');
+      expect(text()).toContain('anthropic/claude-opus-5');
+      expect(text()).not.toMatch(/agenticreplay (?:compare|replay)\b/);
     });
 
     it('names real ids when no default list was chosen', async () => {
@@ -94,7 +97,8 @@ describe('agenticreplay setup', () => {
         { env, probe: async () => ['anthropic/claude-opus-5', 'openai/gpt-5.2'] },
       );
       const printed = text();
-      expect(printed).toContain('--models anthropic/claude-opus-5,openai/gpt-5.2');
+      expect(printed).toContain('anthropic/claude-opus-5');
+      expect(printed).toContain('openai/gpt-5.2');
       expect(printed, 'never a model id nobody confirmed exists').not.toContain(
         '--models claude-opus-5,gpt-5.2',
       );
@@ -112,7 +116,8 @@ describe('agenticreplay setup', () => {
         },
       );
       const printed = text();
-      expect(printed).toContain('agenticreplay models');
+      expect(printed).toContain('gateway.unreachable');
+      expect(printed).toContain('run agenticreplay setup again');
       expect(printed, 'inventing ids for an unreachable gateway is worse than none').not.toMatch(
         /--models \S/,
       );

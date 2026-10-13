@@ -1265,7 +1265,7 @@ describe('TLS interception', () => {
   });
 
   it.skipIf(zstdCompressSync === undefined)(
-    'replays a zstd-compressed Codex request inside intercepted TLS',
+    'records a zstd-compressed Codex request and its live response inside intercepted TLS',
     async () => {
       const dialect = defaultDialects().find((candidate) => candidate.id === 'codex')!;
       const request = {
@@ -1290,7 +1290,7 @@ describe('TLS interception', () => {
         '\n\n' +
         'event: response.output_text.delta\n' +
         'data: ' +
-        JSON.stringify({ type: 'response.output_text.delta', delta: 'CODEX_REPLAY_OK' }) +
+        JSON.stringify({ type: 'response.output_text.delta', delta: 'CODEX_CAPTURE_OK' }) +
         '\n\n' +
         'event: response.completed\n' +
         'data: ' +
@@ -1304,29 +1304,23 @@ describe('TLS interception', () => {
           },
         }) +
         '\n\n';
-      proxy = await createProxy({
-        mode: 'replay',
-        exchanges: [
-          {
-            seq: 0,
-            dialect: 'codex',
-            path: '/backend-api/codex/responses',
-            rawRequest: JSON.stringify(request),
-            rawResponse: response,
-            status: 200,
-            streamed: true,
-            canonicalRequest: dialect.toCanonicalRequest(request),
-            canonicalResponse: dialect.parseStream(response),
-          },
-        ],
-        tls: {
-          ca: runCa,
-          hosts: [`127.0.0.1:${model.port}`],
-          trustedOriginCerts: [originCa.certPem],
-        },
+      let originRequest = '';
+      await model.close();
+      model = await startOrigin(originCa, (req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          originRequest = decodeBody(
+            Buffer.concat(chunks),
+            String(req.headers['content-encoding'] ?? 'identity'),
+          );
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.end(response);
+        });
       });
+      proxy = await startProxy([`127.0.0.1:${model.port}`]);
 
-      const replayed = await through({
+      const recorded = await through({
         proxyPort: proxy.port,
         host: '127.0.0.1',
         port: model.port,
@@ -1337,11 +1331,15 @@ describe('TLS interception', () => {
         headers: { 'content-type': 'application/json', 'content-encoding': 'zstd' },
       });
 
-      expect(replayed.status).toBe(200);
-      expect(replayed.body).toBe(response);
-      expect(proxy.stats().matchedExact).toBe(1);
-      expect(proxy.stats().unmatched).toBe(0);
-      expect(netExchanges).toHaveLength(0);
+      expect(recorded.status).toBe(200);
+      expect(recorded.body).toBe(response);
+      expect(JSON.parse(originRequest)).toEqual(request);
+      expect(netExchanges).toHaveLength(1);
+      expect(JSON.parse(netExchanges[0]!.requestBody)).toEqual(request);
+      expect(netExchanges[0]!.responseBody).toBe(response);
+      expect(netExchanges[0]!.responseComplete).toBe(true);
+      expect(modelExchanges).toHaveLength(1);
+      expect(modelExchanges[0]!.canonicalRequest.model).toBe(request.model);
     },
   );
 

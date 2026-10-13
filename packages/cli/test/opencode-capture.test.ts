@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openCodeAdapter } from '@agenticreplay/adapters';
-import { TraceWriter } from '@agenticreplay/core';
-import { createProxy, type RecordedExchange } from '@agenticreplay/proxy';
+import { TraceReader, TraceWriter } from '@agenticreplay/core';
+import { createProxy } from '@agenticreplay/proxy';
 import { appendDerivedEvents, ExchangeEventDeriver } from '../src/exchange-events.js';
 
 const exec = promisify(execFile);
@@ -296,9 +296,11 @@ async function verifyTrace(s: Awaited<ReturnType<typeof setup>>, oauth: boolean,
 }
 
 describe('OpenCode capture through emitted plugin, proxy and events.jsonl', () => {
-  it.each([true, false])('records and replays the final fetch (OAuth=%s)', async (oauth) => {
-    const s = await setup(oauth);
-    const script = `
+  it.each([true, false])(
+    'records and reads the final fetch without another provider call (OAuth=%s)',
+    async (oauth) => {
+      const s = await setup(oauth);
+      const script = `
       for (const spec of JSON.parse(process.env.OPENCODE_CONFIG_CONTENT).plugin) await (await import(spec)).default();
       const response = await fetch(${JSON.stringify(oauth ? CHATGPT : API)}, {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ${oauth ? 'fixture-access' : 'fixture-api-key'}', 'ChatGPT-Account-Id': 'fixture-account' },
@@ -306,34 +308,24 @@ describe('OpenCode capture through emitted plugin, proxy and events.jsonl', () =
       });
       if (response.status !== 200 || !(await response.text()).includes('captured')) process.exit(1);
     `;
-    await exec(process.execPath, ['--input-type=module', '-e', script], {
-      env: s.env,
-      cwd: s.root,
-    });
-    const exchanges = await verifyTrace(s, oauth);
-    const replay = await createProxy({
-      mode: 'replay',
-      exchanges: exchanges as RecordedExchange[],
-      fetchImpl: (async () => {
-        throw new Error('replay went live');
-      }) as typeof fetch,
-    });
-    closers.push(replay.close);
-    const launch = await openCodeAdapter.prepare({
-      runId: s.writer.runId,
-      runDir: join(s.root, 'replay'),
-      cwd: s.root,
-      proxyUrl: replay.url,
-      env: { ...s.env, OPENCODE_CONFIG_CONTENT: s.launch.env.OPENCODE_CONFIG_CONTENT },
-      userArgs: [],
-    });
-    await exec(process.execPath, ['--input-type=module', '-e', script], {
-      env: { ...s.env, ...launch.env },
-      cwd: s.root,
-    });
-    expect(s.calls).toHaveLength(1);
-    expect(replay.stats().matchedExact).toBe(1);
-  });
+      await exec(process.execPath, ['--input-type=module', '-e', script], {
+        env: s.env,
+        cwd: s.root,
+      });
+      const exchanges = await verifyTrace(s, oauth);
+      expect(exchanges).toHaveLength(1);
+      await s.writer.close(0);
+      await s.proxy.close();
+      closers.splice(closers.indexOf(s.proxy.close), 1);
+      const reader = await TraceReader.open(s.writer.runDir);
+      const events = await reader.events();
+      const responses = events.filter((event) => event.type === 'model.response');
+      expect(responses).toHaveLength(1);
+      expect(responses[0]!.attrs?.status).toBe(200);
+      expect(await reader.verifyIntegrity()).toMatchObject({ ok: true });
+      expect(s.calls).toHaveLength(1);
+    },
+  );
 });
 
 // Opt in with AGENTICREPLAY_TEST_OPENCODE=/absolute/path/to/opencode. Real compiled harness, fake auth,

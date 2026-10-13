@@ -652,6 +652,7 @@ describe('what a run directory is left holding', () => {
         parseArgs([
           'record',
           'generic-openai',
+          '--no-shell',
           '--',
           process.execPath,
           agent,
@@ -760,7 +761,7 @@ describe('what a run directory is left holding', () => {
       await writeFile(agent, "console.log('GOT: done');\n");
       const out = new Output({ write: () => {}, isTTY: false });
       const result = await recordCommand(
-        parseArgs(['record', 'generic-openai', '--', process.execPath, agent]),
+        parseArgs(['record', 'generic-openai', '--no-shell', '--', process.execPath, agent]),
         out,
         workspace,
       );

@@ -36,44 +36,43 @@ async function seedRun(runId: string, createdAt?: string): Promise<string> {
   return dir;
 }
 
-describe('"last" after a replay', () => {
-  /**
-   * Since exact replay writes its own run, the newest run in a directory is usually a replay
-   * trace — which holds divergences and nothing else: no exchanges, no blobs, no filesystem store.
-   * Every command defaults to `last`, so that quietly redirected all of them.
-   *
-   * The sharpest case is `agenticreplay scrub last --match my-hostname`, which is the line in the README:
-   * it scrubbed the empty trace, found nothing, and printed "nothing matched — the trace is
-   * unchanged". A security tool telling you a trace is clean while the secret sits in the
-   * recording next to it.
-   *
-   * A fork stays eligible — it has exchanges and a worktree and is a thing you act on. A replay
-   * trace is a report about another run, so `last` skips it.
-   */
+describe('selectors with legacy provenance', () => {
+  // Legacy provenance is readable data. Selection follows the newest trace, and an explicit
+  // selector still opens its original recording without generating or executing another run.
   async function writeRun(dir: string, opts: { parentRun?: string; forkPoint?: number } = {}) {
     const writer = await TraceWriter.create(join(dir, '.agenticreplay', 'runs'), {
       adapter: { id: 'claude-code', version: '0.0.0' },
       argv: ['claude-code'],
       cwd: dir,
       agenticreplayVersion: '0.0.0',
-      ...(opts.parentRun === undefined ? {} : { parentRun: opts.parentRun }),
-      ...(opts.forkPoint === undefined ? {} : { forkPoint: opts.forkPoint }),
     });
     await writer.close(0);
+    if (opts.parentRun !== undefined) {
+      const path = join(writer.runDir, 'manifest.json');
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...JSON.parse(await readFile(path, 'utf8')),
+          parent_run: opts.parentRun,
+          ...(opts.forkPoint === undefined ? {} : { fork_point: opts.forkPoint }),
+        }),
+      );
+    }
     // `created_at` has second-ish resolution in the sort; make the order unambiguous.
     await new Promise((r) => setTimeout(r, 5));
     return writer.runId;
   }
 
-  it('skips a replay trace and resolves the recording it describes', async () => {
+  it('resolves the newest legacy trace and permits explicitly selecting the recording', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-last-'));
     try {
       const recording = await writeRun(dir);
       const replay = await writeRun(dir, { parentRun: recording });
       expect((await listRuns(dir))[0]!.runId, 'the replay is newest').toBe(replay);
 
-      expect((await resolveRunSelector(dir, 'last')).runId).toBe(recording);
-      // Naming it explicitly still works — it is a real run, just not the default one.
+      expect((await resolveRunSelector(dir, 'last')).runId).toBe(replay);
+      expect((await resolveRunSelector(dir, recording)).runId).toBe(recording);
+      // Naming the legacy trace explicitly still works.
       expect((await resolveRunSelector(dir, replay)).runId).toBe(replay);
     } finally {
       await rm(dir, { recursive: true, force: true });

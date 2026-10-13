@@ -136,9 +136,20 @@ describe('agenticreplay record — a run that captured no model traffic', () => 
     expect(result.modelExchanges).toBe(0);
     expect(lines.find((l) => l.includes('capture.empty'))).toBeUndefined();
     // It still says what happened — `exchanges=0` is worth knowing — as a fact, not a fault.
-    const said = lines.find((l) => l.includes('capture.retrieval_only')) ?? '';
-    expect(said).toContain('retrieval=1');
+    const said = lines.find((l) => l.includes('capture.embedding_only')) ?? '';
+    expect(said).toContain('embeddings=1');
     expect(said).toContain('info');
+    const reader = await TraceReader.open(result.runDir);
+    const events = await reader.events();
+    const requests = events.filter(
+      (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
+    );
+    const responses = events.filter((event) => event.type === 'net.response');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.attrs?.path).toMatch(/\/embeddings$/);
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.causes).toContain(requests[0]!.seq);
+    expect(responses[0]!.attrs?.request_id).toBe(requests[0]!.attrs?.request_id);
   });
 });
 

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -36,23 +36,28 @@ describe('recording quickstart', () => {
     expect(result.turns).toBeGreaterThan(0);
     expect(lines()).toContain('quickstart.ready');
     expect(lines()).toContain('agenticreplay show');
-    expect(lines()).not.toMatch(/replay|fork|compare/i);
+    expect(lines()).not.toMatch(/agenticreplay (?:replay|fork|compare|checkpoints)\b/i);
   });
 
   it('shows the recorded timeline on request', async () => {
     const { out, lines } = capture();
     await quickstartCommand(parseArgs(['quickstart', '--full']), out, dir);
     expect(lines()).toContain('SEQ');
-    expect(lines()).toContain('model.response');
+    expect(lines()).toContain('MODEL');
+    expect(lines()).toMatch(/MODEL.*stop: end_turn/);
   });
 
   it('refuses to overwrite a non-empty destination', async () => {
     const { out } = capture();
+    const target = join(dir, 'agenticreplay-quickstart');
+    await mkdir(target);
+    await writeFile(join(target, 'user.txt'), 'keep my work');
     await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(
       /already exists/,
     );
     await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(
       /already exists/,
     );
+    expect(await readFile(join(target, 'user.txt'), 'utf8')).toBe('keep my work');
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,12 +6,7 @@ import { TraceWriter } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { stripAnsi } from '../src/out.js';
-import {
-  checkpointsCommand,
-  exportCommand,
-  listCommand,
-  showCommand,
-} from '../src/commands/inspect.js';
+import { exportCommand, listCommand, showCommand } from '../src/commands/inspect.js';
 
 describe('agenticreplay show — the DETAIL column', () => {
   /**
@@ -76,7 +71,7 @@ describe('agenticreplay show — the DETAIL column', () => {
   });
 });
 
-describe('agenticreplay list — fork provenance', () => {
+describe('agenticreplay list — legacy provenance', () => {
   /**
    * `agenticreplay compare --models a,b,c` leaves four runs in the directory: the parent and one fork per
    * model. Listing them as four unrelated ids makes the output of the tool's headline command
@@ -97,10 +92,19 @@ describe('agenticreplay list — fork provenance', () => {
         argv: ['claude-code'],
         cwd: dir,
         agenticreplayVersion: '0.0.0',
-        parentRun: parent.runId,
-        forkPoint: 4,
       });
       await child.close(0);
+      // Build an old log fixture; the current writer emits no fork metadata.
+      const childManifest = join(child.runDir, 'manifest.json');
+      await writeFile(
+        childManifest,
+        JSON.stringify({
+          ...JSON.parse(await readFile(childManifest, 'utf8')),
+          parent_run: parent.runId,
+          fork_point: 4,
+          fork_model: 'claude-haiku-4-5-20251001',
+        }),
+      );
 
       const lines: string[] = [];
       const out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -111,7 +115,8 @@ describe('agenticreplay list — fork provenance', () => {
       // The child's row names the parent; the parent's row has nothing in that column.
       const childRow = text.split('\n').find((l) => l.includes(child.runId)) ?? '';
       const parentRow = text.split('\n').find((l) => l.startsWith(parent.runId)) ?? '';
-      expect(childRow).toContain(`${parent.runId}@4`);
+      expect(childRow).toContain(parent.runId);
+      expect(childRow).not.toContain(`${parent.runId}@`);
       expect(parentRow).not.toContain('@');
 
       // A replay trace has a parent but no checkpoint, and `run_x@?` reads as missing data.
@@ -120,9 +125,16 @@ describe('agenticreplay list — fork provenance', () => {
         argv: ['claude-code'],
         cwd: dir,
         agenticreplayVersion: '0.0.0',
-        parentRun: parent.runId,
       });
       await replay.close(0);
+      const legacyManifest = join(replay.runDir, 'manifest.json');
+      await writeFile(
+        legacyManifest,
+        JSON.stringify({
+          ...JSON.parse(await readFile(legacyManifest, 'utf8')),
+          parent_run: parent.runId,
+        }),
+      );
       lines.length = 0;
       await listCommand(parseArgs(['list']), out, dir);
       const replayRow =
@@ -137,7 +149,7 @@ describe('agenticreplay list — fork provenance', () => {
   });
 });
 
-describe('agenticreplay show — fork provenance', () => {
+describe('agenticreplay show — legacy provenance', () => {
   /**
    * A forked run read on its own is unintelligible without its parent: the timeline opens
    * mid-conversation, the filesystem is a worktree that no longer exists, and nothing on screen
@@ -160,11 +172,19 @@ describe('agenticreplay show — fork provenance', () => {
         argv: ['claude-code'],
         cwd: dir,
         agenticreplayVersion: '0.0.0',
-        parentRun: parent.runId,
-        forkPoint: 4,
-        forkModel: 'claude-haiku-4-5-20251001',
       });
       await child.close(0);
+      // Build an old log fixture; the current writer emits no fork metadata.
+      const childManifest = join(child.runDir, 'manifest.json');
+      await writeFile(
+        childManifest,
+        JSON.stringify({
+          ...JSON.parse(await readFile(childManifest, 'utf8')),
+          parent_run: parent.runId,
+          fork_point: 4,
+          fork_model: 'claude-haiku-4-5-20251001',
+        }),
+      );
 
       const lines: string[] = [];
       const out = new Output({ write: (l) => void lines.push(l), isTTY: false });
@@ -198,9 +218,16 @@ describe('agenticreplay show — fork provenance', () => {
         argv: ['claude-code'],
         cwd: dir,
         agenticreplayVersion: '0.0.0',
-        parentRun: parent.runId,
       });
       await replay.close(0);
+      const legacyManifest = join(replay.runDir, 'manifest.json');
+      await writeFile(
+        legacyManifest,
+        JSON.stringify({
+          ...JSON.parse(await readFile(legacyManifest, 'utf8')),
+          parent_run: parent.runId,
+        }),
+      );
 
       const lines: string[] = [];
       const out = new Output({ write: (l) => void lines.push(l), isTTY: false });
