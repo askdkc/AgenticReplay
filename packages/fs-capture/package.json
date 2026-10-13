@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/fs-capture",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,7 +17,7 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/schema": "0.1.4"
+    "@agenticreplay/schema": "0.1.5"
   },
   "engines": {
     "node": ">=24.0.0"
