@@ -835,7 +835,6 @@ describe('forced capture', () => {
       'cache/mini_faqs.json',
       'dataset/notes.txt',
     ]);
-    await expect(shadow.materialize(tree, join(root, 'dest'))).resolves.toBeUndefined();
 
     // Named once: a warning repeated on every turn of a long run is a warning nobody reads.
     await shadow.snapshot();
@@ -911,9 +910,6 @@ describe('forced capture', () => {
 
     const withLink = await shadow.snapshot();
     expect(await shadow.gitlinks(withLink)).toEqual(['vendor/inner']);
-    await expect(shadow.materialize(withLink, join(root, 'dest'))).rejects.toThrow(
-      /embedded git repositor/i,
-    );
   });
 });
 
@@ -964,95 +960,3 @@ describe('patch', () => {
   });
 });
 
-describe('materialize', () => {
-  itGit('round-trips a nested tree byte for byte', async () => {
-    const { root, workTree, shadow } = await fixture();
-    const unicode = 'héllo ünicode ✓\n漢字とカナ\nlast line without newline';
-    const binary = new Uint8Array([0, 1, 2, 253, 254, 255, 10, 13]);
-    await write(workTree, 'top.txt', 'top\n');
-    await write(workTree, 'nested/deep/u.txt', unicode);
-    await write(workTree, 'nested/deep/deeper/bin.dat', binary);
-    await write(workTree, 'nested/crlf.txt', 'a\r\nb\r\n');
-    await write(workTree, 'run.sh', '#!/bin/sh\necho hi\n');
-    await chmod(join(workTree, 'run.sh'), 0o755);
-    const tree = await shadow.snapshot();
-
-    const dest = join(root, 'materialized');
-    await shadow.materialize(tree, dest);
-
-    expect(await listFilesRecursive(dest)).toEqual(await listFilesRecursive(workTree));
-    for (const rel of await listFilesRecursive(workTree)) {
-      const original = await readFile(join(workTree, rel));
-      const restored = await readFile(join(dest, rel));
-      expect(restored.equals(original), `bytes differ for ${rel}`).toBe(true);
-    }
-    // Windows has no execute bit — git itself gives up on it there (`core.fileMode=false`), so a
-    // restore cannot put back what the filesystem cannot hold. Only this line is skipped: the
-    // byte-for-byte round trip above is exactly as meaningful on Windows and still runs.
-    //
-    // The consequence is real and belongs in the open, not in a green test: a run recorded on
-    // POSIX and forked on Windows gets its scripts back without `+x`.
-    if (process.platform !== 'win32') {
-      expect((await stat(join(dest, 'run.sh'))).mode & 0o111).toBeGreaterThan(0);
-    }
-  });
-
-  /**
-   * Creating the symlink is what fails on Windows, in this test's own setup: `symlink()` needs
-   * Developer Mode or elevation, so the scenario cannot be built and `materialize` is never
-   * reached. The gap on Windows is therefore unmeasured here, not proven — worth saying plainly
-   * rather than leaving a red test that looks like a restore bug.
-   */
-  itGit.skipIf(process.platform === 'win32')(
-    'round-trips a symlink as a symlink, without following it',
-    async () => {
-      const { root, workTree, shadow } = await fixture();
-      await write(workTree, 'target.txt', 'pointed at\n');
-      await symlink('target.txt', join(workTree, 'link.txt'));
-      await symlink('/etc/passwd', join(workTree, 'escape.txt'));
-      const dest = join(root, 'materialized-links');
-      await shadow.materialize(await shadow.snapshot(), dest);
-      expect(await readlink(join(dest, 'link.txt'))).toBe('target.txt');
-      expect(await readlink(join(dest, 'escape.txt'))).toBe('/etc/passwd');
-      expect((await lstat(join(dest, 'escape.txt'))).isSymbolicLink()).toBe(true);
-    },
-  );
-
-  itGit('creates the destination directory if it does not exist', async () => {
-    const { root, workTree, shadow } = await fixture();
-    await write(workTree, 'a.txt', 'x\n');
-    const dest = join(root, 'does', 'not', 'exist');
-    await shadow.materialize(await shadow.snapshot(), dest);
-    expect(await readFile(join(dest, 'a.txt'), 'utf8')).toBe('x\n');
-  });
-
-  itGit('materializes the empty tree as an empty directory', async () => {
-    const { root, shadow } = await fixture();
-    const dest = join(root, 'empty-dest');
-    await shadow.materialize(await shadow.snapshot(), dest);
-    expect(await listFilesRecursive(dest)).toEqual([]);
-  });
-
-  // git add stores a nested repository as a gitlink whose contents live nowhere in the shadow
-  // store, so checkout-index would silently produce an empty directory. Fork replay must not
-  // debug a workspace that quietly lost a subtree.
-  itGit('refuses to materialize a tree containing an embedded git repository', async () => {
-    const { root, workTree, shadow } = await fixture();
-    await write(workTree, 'a.txt', 'x\n');
-    const inner = join(workTree, 'vendor', 'inner');
-    await mkdir(inner, { recursive: true });
-    await runGit(['init', '-q'], { cwd: inner });
-    await write(inner, 'f.txt', 'inner\n');
-    await runGit(['add', '-A'], { cwd: inner });
-    await runGit(['-c', 'user.email=a@b.c', '-c', 'user.name=a', 'commit', '-qm', 'x'], {
-      cwd: inner,
-    });
-    const tree = await shadow.snapshot();
-    const dest = join(root, 'dest');
-    await expect(shadow.materialize(tree, dest)).rejects.toThrow(/embedded git repositor/i);
-    await expect(
-      shadow.materialize(tree, dest, { allowIncomplete: true }),
-    ).resolves.toBeUndefined();
-    expect(await readFile(join(dest, 'a.txt'), 'utf8')).toBe('x\n');
-  });
-});

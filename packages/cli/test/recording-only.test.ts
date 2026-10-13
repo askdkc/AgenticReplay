@@ -2,8 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { AgenticReplay } from '../src/api.js';
 import { MCP_TOOLS } from '../src/mcp-server.js';
 import { main } from '../src/main.js';
+import * as proxy from '@agenticreplay/proxy';
+import { ShadowIndex } from '@agenticreplay/fs-capture';
+import { CONTRACT_CHECKS } from '@agenticreplay/adapters';
 
 describe('recording-only product surface', () => {
+  it('has no model substitution or workspace restoration API', () => {
+    expect('betasForModelChange' in proxy).toBe(false);
+    expect('materialize' in ShadowIndex.prototype).toBe(false);
+    expect(CONTRACT_CHECKS).not.toContain('artifacts-resettable');
+    expect(CONTRACT_CHECKS).not.toContain('deterministic');
+  });
   it('keeps replay, fork, compare, and checkpoint actions out of the programmatic API', () => {
     const api = AgenticReplay.prototype as Record<string, unknown>;
     for (const name of ['replay', 'fork', 'compare', 'checkpoints']) {

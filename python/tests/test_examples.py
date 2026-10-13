@@ -41,15 +41,10 @@ def test_answers_the_churn_question(analysis: str) -> None:
     assert "+18/-4" in analysis
 
 
-def test_shows_that_a_fork_target_moved(analysis: str) -> None:
-    """Both snapping outcomes, without pinning the seq the example happens to pick.
-
-    This asserted `snapped back from 20`, which tied the test to an arithmetic offset in the
-    example *and* to which seqs were checkpoints in the fixture. Editing the fixture broke it for
-    a reason that had nothing to do with snapping.
-    """
-    assert "snapped back from" in analysis, "no target demonstrated the snap"
-    assert "(exact)" in analysis, "no target demonstrated an exact hit"
+def test_reports_viewing_structure_without_reexecution_state(analysis: str) -> None:
+    assert "turns" in analysis
+    assert "checkpoint" not in analysis
+    assert "fork targets" not in analysis
 
 
 def test_runs_with_no_argument() -> None:

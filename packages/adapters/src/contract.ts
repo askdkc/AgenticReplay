@@ -23,10 +23,8 @@ export const CONTRACT_CHECKS = [
   'redirects-model-traffic',
   'no-invented-keys',
   'no-ctx-mutation',
-  'deterministic',
   'no-foreign-paths',
   'harness-versions',
-  'artifacts-resettable',
 ] as const;
 
 export type ContractCheck = (typeof CONTRACT_CHECKS)[number];
@@ -110,7 +108,6 @@ export async function checkAdapterContract(
       ],
       ['no-invented-keys', () => noInventedKeys(adapter, base)],
       ['no-ctx-mutation', () => noCtxMutation(adapter, base)],
-      ['deterministic', () => deterministic(adapter, base)],
       ['no-foreign-paths', async () => noForeignPaths(primary, base)],
       ['harness-versions', async () => harnessVersions(adapter)],
     ];
@@ -362,18 +359,6 @@ async function noCtxMutation(adapter: Adapter, base: RecordContext): Promise<Che
     (key) => !isDeepStrictEqual(ctx[key], before[key]),
   );
   return `prepare() mutated ctx.${fields.join(', ctx.')}; the caller owns that object and reuses it — copy instead, e.g. args: [...ctx.userArgs]`;
-}
-
-/** Replay prepares the same context again. Anything that drifts turns into a false divergence. */
-async function deterministic(adapter: Adapter, base: RecordContext): Promise<CheckOutcome> {
-  const first = await attempt(adapter, base);
-  const second = await attempt(adapter, base);
-  if ('error' in first || 'error' in second) return notVerified('prepare-shape');
-  const drifted = (['command', 'args', 'env'] as const).filter(
-    (key) => !isDeepStrictEqual(first.launch[key], second.launch[key]),
-  );
-  if (drifted.length === 0) return undefined;
-  return `two prepare() calls on the same ctx disagreed on ${drifted.join(', ')}; replay prepares the same context again, so anything random or time-based here reads as a divergence`;
 }
 
 /**

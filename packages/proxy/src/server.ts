@@ -165,30 +165,6 @@ function binaryBodyTransformation(location: string, body: string): CaptureTransf
 }
 
 /**
- * Beta flags that belong to the model that was recorded, not to the request.
- *
- * `anthropic-beta` is a header, so substituting a model in the body leaves it untouched — and a
- * fork of a run made on a 1M-context model onto one without that entitlement comes back
- * `400 The long context beta is not yet available for this subscription`. The failure names the
- * subscription rather than the flag, so it reads as an account problem and not as agenticreplay carrying
- * over something it should have dropped.
- *
- * Only entitlement-gated flags are removed. The rest of the header is what the harness needs to
- * speak its own protocol — tool shapes, output formats — and dropping those would break the fork
- * in a way that is much harder to see than a 400.
- */
-const MODEL_GATED_BETAS = [/^context-\d+m\b/i];
-
-/** `anthropic-beta` with the recorded model's entitlements taken out, or undefined if empty. */
-export function betasForModelChange(value: string): string | undefined {
-  const kept = value
-    .split(',')
-    .map((flag) => flag.trim())
-    .filter((flag) => flag !== '' && !MODEL_GATED_BETAS.some((re) => re.test(flag)));
-  return kept.length > 0 ? kept.join(',') : undefined;
-}
-
-/**
  * An origin with the parts a credential rides in taken out.
  *
  * `agenticreplay setup --gateway` accepts whatever URL it is handed and stores it in `~/.agenticreplay/config.json`,

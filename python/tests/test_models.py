@@ -12,7 +12,6 @@ from agenticreplay_trace.models import (
     EVENT_TYPES,
     SCHEMA_VERSION,
     BlobRef,
-    Checkpoint,
     Manifest,
     TraceEvent,
     TraceFormatError,
@@ -330,13 +329,3 @@ class TestManifest:
         with pytest.raises(TraceFormatError):
             Manifest.from_json(raw)
 
-
-class TestCheckpoint:
-    def test_is_a_frozen_record_of_seq_turn_and_tree(self) -> None:
-        cp = Checkpoint(seq=13, turn=3, fs_tree="9c1e")
-        assert (cp.seq, cp.turn, cp.fs_tree) == (13, 3, "9c1e")
-        with pytest.raises(Exception):
-            cp.seq = 14  # type: ignore[misc]
-
-    def test_tree_is_optional_because_a_snapshot_may_not_record_one(self) -> None:
-        assert Checkpoint(seq=0, turn=0).fs_tree is None

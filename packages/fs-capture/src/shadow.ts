@@ -39,11 +39,6 @@ export interface ShadowIndexOptions {
   forced?: readonly string[];
 }
 
-export interface MaterializeOptions {
-  /** Proceed even though part of the tree cannot be reproduced. See {@link ShadowIndex.materialize}. */
-  allowIncomplete?: boolean;
-}
-
 export const GIT_MISSING_MESSAGE =
   'git is required for filesystem capture; install git or run with --no-fs';
 
@@ -208,12 +203,6 @@ function gitlinkPaths(staged: string): string[] {
 export interface ForcedInsideNested {
   path: string;
   repository: string;
-}
-
-/** One file of a tree: where it goes, and the id of the bytes it holds. */
-export interface TreeFile {
-  path: string;
-  oid: string;
 }
 
 interface RawRecord {
@@ -646,12 +635,6 @@ export class ShadowIndex {
   }
 
   /**
-   * Writes the whole tree into `destDir`, which should be fresh: files already there that the tree
-   * does not name are left where they are. Fork replay debugs whatever this produces, so it refuses
-   * a tree holding a nested repository: `git add` records those as a gitlink whose contents were
-   * never stored, and checkout would silently leave an empty directory in their place.
-   */
-  /**
    * What is on disk under `paths` that the last snapshot did not take a copy of.
    *
    * Asked of the index the snapshot wrote, so it answers for that snapshot exactly: anything git
@@ -689,63 +672,5 @@ export class ShadowIndex {
     }
   }
 
-  /**
-   * Is this tree actually in the store?
-   *
-   * Same posture as {@link gitlinks}: ask before doing something that would otherwise fail from
-   * inside git, with a message about object names that says nothing about the cause.
-   *
-   * The cause worth naming is a run whose store is not all there: one pulled from a gateway it was
-   * pushed to without `--fs` — the archive then carries manifest.json, events.jsonl,
-   * redactions.json and blobs/, not this store — or one whose store `agenticreplay scrub --drop-fs`
-   * deleted. Either way its `fs.snapshot` events name trees whose objects are not here.
-   * {@link materialize} on one of those dies in `read-tree`, and the caller has no way to tell
-   * that from a corrupt store.
-   */
-  async has(tree: string): Promise<boolean> {
-    const res = await runGitRaw(['cat-file', '-e', `${tree}^{tree}`], this.opts());
-    return res.code === 0;
-  }
 
-  /**
-   * The files a tree records — blobs only, so a nested repository's gitlink is not among them —
-   * each with the id of the bytes it holds.
-   *
-   * What a {@link materialize} of the tree will write, asked without writing it: a caller about to
-   * restore a tree over a directory can check each path against the copy it took first, and can
-   * tell afterwards whether what stands at a path is still what the tree put there.
-   */
-  async files(tree: string): Promise<TreeFile[]> {
-    const listed = await this.run(['ls-tree', '-r', '-z', '--full-tree', tree]);
-    const files: TreeFile[] = [];
-    for (const entry of listed.split('\0')) {
-      const tab = entry.indexOf('\t');
-      const [, type, oid] = entry.slice(0, tab).split(' ');
-      if (type === 'blob' && oid !== undefined) files.push({ path: entry.slice(tab + 1), oid });
-    }
-    return files;
-  }
-
-  async materialize(tree: string, destDir: string, opts: MaterializeOptions = {}): Promise<void> {
-    await mkdir(destDir, { recursive: true });
-    const indexFile = join(this.gitDir, `materialize-${randomBytes(8).toString('hex')}.index`);
-    try {
-      await this.run(['read-tree', tree], { indexFile });
-      const gitlinks = gitlinkPaths(await this.run(['ls-files', '--stage', '-z'], { indexFile }));
-      if (gitlinks.length > 0 && opts.allowIncomplete !== true) {
-        throw new Error(
-          `cannot materialize tree ${tree} byte for byte: it contains embedded git ` +
-            `repositories whose contents were never captured (${gitlinks.join(', ')}). ` +
-            'Ignore or remove them in the workspace, or pass allowIncomplete to accept the gap.',
-        );
-      }
-      await this.run(['checkout-index', '-a', '-f'], {
-        indexFile,
-        workTree: destDir,
-        cwd: destDir,
-      });
-    } finally {
-      await rm(indexFile, { force: true });
-    }
-  }
 }

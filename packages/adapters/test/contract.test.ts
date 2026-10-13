@@ -67,7 +67,7 @@ describe('every registered adapter', () => {
     // adapter that does not make it: `harness-versions` about a version range, and
     // `artifacts-resettable` about `artifacts.resetBeforeReplay` — which almost no adapter needs,
     // because a coding agent's product *is* the working tree. Everything else is universal.
-    const conditional: readonly string[] = ['harness-versions', 'artifacts-resettable'];
+    const conditional: readonly string[] = ['harness-versions'];
     const universal = CONTRACT_CHECKS.filter((c) => !conditional.includes(c));
     // An adapter that captures at the transport redirects nothing on purpose, and one that
     // captures through a config file redirects somewhere the launch environment cannot show —
@@ -368,23 +368,6 @@ describe('no-ctx-mutation', () => {
       },
     });
     expect(await failedChecks(mutator)).toEqual(['no-ctx-mutation']);
-  });
-});
-
-describe('deterministic', () => {
-  it('catches an adapter whose argv changes between two identical calls', async () => {
-    let n = 0;
-    const drifting = goodAdapter({
-      async prepare(ctx: RecordContext) {
-        n += 1;
-        return {
-          command: 'fixture',
-          args: ['--session', String(n)],
-          env: { OPENAI_BASE_URL: proxyBase(ctx.proxyUrl, 'v1') },
-        };
-      },
-    });
-    expect(await failedChecks(drifting)).toEqual(['deterministic']);
   });
 });
 

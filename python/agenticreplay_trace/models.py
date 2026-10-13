@@ -24,7 +24,6 @@ __all__ = [
     "RUN_ID_PATTERN",
     "SCHEMA_VERSION",
     "BlobRef",
-    "Checkpoint",
     "Manifest",
     "AgenticReplayTraceError",
     "TraceEvent",
@@ -477,15 +476,3 @@ class Manifest:
             capture=None if capture is None else dict(capture),
         )
 
-
-@dataclass(frozen=True, slots=True)
-class Checkpoint:
-    """A forkable point in a run. Derived from the log, never recorded (spec §3).
-
-    `fs_tree` is the TypeScript `fsTree`, renamed for Python. It is absent when the governing
-    `fs.snapshot` recorded no tree id.
-    """
-
-    seq: int
-    turn: int
-    fs_tree: str | None = None

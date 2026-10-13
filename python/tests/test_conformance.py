@@ -30,18 +30,10 @@ from agenticreplay_trace import (
     BlobRef,
     TraceReader,
     causal_chain,
-    derive_checkpoints,
-    snap_to_checkpoint,
     turns_of,
 )
 
-# These are golden against the *TypeScript implementation*, not against arithmetic. When the example
-# trace changes, recompute them by running `deriveCheckpoints`, `turnsOf` and `chainTo` over the new
-# events rather than adjusting by hand — hand-adjusting makes the Python side agree with whoever did
-# the sums, which is the one thing these constants exist to prevent.
-#
-#: Every seq that satisfies spec §3 for this trace, per deriveCheckpoints() in TypeScript.
-GOLDEN_CHECKPOINT_SEQS = [1, 13, 14, 15, 16, 17, 20, 23, 24, 25, 26, 27, 28, 29, 30]
+# Golden viewing values against the TypeScript implementation.
 
 #: (turn, startSeq, endSeq) per turnsOf() in TypeScript.
 GOLDEN_TURN_SPANS = [(0, 0, 1), (1, 2, 4), (2, 5, 8), (3, 9, 17), (4, 18, 20), (5, 21, 30)]
@@ -162,46 +154,7 @@ class TestBlobs:
         assert isinstance(reader.payload(diff), bytes)
 
 
-class TestCheckpointsAgreeWithTypeScript:
-    def test_checkpoint_sequence_numbers_match_exactly(self, reader: TraceReader) -> None:
-        """The one that matters: a fork of this run must land on the same seq in both languages."""
-        assert [c.seq for c in derive_checkpoints(reader.events())] == GOLDEN_CHECKPOINT_SEQS
-
-    def test_checkpoints_carry_the_governing_tree(self, reader: TraceReader) -> None:
-        checkpoints = derive_checkpoints(reader.events())
-        assert checkpoints[0].fs_tree == "3ab77f19c4e2a58d0b6f1e93c72d4a80b5e6f712"
-        assert {c.fs_tree for c in checkpoints[1:]} == {"9c1e4bd7f0a3821e5c94b6d2087fa31c4e5b9d63"}
-
-    def test_every_checkpoint_has_a_snapshot_at_or_before_it_in_its_turn(
-        self, reader: TraceReader
-    ) -> None:
-        """Re-derives condition 1 of spec §3 independently of derive_checkpoints itself."""
-        events = reader.events()
-        snapshots = [(e.seq, e.turn) for e in events if e.type == "fs.snapshot"]
-        for checkpoint in derive_checkpoints(events):
-            assert any(
-                seq <= checkpoint.seq and turn == checkpoint.turn for seq, turn in snapshots
-            ), f"checkpoint {checkpoint.seq} has no governing snapshot"
-
-    def test_a_checkpoint_is_never_recorded_only_derived(self, reader: TraceReader) -> None:
-        """Spec §3, from the other side.
-
-        This used to assert the opposite — that the fixture carried a live `checkpoint` event and
-        derivation agreed with it — which made a passing suite out of a fixture that taught every
-        implementer to emit the one event the format says not to.
-        """
-        assert [e.seq for e in reader.events() if e.type == "checkpoint"] == []
-        assert derive_checkpoints(reader.events()), "derivation still finds them without one"
-
-    def test_snapping_a_non_checkpoint_target_moves_back_and_says_so(
-        self, reader: TraceReader
-    ) -> None:
-        checkpoints = derive_checkpoints(reader.events())
-        # 19 is inside turn 4 with no checkpoint of its own, so it must move back to 17 and say so.
-        checkpoint, snapped = snap_to_checkpoint(checkpoints, 19)
-        assert (checkpoint.seq, snapped) == (17, True)
-        assert snap_to_checkpoint(checkpoints, 13) == (checkpoints[1], False)
-
+class TestViewingAgreesWithTypeScript:
     def test_turn_spans_match(self, reader: TraceReader) -> None:
         spans = [(t.turn, t.start_seq, t.end_seq) for t in turns_of(reader.events())]
         assert spans == GOLDEN_TURN_SPANS
@@ -225,7 +178,8 @@ class TestReadingIsRepeatableAndReadOnly:
         events = reader.events()
         for event in events:
             reader.payload(event)
-        derive_checkpoints(events)
+        turns_of(events)
+        causal_chain(events, 17)
         reader.verify_integrity()
         after = {
             str(p): (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())

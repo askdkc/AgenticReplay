@@ -5,10 +5,6 @@
 
 1. What did the tokens go on? (per model, paired back to the request that named it)
 2. Which turn churned the filesystem most?
-3. If I want to retry from the failure, where does a fork actually land?
-
-Question 3 is the one that needs the SDK rather than `jq`: checkpoints are derived from the log
-(spec §3), not recorded in it, and a fork target that is not a checkpoint silently moves.
 """
 
 from __future__ import annotations
@@ -19,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agenticreplay_trace import TraceReader, derive_checkpoints, snap_to_checkpoint, turns_of  # noqa: E402
+from agenticreplay_trace import TraceReader, turns_of  # noqa: E402
 
 DEFAULT_RUN = Path(__file__).resolve().parents[2] / "examples" / "traces" / "run_9f2c14a03b71"
 
@@ -31,7 +27,6 @@ def main(run_dir: Path) -> int:
     by_seq = {e.seq: e for e in events}
 
     ok, expected, actual = reader.verify_integrity()
-    checkpoints = derive_checkpoints(events)
 
     print(f"{manifest.run_id}  adapter={manifest.adapter_id}  exit={manifest.exit_code}")
     # Unsealed is not mismatched. A run whose recorder was killed has no digest at all, and
@@ -45,7 +40,7 @@ def main(run_dir: Path) -> int:
     print(f"integrity: {integrity}")
     print(
         f"{len(events)} events, {len(turns_of(events))} turns, "
-        f"{len(checkpoints)} checkpoints, {len(reader.problems())} problems"
+        f"{len(reader.problems())} problems"
     )
 
     # 1. Tokens per model. A model.response carries the token counts but not the model name, so
@@ -83,27 +78,6 @@ def main(run_dir: Path) -> int:
     for turn, row in sorted(churn.items(), key=lambda kv: -(kv[1]["+"] + kv[1]["-"])):
         touched = ", ".join(sorted(paths[turn]))
         print(f"  turn {turn:<3} +{row['+']}/-{row['-']}  {row['files']} file(s)  {touched}")
-
-    # 3. Where a fork of the first failure would actually resume.
-    failure = next((e for e in events if e.type == "error"), None)
-    print("\nfork targets")
-    if failure is None:
-        print("  (this run recorded no error to retry)")
-    elif not checkpoints:
-        print("  (no checkpoints: the run recorded no fs.snapshot, so nothing is forkable)")
-    else:
-        # One target that is a checkpoint and one that is not, so both behaviours show. The second
-        # is *found* rather than guessed at with an offset: which seqs are checkpoints depends on
-        # the trace, and an arithmetic guess quietly stops demonstrating anything the day it lands
-        # on one.
-        exact = {c.seq for c in checkpoints}
-        between = next((e.seq for e in events if e.seq > failure.seq and e.seq not in exact), None)
-        for target in (failure.seq, between):
-            if target is None:
-                continue
-            checkpoint, snapped = snap_to_checkpoint(checkpoints, target)
-            moved = f"snapped back from {target}" if snapped else "exact"
-            print(f"  seq {target:<3} -> checkpoint {checkpoint.seq} ({moved}), tree {checkpoint.fs_tree}")
 
     for problem in reader.problems():
         print(f"\nproblem: {problem}", file=sys.stderr)
