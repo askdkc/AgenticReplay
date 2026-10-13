@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { resolveRunSelector } from '../../packages/core/dist/index.js';
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -467,6 +468,7 @@ async function runCheck(check) {
 
     const runId = /run=(run_[0-9a-f]+)/.exec(recorded.out)?.[1];
     if (runId === undefined) throw new Error('no run id in the record output');
+    const { dir: runDir } = await resolveRunSelector(dir, runId);
 
     // A fork continues live from a checkpoint, so it runs while the stub is still up — which is
     // also what keeps it free. `replayed=0 live=N` is the shape to look for: nothing served from
@@ -496,9 +498,7 @@ async function runCheck(check) {
     }
 
     // What the trace says it captured, before the origins go down.
-    const events = (
-      await readFile(join(dir, '.agenticreplay', 'runs', runId, 'events.jsonl'), 'utf8')
-    )
+    const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
@@ -542,7 +542,7 @@ async function runCheck(check) {
     if (check.imageIntact) {
       const sent = /^IMAGE: (\S+)$/m.exec(recorded.out)?.[1];
       if (sent === undefined) throw new Error('the agent did not print the image it sent');
-      const trace = await traceText(join(dir, '.agenticreplay', 'runs', runId));
+      const trace = await traceText(runDir);
       // Byte for byte. A near-miss is the failure this exists for: the sweep replaced runs *inside*
       // the payload, so a substring check on the first hundred characters would have passed.
       if (!trace.includes(sent))

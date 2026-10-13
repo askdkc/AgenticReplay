@@ -11,6 +11,15 @@ Each section below is one command, one measured result, and the one thing about 
 worth knowing before you run it. Every number here comes from `test/integrations/run.mjs`, which
 runs in CI — so a claim on this page fails a build rather than ageing quietly.
 
+| Framework | Checked in CI | Offline replay |
+| --- | --- | --- |
+| **OpenAI Agents SDK** | `openai-agents`: SDK on the Responses API; [tracing limits](#openai-agents-sdk) | `canonical_exact=1` |
+| **Vercel AI SDK** | `ai-sdk-openai` and `fetch-hook`: environment-aware SDK and hardcoded-origin fetch; [setup](#vercel-ai-sdk-and-anything-with-its-origin-compiled-in) | `canonical_exact=1` |
+| **LangGraph / LangChain** | `langgraph-stream` and `langgraph-tools`: streaming graph and tool calls; [setup](#langgraph-and-langchain) | `canonical_exact=2` |
+| **CrewAI** | `crewai`: real `Agent`, `Task` and `Crew`; [setup](#crewai) | `canonical_exact=1` |
+| **Aider** | `litellm`: LiteLLM layer, not the Aider CLI; [setup](#aider) | `canonical_exact=1` |
+| **browser-use** | `browser-use`: LLM layer only; [limits](#browser-use) | `canonical_exact=1` |
+
 ---
 
 ## LangGraph and LangChain

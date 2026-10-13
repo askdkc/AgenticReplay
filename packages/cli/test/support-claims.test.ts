@@ -50,7 +50,7 @@ describe('the support table is backed by checks that exist', () => {
           .replace(/\s+/g, '-'),
       ),
     );
-    const rows = readme.split('\n').filter((l) => l.startsWith('| **') && l.includes('in CI'));
+    const rows = integrations.split('\n').filter((l) => l.startsWith('| **'));
     return { readme, checks, anchors, rows };
   }
 
@@ -80,17 +80,23 @@ describe('the support table is backed by checks that exist', () => {
     for (const id of c.checks) {
       expect(checks.has(id), `run.mjs has no check called ${id}`).toBe(true);
       expect(checks.get(id), `${id} asserts a different exchange count`).toBe(c.exact);
+      expect(row).toContain(`\`${id}\``);
     }
     expect(row).toContain(`\`canonical_exact=${c.exact}\``);
   });
 
   it('every docs/integrations.md anchor a row links to resolves', async () => {
-    const { readme, anchors } = await sources();
-    const linked = [...readme.matchAll(/\(docs\/integrations\.md#([\w-]+)\)/g)].map((m) => m[1]!);
+    const { rows, anchors } = await sources();
+    const linked = [...rows.join('\n').matchAll(/\(#([\w-]+)\)/g)].map((m) => m[1]!);
     expect(linked.length).toBeGreaterThan(0);
     for (const anchor of linked) {
       expect(anchors.has(anchor), `#${anchor} is not a heading in docs/integrations.md`).toBe(true);
     }
+  });
+
+  it('the concise README links to the integration guide', async () => {
+    const { readme } = await sources();
+    expect(readme).toContain('(docs/integrations.md)');
   });
 
   /**

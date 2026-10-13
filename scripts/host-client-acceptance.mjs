@@ -582,7 +582,7 @@ process.stdin.on('data', chunk => {
     const openExpectedRequests = stub.requests.slice(before).map((item) => item.body);
     const openRunId = /run_[0-9a-f]+/.exec(opencode.stdout)?.[0];
     const openRunDir = openRunId
-      ? join(process.cwd(), '.agenticreplay', 'runs', openRunId)
+      ? (await resolveRunSelector(process.cwd(), openRunId)).dir
       : undefined;
     const openCapturedText = openRunDir ? await traceBlobText(openRunDir).catch(() => '') : '';
     const openTransport = openRunDir
