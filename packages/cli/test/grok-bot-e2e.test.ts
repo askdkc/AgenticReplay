@@ -210,8 +210,6 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
     expect((xai.calls[0] as { url: string }).url).toBe('/v1/chat/completions');
   });
 
-  
-
   /**
    * Replaying an intercepted run without having to remember how it was recorded.
    *
@@ -221,9 +219,6 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
    * run writes a `tls_intercept` note naming the hosts it decrypted. Reading it back is what makes
    * `agenticreplay replay last` work on an intercepted run, which is the only thing anyone types.
    */
-  
-
-  
 
   /**
    * Codex-in-the-IDE, and the reason it is not above the ceiling.
@@ -255,12 +250,9 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
     expect(xai.calls).toHaveLength(1);
   });
 
-  
-
   /**
    * Issue #49: `agenticreplay replay --from 1 --model <other>` on a TLS-intercepted recording accepted
    * the flag, echoed it, and called the recorded model. `replayed=0 live=0` meant substitution
    * never ran. Forking from before the only exchange is a legitimate thing to ask for.
    */
-  
 });

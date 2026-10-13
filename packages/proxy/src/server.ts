@@ -8,11 +8,7 @@ import {
   Redactor,
   fetchPinned,
 } from '@agenticreplay/core';
-import type {
-  CanonicalRequest,
-  CanonicalResponse,
-  Usage,
-} from '@agenticreplay/plugin-api';
+import type { CanonicalRequest, CanonicalResponse, Usage } from '@agenticreplay/plugin-api';
 import type { CaptureTransformation } from '@agenticreplay/schema';
 import {
   anthropicToCanonicalRequest,
@@ -539,18 +535,16 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const redactor = new Redactor();
 
   const server = createServer((req, res) => {
-    void handle(req, res)
-      .catch((err: unknown) => {
-        // Whatever failed, its message may name the origin it was given — and this body reaches
-        // the agent, which prints it. See {@link withoutCredentials}.
-        if (res.destroyed || res.writableEnded) return;
-        if (res.headersSent) {
-          res.destroy();
-          return;
-        }
-        json(res, 500, { error: { message: withoutCredentials(String(err)) } });
-      })
-      ;
+    void handle(req, res).catch((err: unknown) => {
+      // Whatever failed, its message may name the origin it was given — and this body reaches
+      // the agent, which prints it. See {@link withoutCredentials}.
+      if (res.destroyed || res.writableEnded) return;
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      json(res, 500, { error: { message: withoutCredentials(String(err)) } });
+    });
   });
 
   /**
@@ -685,7 +679,9 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     const origin =
       forwardBase ??
       options.upstream?.[dialect.id] ??
-      (dialect.id === 'openai-responses' || dialect.id === 'codex' ? options.upstream?.openai : undefined) ??
+      (dialect.id === 'openai-responses' || dialect.id === 'codex'
+        ? options.upstream?.openai
+        : undefined) ??
       dialect.defaultUpstream;
     const queryAt = path.indexOf('?');
     const query = queryAt === -1 ? '' : path.slice(queryAt);
@@ -963,7 +959,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   function originParts(origin: string): { host: string; port: number } {
     try {
       const url = new URL(origin);
-      return { host: url.hostname, port: url.port ? Number(url.port) : url.protocol === 'http:' ? 80 : 443 };
+      return {
+        host: url.hostname,
+        port: url.port ? Number(url.port) : url.protocol === 'http:' ? 80 : 443,
+      };
     } catch {
       return { host: redactor.redactString(scrubOrigin(origin)).value, port: 443 };
     }

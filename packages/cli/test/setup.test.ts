@@ -206,10 +206,6 @@ describe('agenticreplay setup', () => {
     expect(text()).not.toContain('sk-typed');
   });
 
-  
-
-  
-
   it('leaves the model list unset when there is nothing to suggest and nothing typed', async () => {
     await setupCommand(parseArgs(['setup', '--gateway', 'https://gw.example']), out, {
       env,
@@ -427,5 +423,3 @@ describe('agenticreplay models', () => {
     expect(stripAnsi(lines.join('\n'))).not.toContain('sk-secret-value');
   });
 });
-
-

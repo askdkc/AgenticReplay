@@ -43,8 +43,6 @@ describe('--json is a valueless flag', () => {
   });
 });
 
-
-
 describe('the embedded API never lets an agent write to the caller’s stdout', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startResponsesModel>>;
@@ -107,8 +105,6 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
     expect(out).toBe('SENTINEL');
   });
 });
-
-
 
 /**
  * The flags `compare` builds for one fork.

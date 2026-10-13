@@ -36,15 +36,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   push: ['gateway', 'force', 'fs'],
   pull: ['gateway', 'force'],
   record: ['fs', 'shell', 'agent-spans', 'mcp-config', ...TLS, ...UPSTREAM],
-  attach: [
-    'for',
-    'bind',
-    'advertise',
-    'port',
-    'remote-ca-path',
-    ...TLS,
-    ...UPSTREAM,
-  ],
+  attach: ['for', 'bind', 'advertise', 'port', 'remote-ca-path', ...TLS, ...UPSTREAM],
   show: [],
   events: [],
   // `inspect.ts` serves graph, export and ui from one file, so the flags of all three are read

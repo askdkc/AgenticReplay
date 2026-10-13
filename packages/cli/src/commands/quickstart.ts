@@ -19,12 +19,17 @@ export interface TraceEvent {
 async function events(): Promise<TraceEvent[]> {
   const data = await import('node:fs/promises');
   const jsonl = await data.readFile(join(ASSET, 'trace', 'events.jsonl'), 'utf8');
-  return jsonl.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as TraceEvent);
+  return jsonl
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as TraceEvent);
 }
 
 async function shippedRunId(): Promise<string> {
   const { readFile } = await import('node:fs/promises');
-  const manifest = JSON.parse(await readFile(join(ASSET, 'trace', 'manifest.json'), 'utf8')) as { run_id?: string };
+  const manifest = JSON.parse(await readFile(join(ASSET, 'trace', 'manifest.json'), 'utf8')) as {
+    run_id?: string;
+  };
   if (!manifest.run_id) throw new Error('the shipped quickstart trace has no run_id');
   return manifest.run_id;
 }
@@ -57,11 +62,15 @@ export function recordingSummary(all: TraceEvent[]): string[] {
     const input = event.attrs?.['input'] as { path?: string } | undefined;
     if (event.attrs?.['name'] === 'read_file' && input?.path) read.add(input.path);
   }
-  const wrote = all.filter((event) => event.type === 'fs.change').map((event) => {
-    const attrs = event.attrs ?? {};
-    return `${String(attrs['path'])} (+${attrs['insertions']} −${attrs['deletions']})`;
-  });
-  const lines = [`${all.length} events · ${turns.length} model turns · ${model} · ${tokensIn.toLocaleString()} in · ${tokensOut.toLocaleString()} out`];
+  const wrote = all
+    .filter((event) => event.type === 'fs.change')
+    .map((event) => {
+      const attrs = event.attrs ?? {};
+      return `${String(attrs['path'])} (+${attrs['insertions']} −${attrs['deletions']})`;
+    });
+  const lines = [
+    `${all.length} events · ${turns.length} model turns · ${model} · ${tokensIn.toLocaleString()} in · ${tokensOut.toLocaleString()} out`,
+  ];
   if (read.size > 0) lines.push(`read ${[...read].join(', ')}`);
   if (wrote.length > 0) lines.push(`wrote ${wrote.join(', ')}`);
   return lines;
@@ -74,10 +83,16 @@ export interface QuickstartResult {
   turns: number;
 }
 
-export async function quickstartCommand(args: ParsedArgs, out: Output, cwd = process.cwd()): Promise<QuickstartResult> {
+export async function quickstartCommand(
+  args: ParsedArgs,
+  out: Output,
+  cwd = process.cwd(),
+): Promise<QuickstartResult> {
   const target = resolve(cwd, args.str('dir') ?? DEFAULT_DIR);
   if (!(await isEmptyish(target))) {
-    throw new Error(`${target} already exists and is not an empty directory\n  pick somewhere else: agenticreplay quickstart --dir <path>`);
+    throw new Error(
+      `${target} already exists and is not an empty directory\n  pick somewhere else: agenticreplay quickstart --dir <path>`,
+    );
   }
   const runId = await shippedRunId();
   await ensureRunsDir(target);
@@ -102,7 +117,9 @@ export async function quickstartCommand(args: ParsedArgs, out: Output, cwd = pro
   out.plain(`  ${cdCommand(target)}`);
   out.plain('');
   out.plain('  See it      agenticreplay ui                       # inspect the timeline');
-  out.plain('  Dig in      agenticreplay show · agenticreplay graph · agenticreplay export -o run.html');
+  out.plain(
+    '  Dig in      agenticreplay show · agenticreplay graph · agenticreplay export -o run.html',
+  );
   out.plain('  Your own    agenticreplay record claude -- -p "..."');
   if (!args.bool('full')) out.plain('  --full for the complete recorded timeline.');
   return { dir: target, runId, events: all.length, turns };

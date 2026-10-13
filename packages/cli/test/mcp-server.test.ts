@@ -129,10 +129,6 @@ describe('the MCP server', () => {
       expect((await tool('agenticreplay_show_run')).json().runId).toBe(recorded.runId);
     });
 
-    
-
-    
-
     it('reports a failed call as an error result, not a transport error', async () => {
       // MCP says a tool that fails answers with isError, so the model can read the reason and
       // try something else. Throwing across the transport instead kills the session.
@@ -223,8 +219,6 @@ describe('agenticreplay mcp', () => {
   afterEach(async () => {
     await rm(workspace, { recursive: true, force: true });
   });
-
-  
 
   it('speaks MCP on stdio when launched as a subprocess', async () => {
     const cli = join(here, '..', 'dist', 'cli.js');

@@ -1,12 +1,6 @@
 import type { EventType, TraceEvent } from '@agenticreplay/schema';
 import { describe, expect, it } from 'vitest';
-import {
-  causalChain,
-  chainTo,
-  pickChainTarget,
-  runGraph,
-  turnsOf,
-} from '../src/graph.js';
+import { causalChain, chainTo, pickChainTarget, runGraph, turnsOf } from '../src/graph.js';
 
 function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): TraceEvent {
   return {
@@ -19,10 +13,6 @@ function ev(seq: number, type: EventType, over: Partial<TraceEvent> = {}): Trace
     ...over,
   };
 }
-
-
-
-
 
 describe('turnsOf', () => {
   it('groups events into turns with their span', () => {

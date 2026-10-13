@@ -142,7 +142,6 @@ export async function setupCommand(
       if (available.length > 20)
         out.plain(`    … and ${available.length - 20} more — agenticreplay models`);
     }
-
   } catch (err) {
     out.warn('gateway.unreachable', {
       // A failed fetch names the URL it was given, credential and all.

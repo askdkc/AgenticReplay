@@ -851,8 +851,6 @@ describe('TLS interception', () => {
       expect(recorded?.requestHeaders.authorization).toBeUndefined();
     });
 
-    
-
     it('survives an origin response that arrives after the client has gone', async () => {
       let answered = false;
       // Waited for rather than slept past. The assertion below is that the origin saw the stream,
@@ -1661,10 +1659,4 @@ describe('TLS interception', () => {
       headers: { 'content-type': 'application/json' },
     });
   }
-
-  
-
-  
-
-  
 });

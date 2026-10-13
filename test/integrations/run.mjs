@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 /**
- * Record a real framework, kill the origin, replay offline, assert the numbers.
+ * Record a real framework and inspect the captured requests, responses and activity.
  *
- * Each check answers one question: does `agenticreplay record` actually capture this, and does the
- * recording still reproduce with nothing to talk to. The second half is why the origin is stopped
- * before the replay — a replay that reached the network would fail here by construction rather
- * than by assertion.
+ * Each check runs against a local stub and verifies the recorded trace directly, including
+ * request/response counts, embedding destinations, images, MCP frames and framework activity.
  *
  *   node test/integrations/run.mjs               # all of them
  *   node test/integrations/run.mjs litellm       # one
@@ -13,8 +11,7 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { cp, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,10 +97,6 @@ const CHECKS = [
     run: ['python', 'agents/langgraph_agent.py', 'stream'],
     needs: 'langgraph',
     exchanges: 2,
-    // The one check that also forks. A fork is the third of the three things the README claims,
-    // and it is the only one that leaves the recording behind and asks a model again — so it is
-    // exercised where the stub is still up, which is what keeps it free.
-    forks: true,
   },
   {
     id: 'langgraph-tools',
@@ -148,9 +141,7 @@ const CHECKS = [
     run: ['python', 'agents/haystack_rag.py'],
     needs: 'haystack',
     exchanges: 1,
-    // The claim this check exists for. Embeddings are not model exchanges, so `exact` says nothing
-    // about them; a replay that served the chat turn and refused both embedding calls would look
-    // identical on that line.
+    // Embeddings are separate network calls, not model exchanges.
     retrieval: 2,
   },
   {
@@ -162,7 +153,7 @@ const CHECKS = [
   },
   {
     id: 'vision-repaint',
-    what: 'an agent with eyes: a screenshot recorded intact, and replayed against a different one',
+    what: 'an agent with eyes: a screenshot recorded intact through redaction',
     run: ['python', 'agents/vision_agent.py'],
     needs: 'openai',
     exchanges: 1,
@@ -173,11 +164,8 @@ const CHECKS = [
      * sweep used to shred it — 47,314 placeholders in one real browser-use run — and every one of
      * those was recorded in `redactions.json` as though a secret had been removed.
      *
-     * `repaint` re-runs the agent with a different image, which is the only thing a browser can
-     * do. The match must survive it, and must say that it did.
      */
     imageIntact: true,
-    repaint: true,
   },
   {
     id: 'ai-sdk-openai',
@@ -216,14 +204,14 @@ const CHECKS = [
   },
   {
     id: 'mcp-stdio',
-    what: 'an MCP server launched from a config, recorded and then taken away',
+    what: 'an MCP server launched from a config with recorded calls and results',
     run: ['python', 'agents/mcp_agent.py'],
     needs: ['mcp', 'openai'],
     exchanges: 1,
     /**
      * The layer with the most code behind it and, until this, no end-to-end check at all:
      * `mcp-shim` and `cli/src/mcp.ts` are ~1900 lines including their unit tests, and nothing
-     * asserted that a recorded MCP session comes back.
+     * asserted the recorded MCP calls and results.
      *
      * Named here rather than inferred, because the whole point is what the shim puts in the trace
      * that the proxy never saw: MCP rides OS pipes, so no base-URL variable reaches it.
@@ -247,8 +235,7 @@ const CHECKS = [
     // other's extraction under a `minor` label, because their only message is a fixed template
     // and the document rides in the system prompt.
     exchanges: 5,
-    // Two embedding calls: the batch, and the question. Neither is a model exchange, and before
-    // `RetrievalRule` a strict replay answered 502 at the first of them.
+    // Two embedding calls: the batch and the question, counted independently of model exchanges.
     retrieval: 2,
     // What the retriever put in the prompt, derived rather than captured.
     retrievalContexts: 1,
@@ -421,8 +408,7 @@ async function runCheck(check) {
      *
      * `agenticreplay record --mcp-config` swaps each server's command for `<node> <shim> --out <frames> --
      * <original>`, so the shim sits in the pipe and tees every JSON-RPC frame both ways. Written
-     * here pointing at the copy under `dir`, because the copy is what gets taken away before the
-     * replay.
+     * here pointing at the copy under `dir`, isolated from the source checkout.
      */
     const mcpServer = check.mcp ? join(dir, ...check.mcp.split('/')) : undefined;
     const mcpConfig = join(dir, 'mcp.json');
@@ -470,33 +456,6 @@ async function runCheck(check) {
     if (runId === undefined) throw new Error('no run id in the record output');
     const { dir: runDir } = await resolveRunSelector(dir, runId);
 
-    // A fork continues live from a checkpoint, so it runs while the stub is still up — which is
-    // also what keeps it free. `replayed=0 live=N` is the shape to look for: nothing served from
-    // the recording past the cursor, every turn after it answered by the origin.
-    if (check.forks) {
-      const forked = await agenticreplay(
-        [
-          'replay',
-          runId,
-          '--from',
-          '1',
-          '--model',
-          'stub-2',
-          '--upstream-openai',
-          `http://127.0.0.1:${origin.port}`,
-        ],
-        dir,
-      );
-      if (forked.code !== 0)
-        throw new Error(
-          `fork exited ${forked.code} — ${forked.how ?? 'no detail'}${tail(forked.out)}`,
-        );
-      const f = /fork\.done .*live=(\d+) divergences=(\d+)/.exec(forked.out);
-      if (f === null) throw new Error('fork printed no verdict');
-      if (Number(f[1]) === 0) throw new Error('the fork answered nothing live');
-      if (Number(f[2]) !== 0) throw new Error(`${f[2]} divergence(s) in the fork`);
-    }
-
     // What the trace says it captured, before the origins go down.
     const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
       .split('\n')
@@ -516,28 +475,76 @@ async function runCheck(check) {
       if (!(found[0].attrs?.passages > 0)) throw new Error('retrieval.context named no passages');
     }
 
-    // Where the second origin's traffic actually went. This is the assertion the check exists for
-    // — without it, "two origins" is indistinguishable from one, which is precisely the failure
-    // being guarded against: the embeddings were forwarded to the *chat* origin, or to
-    // `api.openai.com`, carrying the embedding provider's credential.
-    if (second) {
-      const retrievalCalls = events.filter(
-        (e) => e.type === 'net.request' && e.attrs?.replay_key !== undefined,
-      );
-      const stray = retrievalCalls.filter((e) => e.attrs?.port !== second.port);
-      if (retrievalCalls.length === 0) throw new Error('no retrieval call reached the trace');
-      if (stray.length > 0) {
-        const where = stray.map((e) => `${e.attrs?.host}:${e.attrs?.port}`).join(', ');
-        throw new Error(
-          `${stray.length} retrieval call(s) went to ${where}, not the second origin`,
-        );
-      }
-      // And the chat half stayed where it was. Both halves, or the check proves only one of them.
-      const chat = events.filter((e) => e.type === 'model.response');
-      if (chat.some((e) => !String(e.attrs?.upstream ?? '').includes(`:${origin.port}`))) {
-        throw new Error('a model exchange left the chat origin');
-      }
+    // A request has both a start event and a body event. Count bodies once by request id.
+    const requests = events.filter((e) => e.type === 'net.request' && e.attrs?.phase === 'body');
+    const uniqueRequests = new Map();
+    for (const request of requests) {
+      const id = request.attrs?.request_id;
+      if (typeof id !== 'string') throw new Error('recorded request has no request_id');
+      if (uniqueRequests.has(id)) throw new Error(`duplicate request body for ${id}`);
+      uniqueRequests.set(id, request);
     }
+    const responses = events.filter((e) => e.type === 'net.response');
+    if (responses.length !== uniqueRequests.size)
+      throw new Error('network request/response count differs');
+    const responded = new Set();
+    for (const response of responses) {
+      const id = response.attrs?.request_id;
+      const request = uniqueRequests.get(id);
+      if (!request || responded.has(id) || !response.causes?.includes(request.seq))
+        throw new Error('network response does not correlate with one request');
+      responded.add(id);
+      if (
+        response.attrs?.status !== 200 ||
+        response.attrs?.response_complete !== true ||
+        response.attrs?.capture_incomplete
+      )
+        throw new Error('recorded response is unsuccessful or incomplete');
+    }
+    for (const type of ['model.request', 'model.response']) {
+      const found = events.filter((e) => e.type === type);
+      if (found.length !== check.exchanges)
+        throw new Error(`${found.length} ${type} events, wanted ${check.exchanges}`);
+    }
+    const modelRequests = new Set(
+      events.filter((e) => e.type === 'model.request').map((e) => e.seq),
+    );
+    if (
+      events.some(
+        (e) => e.type === 'model.response' && !e.causes?.some((seq) => modelRequests.has(seq)),
+      )
+    )
+      throw new Error('model response lost its causal request');
+    const embeddings = [...uniqueRequests.values()].filter((e) =>
+      /\/embeddings(?:\?|$)/.test(String(e.attrs?.path ?? e.attrs?.endpoint ?? '')),
+    );
+    if (embeddings.length !== (check.retrieval ?? 0))
+      throw new Error(`${embeddings.length} embedding requests, wanted ${check.retrieval ?? 0}`);
+    if (uniqueRequests.size !== check.exchanges + embeddings.length)
+      throw new Error('unexpected network request count');
+    const chat = [...uniqueRequests.values()].filter((e) => !embeddings.includes(e));
+    for (const request of chat) {
+      if (request.attrs?.host !== '127.0.0.1' || request.attrs?.port !== origin.port)
+        throw new Error('a model request left the chat origin');
+    }
+    for (const request of embeddings) {
+      if (
+        request.attrs?.host !== '127.0.0.1' ||
+        request.attrs?.port !== (second?.port ?? origin.port)
+      )
+        throw new Error('an embedding request left its configured origin');
+    }
+    if (
+      check.retrieval !== undefined &&
+      events
+        .filter((e) => e.type === 'model.response')
+        .some(
+          (e) =>
+            new URL(e.attrs?.upstream).port !== String(origin.port) ||
+            new URL(e.attrs?.upstream).hostname !== '127.0.0.1',
+        )
+    )
+      throw new Error('a model exchange left the chat origin');
 
     if (check.imageIntact) {
       const sent = /^IMAGE: (\S+)$/m.exec(recorded.out)?.[1];
@@ -551,70 +558,30 @@ async function runCheck(check) {
       // complete image bytes themselves, without treating unrelated path redaction as corruption.
     }
 
-    // From here the recording is on its own. Anything that reaches out now fails.
-    origin.stop();
-    second?.stop();
-    // The MCP server is an origin too, and taking it away is the only way to tell a replay that
-    // served the recorded frames from one that quietly started the server again. Renamed rather
-    // than deleted so a failure says what is missing.
-    if (mcpServer !== undefined) await rename(mcpServer, `${mcpServer}.gone`);
-
-    const replayed = await agenticreplay(['replay', runId, '--in-place'], dir, {
-      ...splitEnv,
-      ...(check.repaint ? { AGENTICREPLAY_CHECK_REPAINT: '1' } : {}),
-    });
-    if (replayed.code !== 0)
-      throw new Error(
-        `replay exited ${replayed.code} — ${replayed.how ?? 'no detail'}${tail(replayed.out)}`,
-      );
-
-    const m = /reused=(\d+)\/(\d+) canonical_exact=(\d+) divergences=(\d+) unmatched=(\d+)/.exec(
-      replayed.out,
-    );
-    if (m === null) throw new Error('replay printed no verdict');
-    const [, reused, total, exact, divergences, unmatched] = m.map(Number);
-
-    if (total !== check.exchanges)
-      throw new Error(`recorded ${total} exchanges, wanted ${check.exchanges}`);
-    if (reused !== total)
-      throw new Error(`${total - reused} turn(s) could not be served from the recording`);
-    if (unmatched !== 0) throw new Error(`${unmatched} unmatched`);
-
-    if (check.repaint) {
-      // The opposite assertion to every other check, and deliberately so. A repaint that came back
-      // `exact` would mean the agent had not in fact changed its image, and the check would be
-      // passing without testing anything. A repaint that came back silent would mean the matcher
-      // folded the pixels away without saying so, which the spec forbids.
-      if (exact !== 0)
-        throw new Error(`${exact} turn(s) matched byte for byte despite the repaint`);
-      if (divergences !== total)
-        throw new Error(`${divergences} divergence(s) for ${total} repainted turn(s)`);
-      if (!/pixels are not compared/.test(replayed.out))
-        throw new Error('the replay did not say the pixels had been set aside');
-      return { ok: `${total} exchange, image intact on disk, replayed against a repaint` };
-    }
-
-    if (exact !== total) throw new Error(`${exact}/${total} matched byte for byte`);
-    if (divergences !== 0) throw new Error(`${divergences} divergence(s)`);
-
-    /**
-     * The claim this check exists for: the session reproduces with the server gone.
-     *
-     * Asserted on the agent's own output rather than on a count, because a count cannot tell a
-     * served frame from a wrong one. The tool answers from its argument, so `VALUE-FOR-alpha` is
-     * the recorded reply to the recorded call and nothing else.
-     *
-     * `replay.done`'s numbers say nothing here — they count model exchanges — so a broken MCP
-     * replay would leave that line reading exactly as it does on success.
-     */
+    // Inspect MCP evidence itself, including the call arguments and correlated result.
     if (mcpServer !== undefined) {
-      if (existsSync(mcpServer)) throw new Error('the MCP server was still there for the replay');
-      if (!/MCP: VALUE-FOR-alpha/.test(replayed.out)) {
-        throw new Error('the MCP session did not reproduce from the recording');
-      }
-      if (!/mode=replay/.test(replayed.out)) {
-        throw new Error('the shim was not put in replay mode');
-      }
+      if (!/MCP: VALUE-FOR-alpha/.test(recorded.out))
+        throw new Error('the MCP agent got the wrong result');
+      const payload = async (event) => {
+        if (event.payload?.$blob) {
+          const hash = event.payload.$blob.replace(/^sha256:/, '');
+          return JSON.parse(await readFile(join(runDir, 'blobs', hash.slice(0, 2), hash), 'utf8'));
+        }
+        return typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+      };
+      const call = events.find((e) => e.type === 'mcp.request' && e.attrs?.method === 'tools/call');
+      if (!call) throw new Error('no MCP tools/call in the trace');
+      const request = await payload(call);
+      const resultEvent = events.find(
+        (e) => e.type === 'mcp.response' && e.attrs?.id === call.attrs?.id,
+      );
+      const result = resultEvent && (await payload(resultEvent));
+      if (
+        request?.params?.name !== 'lookup' ||
+        request.params.arguments?.key !== 'alpha' ||
+        !result?.result?.content?.some((c) => c.text === 'VALUE-FOR-alpha')
+      )
+        throw new Error('the recorded MCP arguments/result do not match');
     }
 
     // Event types a check insists on. Counting exchanges says the traffic was captured; it says
@@ -622,7 +589,9 @@ async function runCheck(check) {
     if (check.expectEvents || check.expectNodes) {
       const listed = await agenticreplay(['events', '--json', runId], dir);
       const line = listed.out.split(/\r?\n/).find((l) => l.startsWith('['));
-      const events = JSON.parse(line ?? '[]');
+      if (listed.code !== 0 || line === undefined)
+        throw new Error(`events inspection failed${tail(listed.out)}`);
+      const events = JSON.parse(line);
       const seen = new Set(events.map((e) => e.type));
       const missing = (check.expectEvents ?? []).filter((t) => !seen.has(t));
       if (missing.length > 0) throw new Error(`no ${missing.join(', ')} in the trace`);
@@ -644,24 +613,9 @@ async function runCheck(check) {
       }
     }
 
-    // Retrieval is a separate axis and asserted separately, for the reason it is reported
-    // separately: `exact` is about a matching ladder these calls never climb, and a check that
-    // read only `exact` would call a replay faithful while every embedding in it went unserved.
-    if (check.retrieval !== undefined) {
-      const r = /retrieval=(\d+)\/(\d+)/.exec(replayed.out);
-      if (r === null) throw new Error('replay printed no retrieval count');
-      const [, served, recordedCalls] = r.map(Number);
-      if (recordedCalls !== check.retrieval)
-        throw new Error(`recorded ${recordedCalls} retrieval calls, wanted ${check.retrieval}`);
-      if (served !== recordedCalls)
-        throw new Error(
-          `${recordedCalls - served} retrieval call(s) not served from the recording`,
-        );
-    }
-
-    const retrievalNote = check.retrieval === undefined ? '' : `, ${check.retrieval} retrieval`;
+    const retrievalNote = check.retrieval === undefined ? '' : `, ${embeddings.length} embeddings`;
     return {
-      ok: `${total} exchanges${retrievalNote}, replayed exact with the origin down${check.forks ? ', forked live' : ''}${check.expectEvents ? `, ${check.expectEvents.length} of ${check.expectEvents[0].split('.')[0]}.* asserted` : ''}`,
+      ok: `${check.exchanges} model requests/responses${retrievalNote}${check.imageIntact ? ', image intact' : ''}${check.expectEvents ? `, ${check.expectEvents.join(', ')} asserted` : ''}`,
     };
   } finally {
     origin.stop();

@@ -991,7 +991,7 @@ export async function pushCommand(
   const res = await fetchPinned(target, {
     method: 'POST',
     headers: { ...headers, 'content-type': contentType },
-    body,
+    body: new Uint8Array(body),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(refusal(res.status, text));

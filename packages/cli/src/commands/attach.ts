@@ -304,8 +304,7 @@ async function runAttached(
   }
 
   writer.setCaptureSummary({
-    status:
-      terminalAttempts > 0 && terminalAttempts === attempts.size ? 'complete' : 'incomplete',
+    status: terminalAttempts > 0 && terminalAttempts === attempts.size ? 'complete' : 'incomplete',
     issues:
       terminalAttempts === 0
         ? ['no_requests_observed']

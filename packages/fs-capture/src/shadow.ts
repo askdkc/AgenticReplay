@@ -671,6 +671,4 @@ export class ShadowIndex {
       await rm(indexFile, { force: true });
     }
   }
-
-
 }

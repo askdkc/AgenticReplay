@@ -204,8 +204,6 @@ describe('record mode — a forwarded origin', () => {
     expect(proxy.stats().passedThrough).toBe(1);
   });
 
-  
-
   it('treats an undecodable /forward/ path as an ordinary unclaimed path', async () => {
     const up = stubUpstream({ ok: true });
     const proxy = await createProxy({
@@ -232,7 +230,3 @@ describe('record mode — a forwarded origin', () => {
     expect(up.calls).toHaveLength(0);
   });
 });
-
-
-
-

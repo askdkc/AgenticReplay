@@ -52,8 +52,6 @@ describe('gc', () => {
     return writer.runDir;
   }
 
-  
-
   /** Runs recorded milliseconds apart sort unstably; every test states the age it means. */
   async function ageRun(runDir: string, ageMs: number): Promise<void> {
     await patchManifest(runDir, { created_at: new Date(Date.now() - ageMs).toISOString() });
@@ -315,8 +313,6 @@ describe('gc', () => {
       expect(done).toEqual(planned);
     });
   });
-
-  
 
   describe('accounting', () => {
     it('reports the bytes a removed run actually occupied', async () => {

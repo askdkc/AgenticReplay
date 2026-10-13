@@ -94,8 +94,4 @@ describe('end to end: a Responses API agent', () => {
     await record();
     expect(lines.find((l) => l.includes('capture.empty'))).toBeUndefined();
   });
-
-  
-
-  
 });

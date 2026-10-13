@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Answer three questions about a recorded run, using nothing but the SDK and the standard library.
+"""Answer two questions about a recorded run, using nothing but the SDK and the standard library.
 
     python3 python/examples/analyze.py [run_dir]
 

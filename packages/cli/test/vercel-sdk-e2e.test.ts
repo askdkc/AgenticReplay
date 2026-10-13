@@ -89,6 +89,4 @@ describe('end to end: an agent with a hardcoded provider origin', () => {
     expect(events.filter((e) => e.type === 'tool.call')[0]?.attrs?.name).toBe('edit_file');
     expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toContain('fixed = true');
   });
-
-  
 });

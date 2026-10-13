@@ -811,6 +811,4 @@ describe('scrub — the manifest', () => {
  * reporting a clean trace while every snapshot still holds the file.
  */
 
-
 /** A store that is present but unreadable is the one case where "0 matches" proves nothing. */
-

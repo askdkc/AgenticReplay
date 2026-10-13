@@ -15,13 +15,13 @@ def test_legacy_fork_fields_and_events_remain_readable():
         "schema_version": "0.4.0", "run_id": "run_123abc",
         "created_at": "2026-10-10T00:00:00Z", "agenticreplay_version": "0.1.4",
         "adapter": {"id": "test"}, "argv": [], "cwd": "/tmp/example",
-        "parent_run_id": "run_456def", "fork_point": 3, "fork_model": "old-model",
+        "parent_run": "run_456def", "fork_point": 3, "fork_model": "old-model",
     }
     manifest = sdk.Manifest.from_json(raw)
-    assert (manifest.parent_run_id, manifest.fork_point, manifest.fork_model) == (
+    assert (manifest.parent_run, manifest.fork_point, manifest.fork_model) == (
         "run_456def", 3, "old-model",
     )
-    for kind in ("checkpoint", "fork", "fs.snapshot", "replay.divergence"):
+    for kind in ("checkpoint", "fork", "fs.snapshot", "divergence"):
         event = sdk.TraceEvent.from_json({
             "seq": 0, "ts": "2026-10-10T00:00:00Z", "mono_us": 0,
             "turn": 0, "type": kind, "actor": "agenticreplay",

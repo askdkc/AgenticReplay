@@ -959,4 +959,3 @@ describe('patch', () => {
     expect(patch).not.toContain('b.txt');
   });
 });
-

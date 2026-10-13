@@ -39,8 +39,7 @@ export interface McpTool {
 const RUN_ARG = {
   run: {
     type: 'string',
-    description:
-      'Run id, or "last" for the newest recording. Defaults to "last".',
+    description: 'Run id, or "last" for the newest recording. Defaults to "last".',
   },
 } as const;
 

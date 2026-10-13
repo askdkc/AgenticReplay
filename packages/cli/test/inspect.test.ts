@@ -341,8 +341,6 @@ describe('inspect commands', () => {
     });
   });
 
-  
-
   describe('export', () => {
     it('states what is about to leave the machine before writing it', async () => {
       await makeRun();

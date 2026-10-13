@@ -520,9 +520,6 @@ describe('checkAdapterContract', () => {
    * though it could not. The shipped adapter asserts this by hand in its own test; this is where
    * the next one has to answer it.
    */
-  
-
-  
 
   it('gives a failing result a one-line summary naming the checks', async () => {
     const result = await checkAdapterContract(goodAdapter({ id: 'bad', harnessVersions: 'nope' }));

@@ -494,8 +494,6 @@ describe('record mode — a path no dialect claims', () => {
   });
 });
 
-
-
 describe('the method guard', () => {
   it('refuses a non-POST on a dialect path instead of forwarding it upstream', async () => {
     // Only a POST is ever a model call. A guard of `!dialect && method !== 'POST'` let a PUT on
@@ -549,5 +547,3 @@ describe('passthrough carries the credentials a gateway needs', () => {
     expect(up.calls[0]!.headers['authorization']).toBe('Bearer sk-gateway-key');
   });
 });
-
-

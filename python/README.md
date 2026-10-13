@@ -25,7 +25,7 @@ export PYTHONPATH="$PWD/python:$PYTHONPATH"
 ## Worked example
 
 ```python
-from agenticreplay_trace import TraceReader, derive_checkpoints, snap_to_checkpoint
+from agenticreplay_trace import TraceReader, turns_of, causal_chain
 
 reader = TraceReader.open("examples/traces/run_9f2c14a03b71")
 
@@ -34,7 +34,7 @@ reader.manifest.adapter_id      # 'claude-code'
 reader.verify_integrity()       # (True, '1a4bf78f…', '1a4bf78f…')   spec §6
 
 events = reader.events()        # list[TraceEvent], or reader.stream() for a 500 MB trace
-len(events)                     # 27
+len(events)                     # 26
 reader.problems()               # []  — everything skipped, and why. Empty means nothing was.
 
 # Large payloads are spilled to content-addressed blobs (spec §2.2); .payload() reads them back.
@@ -43,13 +43,9 @@ reader.payload(request)         # {'messages': [...]}  — decoded JSON
 diff = next(e for e in events if e.type == "fs.change")
 reader.payload(diff)            # b'--- a/src/auth.ts\n…'  — bytes for non-JSON media types
 
-# Checkpoints are derived from the log, never recorded (spec §3).
-checkpoints = derive_checkpoints(events)
-[c.seq for c in checkpoints]    # [1, 13, 14, 15, 16, 17, 18, 21, 24, 25, 26]
-
-# A fork target that is not a checkpoint moves — and the reader tells you it moved.
-snap_to_checkpoint(checkpoints, 20)
-# (Checkpoint(seq=18, turn=3, fs_tree='9c1e4bd7…'), True)
+# Inspect turn spans and the recorded causal chain without executing the agent.
+[(t.turn, t.start_seq, t.end_seq) for t in turns_of(events)]
+[e.seq for e in causal_chain(events, 17)]
 ```
 
 Run the full example, which answers real questions from a trace:
@@ -58,7 +54,7 @@ Run the full example, which answers real questions from a trace:
 $ python3 python/examples/analyze.py
 run_9f2c14a03b71  adapter=claude-code  exit=1
 integrity: OK
-26 events, 6 turns, 10 checkpoints, 0 problems
+26 events, 6 turns, 0 problems
 
 tokens by model
   claude-opus-5      in   40350  out    934  calls   5
@@ -66,9 +62,6 @@ tokens by model
 filesystem churn by turn
   turn 3   +18/-4  1 file(s)  src/auth.ts
 
-fork targets
-  seq 17  -> checkpoint 17 (exact), tree 9c1e4bd7f0a3821e5c94b6d2087fa31c4e5b9d63
-  seq 20  -> checkpoint 18 (snapped back from 20), tree 9c1e4bd7f0a3821e5c94b6d2087fa31c4e5b9d63
 ```
 
 ## API
@@ -82,12 +75,13 @@ fork targets
 | `.payload(event)` | Inline value, decoded JSON blob, or `bytes` for anything else. |
 | `.verify_integrity()` | `(ok, expected, actual)` over `events.jsonl` (spec §6). |
 | `.problems()` | Lines skipped and rules broken, as strings. Never silent. |
-| `derive_checkpoints(events)` | Forkable points, per spec §3. |
-| `snap_to_checkpoint(cps, target)` | `(checkpoint, snapped)` — never rounds forward. |
 | `turns_of(events)` / `causal_chain(events, seq)` | Turn grouping; transitive `causes` walk. |
 
-Models: `TraceEvent`, `Manifest`, `BlobRef`, `Checkpoint`, `Turn` — all frozen dataclasses.
+Models: `TraceEvent`, `Manifest`, `BlobRef`, `Turn` — all frozen dataclasses.
 Constants: `EVENT_TYPES`, `ACTORS`, `SCHEMA_VERSION`, `RUN_ID_PATTERN`, `INLINE_PAYLOAD_LIMIT`.
+
+Legacy manifest fork fields and event types such as `checkpoint` remain readable as historical data.
+The SDK provides no checkpoint derivation, cursor snapping, fork or re-execution operations.
 
 ## What the reader tolerates, and what it tells you
 
@@ -105,7 +99,7 @@ Spec §2 makes two tolerances mandatory, and this reader treats both as *reporta
 ## Conformance
 
 `tests/test_conformance.py` reads `examples/traces/run_9f2c14a03b71/` — written by the TypeScript
-implementation — and asserts this reader derives the same checkpoints, turns, and causal chains as
+implementation — and asserts this reader derives the same turns and causal chains as
 `packages/core/src/graph.ts`. If that test ever fails, the disagreement is the bug: fix the spec
 first, then whichever implementation it says is wrong.
 
@@ -122,8 +116,6 @@ Places where v0 left real room, and what this reader chose (see the tests for ea
 - `causes[i] < seq` is prose in §2.1 but is not encoded in the schema, so it is reported rather
   than enforced — dropping the event would make the two readers disagree about a trace's contents.
 - §2.1 calls `seq` dense but no artifact checks it; this reader reports gaps and resynchronises.
-- §3's "conversation prefix up to *n*" is inclusive: an unanswered `model.request` is itself a
-  checkpoint, matching the TypeScript implementation — it is the point you want to retry.
 - §6 defines integrity for `events.jsonl` only, so blob digests are checked on request
   (`verify=True`), not by default.
 

@@ -137,7 +137,6 @@ describe('agenticreplay attach', () => {
    * `agenticreplay attach --replay`, or `--replay --tls-intercept`, silently became a fresh *recording*
    * session pointed at the live provider. Exactly the wrong direction to fail in.
    */
-  
 
   it('leaves no half-made run behind when the session cannot start', async () => {
     await expect(
@@ -191,7 +190,6 @@ describe('agenticreplay attach', () => {
    * to reports zero unmatched requests, because zero requests arrived — an assertion that passes
    * for a session that did nothing at all.
    */
-  
 
   /**
    * A replay session has to hand the operator something to paste, and `exec` — the honest default
@@ -199,24 +197,16 @@ describe('agenticreplay attach', () => {
    * the trace records which adapter made the recording, so the variables that agent reads are the
    * variables it will read again.
    */
-  
-
-  
 
   /**
    * A replay session that could not answer the agent has to be detectable by a script, not only
    * by a human reading the log — CI is exactly where a sandbox replay runs.
    */
-  
-
-  
 
   it('reports incomplete coverage when a recording session observed no requests', async () => {
     const result = await session(['--for', 'claude'], async () => {});
     expect(result.exitCode).toBe(2);
   });
-
-  
 
   it('says so plainly when the session ended having captured nothing', async () => {
     const result = await session([], async () => {});

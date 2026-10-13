@@ -237,6 +237,4 @@ describe('renderGraphCard covers every event a card can be about', () => {
     expect(svg).toMatch(/<circle[^>]*class="n on"/);
     expect(svg).not.toContain('not shown');
   });
-
-  
 });

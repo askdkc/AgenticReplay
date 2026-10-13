@@ -146,8 +146,6 @@ describe('mcp capture', () => {
     expect(runEnd!.mono_us - request!.mono_us).toBeGreaterThan(300_000);
   });
 
-  
-
   it('attributes a call to the turn it happened during', async () => {
     // The agent calls the server between two model turns, so there is a right answer and a wrong
     // one: turn 1, not the final turn every frame used to claim.
@@ -163,8 +161,6 @@ describe('mcp capture', () => {
     );
   });
 });
-
-
 
 /**
  * The recording keeps the config it was given, so a replay does not depend on a path.
@@ -184,7 +180,6 @@ describe('mcp capture', () => {
  * `redactions.json` too. The file's own comment says an exemption granted on the label was a hole
  * every time it was tried; this was that hole again.
  */
-
 
 describe('a capture line that parsed is not yet a frame', () => {
   /**

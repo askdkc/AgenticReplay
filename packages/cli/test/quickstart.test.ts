@@ -27,8 +27,12 @@ describe('recording quickstart', () => {
     const result = await quickstartCommand(parseArgs(['quickstart']), out, dir);
     const runDir = join(result.dir, '.agenticreplay', 'runs', result.runId);
     await expect(readFile(join(runDir, 'manifest.json'), 'utf8')).resolves.toContain(result.runId);
-    await expect(readFile(join(runDir, 'events.jsonl'), 'utf8')).resolves.toContain('model.response');
-    await expect(readFile(join(result.dir, 'src', 'schedule.js'), 'utf8')).resolves.toContain('nextOccurrence');
+    await expect(readFile(join(runDir, 'events.jsonl'), 'utf8')).resolves.toContain(
+      'model.response',
+    );
+    await expect(readFile(join(result.dir, 'src', 'schedule.js'), 'utf8')).resolves.toContain(
+      'nextOccurrence',
+    );
     expect(result.turns).toBeGreaterThan(0);
     expect(lines()).toContain('quickstart.ready');
     expect(lines()).toContain('agenticreplay show');
@@ -44,7 +48,11 @@ describe('recording quickstart', () => {
 
   it('refuses to overwrite a non-empty destination', async () => {
     const { out } = capture();
-    await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(/already exists/);
-    await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(/already exists/);
+    await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(
+      /already exists/,
+    );
+    await expect(quickstartCommand(parseArgs(['quickstart']), out, dir)).rejects.toThrow(
+      /already exists/,
+    );
   });
 });

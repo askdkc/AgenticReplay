@@ -128,42 +128,17 @@ const endpoint = createServer(async (request, response) => {
   response.write(sseBody.slice(0, 17));
   response.end(sseBody.slice(17));
 });
-let endpointClosed = false;
 let mcpProcess;
-let cleaning = false;
-async function cleanup() {
-  if (cleaning) return;
-  cleaning = true;
-  if (mcpProcess && mcpProcess.exitCode === null) mcpProcess.kill('SIGTERM');
-  if (!endpointClosed)
-    await new Promise((resolve) =>
-      endpoint.close(() => {
-        endpointClosed = true;
-        resolve();
-      }),
-    );
-}
-process.on('uncaughtException', (error) => {
-  void cleanup().finally(() => {
-    console.error(error);
-    process.exit(1);
+try {
+  await new Promise((resolve, reject) => {
+    endpoint.once('error', reject);
+    endpoint.listen(0, '127.0.0.1', resolve);
   });
-});
-process.on('unhandledRejection', (error) => {
-  void cleanup().finally(() => {
-    console.error(error);
-    process.exit(1);
-  });
-});
-await new Promise((resolve, reject) => {
-  endpoint.once('error', reject);
-  endpoint.listen(0, '127.0.0.1', resolve);
-});
-const endpointPort = endpoint.address().port;
-const agent = join(consumerDir, 'agent.mjs');
-await writeFile(
-  agent,
-  `
+  const endpointPort = endpoint.address().port;
+  const agent = join(consumerDir, 'agent.mjs');
+  await writeFile(
+    agent,
+    `
   const response = await fetch(process.env.OPENAI_BASE_URL + '/chat/completions', {
     method: 'POST',
     headers: {'content-type': 'application/json'},
@@ -171,135 +146,173 @@ await writeFile(
   });
   for await (const chunk of response.body) void chunk;
 `,
-);
-const recordEnv = {
-  ...process.env,
-  ...smokeEnv,
-  AGENTICREPLAY_UPSTREAM_OPENAI: `http://127.0.0.1:${endpointPort}/v1`,
-};
-const recorded = await exec(
-  bin,
-  ['record', 'generic-openai', '--json', '--no-fs', '--no-shell', '--', node, agent],
-  commandOptions(consumerDir, recordEnv),
-);
-const recordResult = JSON.parse(recorded.stdout);
-const runId = recordResult.run_id ?? recordResult.runId;
-if (
-  typeof runId !== 'string' ||
-  endpointRequests.length !== 1 ||
-  !endpointRequests[0].body.includes('system sentinel') ||
-  !endpointRequests[0].body.includes('tool sentinel')
-) {
-  throw new Error(
-    `installed record did not capture the independent endpoint request: ${recorded.stdout}`,
   );
-}
-const shown = await exec(bin, ['show', runId, '--json'], commandOptions(consumerDir, smokeEnv));
-if (!shown.stdout.includes(runId))
-  throw new Error('installed show did not return the recorded run');
-const listed = await exec(bin, ['list', '--json'], commandOptions(consumerDir, smokeEnv));
-if (!listed.stdout.includes(runId))
-  throw new Error('installed list did not include the recorded run');
-const timeline = await exec(bin, ['timeline', runId, '--json'], commandOptions(consumerDir, smokeEnv));
-if (!timeline.stdout.includes(runId) && !timeline.stdout.includes('net.request'))
-  throw new Error('installed timeline did not return the recorded events');
-const exportPath = join(consumerDir, 'run.html');
-await exec(bin, ['export', runId, '-o', exportPath], commandOptions(consumerDir, smokeEnv));
-const exported = await readFile(exportPath, 'utf8');
-if (
-  !exported.includes(runId) ||
-  !exported.includes('system sentinel') ||
-  exported.includes('sk-test-secret-1234567890')
-)
-  throw new Error('installed export is incomplete or contains the credential');
-const runStore = join(consumerDir, '.agenticreplay', 'runs');
-const runName = (await readdir(runStore)).find((name) => name.endsWith(`-${runId.slice(4)}`));
-if (!runName || !/^\d{14}-generic-openai-tool-sentinel-[0-9a-f]+$/.test(runName))
-  throw new Error(`installed record did not create a readable session directory: ${runName}`);
-const runDir = join(runStore, runName);
-const eventLines = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
-  .trim()
-  .split('\n')
-  .map((line) => JSON.parse(line));
-const requestEvent = eventLines.find(
-  (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
-);
-const responseEvent = eventLines.find((event) => event.type === 'net.response');
-if (
-  typeof requestEvent?.payload !== 'string' ||
-  requestEvent.payload.includes('sk-test-secret-1234567890') ||
-  !requestEvent.payload.includes('<secret:')
-)
-  throw new Error('stored request body did not prove explicit redaction');
-if (responseEvent?.payload !== sseBody)
-  throw new Error('stored response body did not preserve the complete SSE sentinel');
-mcpProcess = spawn(bin, ['mcp'], {
-  cwd: consumerDir,
-  env: { ...process.env, ...smokeEnv },
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
-let mcpOutput = '';
-let mcpError = '';
-mcpProcess.stdout.setEncoding('utf8');
-mcpProcess.stderr.setEncoding('utf8');
-mcpProcess.stderr.on('data', (chunk) => {
-  mcpError += chunk;
-});
-await new Promise((resolve, reject) => {
-  const timer = setTimeout(
-    () => reject(new Error(`installed MCP tools/list timed out: ${mcpError}`)),
-    30000,
-  );
-  const finish = (error) => {
-    clearTimeout(timer);
-    error ? reject(error) : resolve();
+  const recordEnv = {
+    ...process.env,
+    ...smokeEnv,
+    AGENTICREPLAY_UPSTREAM_OPENAI: `http://127.0.0.1:${endpointPort}/v1`,
   };
-  mcpProcess.once('error', finish);
-  mcpProcess.once('close', (code) => {
-    if (!mcpOutput.includes('agenticreplay_'))
-      finish(new Error(`installed MCP exited ${code} before tools/list: ${mcpError}`));
-  });
-  mcpProcess.stdout.on('data', (chunk) => {
-    mcpOutput += chunk;
-    for (const line of mcpOutput.split('\n').slice(0, -1)) {
-      const message = JSON.parse(line);
-      if (message.id !== 1) continue;
-      if (!message.result?.tools?.some((tool) => tool.name.startsWith('agenticreplay_')))
-        return finish(
-          new Error(`installed MCP tool identity is missing AgenticReplay names: ${line}`),
-        );
-      if (message.result.tools.some((tool) => /replay|fork|compare|checkpoint/i.test(tool.name)))
-        return finish(new Error(`installed MCP still advertises re-execution tools: ${line}`));
-      return finish();
-    }
-  });
-  // Keep stdin open until the response arrives; EOF can terminate a stdio server before work drains.
-  mcpProcess.stdin.write(
-    `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })}\n`,
+  const recorded = await exec(
+    bin,
+    ['record', 'generic-openai', '--json', '--no-fs', '--no-shell', '--', node, agent],
+    commandOptions(consumerDir, recordEnv),
   );
-});
-mcpProcess.stdin.end();
-if (!mcpProcess.killed) mcpProcess.kill('SIGTERM');
+  const recordResult = JSON.parse(recorded.stdout);
+  const runId = recordResult.run_id ?? recordResult.runId;
+  if (
+    typeof runId !== 'string' ||
+    endpointRequests.length !== 1 ||
+    !endpointRequests[0].body.includes('system sentinel') ||
+    !endpointRequests[0].body.includes('tool sentinel')
+  ) {
+    throw new Error(
+      `installed record did not capture the independent endpoint request: ${recorded.stdout}`,
+    );
+  }
+  const shown = await exec(bin, ['show', runId, '--json'], commandOptions(consumerDir, smokeEnv));
+  if (!shown.stdout.includes(runId))
+    throw new Error('installed show did not return the recorded run');
+  const listed = await exec(bin, ['list', '--json'], commandOptions(consumerDir, smokeEnv));
+  if (!listed.stdout.includes(runId))
+    throw new Error('installed list did not include the recorded run');
+  const inspected = await exec(
+    bin,
+    ['events', runId, '--json'],
+    commandOptions(consumerDir, smokeEnv),
+  );
+  const inspectedEvents = JSON.parse(inspected.stdout);
+  if (
+    !Array.isArray(inspectedEvents) ||
+    !inspectedEvents.some(
+      (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
+    ) ||
+    !inspectedEvents.some((event) => event.type === 'net.response' && event.payload === sseBody)
+  )
+    throw new Error('installed events did not return the recorded request and complete response');
+  const exportPath = join(consumerDir, 'run.html');
+  await exec(bin, ['export', runId, '-o', exportPath], commandOptions(consumerDir, smokeEnv));
+  const exported = await readFile(exportPath, 'utf8');
+  if (
+    !exported.includes(runId) ||
+    !exported.includes('system sentinel') ||
+    exported.includes('sk-test-secret-1234567890')
+  )
+    throw new Error('installed export is incomplete or contains the credential');
+  const runStore = join(consumerDir, '.agenticreplay', 'runs');
+  const runName = (await readdir(runStore)).find((name) => name.endsWith(`-${runId.slice(4)}`));
+  if (!runName || !/^\d{14}-generic-openai-tool-sentinel-[0-9a-f]+$/.test(runName))
+    throw new Error(`installed record did not create a readable session directory: ${runName}`);
+  const runDir = join(runStore, runName);
+  const eventLines = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const requestEvent = eventLines.find(
+    (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
+  );
+  const responseEvent = eventLines.find((event) => event.type === 'net.response');
+  if (
+    typeof requestEvent?.payload !== 'string' ||
+    requestEvent.payload.includes('sk-test-secret-1234567890') ||
+    !requestEvent.payload.includes('<secret:')
+  )
+    throw new Error('stored request body did not prove explicit redaction');
+  if (responseEvent?.payload !== sseBody)
+    throw new Error('stored response body did not preserve the complete SSE sentinel');
+  mcpProcess = spawn(bin, ['mcp'], {
+    cwd: consumerDir,
+    env: { ...process.env, ...smokeEnv },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let mcpOutput = '';
+  let mcpError = '';
+  mcpProcess.stdout.setEncoding('utf8');
+  mcpProcess.stderr.setEncoding('utf8');
+  mcpProcess.stderr.on('data', (chunk) => {
+    mcpError += chunk;
+  });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`installed MCP tools/list timed out: ${mcpError}`)),
+      30000,
+    );
+    const finish = (error) => {
+      clearTimeout(timer);
+      error ? reject(error) : resolve();
+    };
+    mcpProcess.once('error', finish);
+    mcpProcess.once('close', (code) => {
+      if (!mcpOutput.includes('agenticreplay_'))
+        finish(new Error(`installed MCP exited ${code} before tools/list: ${mcpError}`));
+    });
+    mcpProcess.stdout.on('data', (chunk) => {
+      mcpOutput += chunk;
+      for (const line of mcpOutput.split('\n').slice(0, -1)) {
+        const message = JSON.parse(line);
+        if (message.id !== 1) continue;
+        if (!message.result?.tools?.some((tool) => tool.name.startsWith('agenticreplay_')))
+          return finish(
+            new Error(`installed MCP tool identity is missing AgenticReplay names: ${line}`),
+          );
+        if (
+          message.result.tools.some((tool) =>
+            new Set([
+              'agenticreplay_replay',
+              'agenticreplay_fork',
+              'agenticreplay_compare',
+              'agenticreplay_checkpoint',
+              'agenticreplay_checkpoints',
+            ]).has(tool.name),
+          )
+        )
+          return finish(new Error(`installed MCP still advertises re-execution tools: ${line}`));
+        return finish();
+      }
+    });
+    // Keep stdin open until the response arrives; EOF can terminate a stdio server before work drains.
+    mcpProcess.stdin.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })}\n`,
+    );
+  });
+  mcpProcess.stdin.end();
+  if (!mcpProcess.killed) mcpProcess.kill('SIGTERM');
 
-console.log(
-  JSON.stringify(
-    {
-      packages: packages.map((item) => item.manifest.name),
-      tarballs: tarballs.map((path) => path.split('/').pop()),
-      consumerDir,
-      runId,
-      checks: [
-        'installed CLI help',
-        'packed metadata identity',
-        'record endpoint body',
-        'show',
-        'list',
-        'timeline',
-        'export',
-        'MCP tool identity',
-      ],
-    },
-    null,
-    2,
-  ),
-);
+  console.log(
+    JSON.stringify(
+      {
+        packages: packages.map((item) => item.manifest.name),
+        tarballs: tarballs.map((path) => path.split('/').pop()),
+        consumerDir,
+        runId,
+        checks: [
+          'installed CLI help',
+          'packed metadata identity',
+          'record endpoint body',
+          'show',
+          'list',
+          'events',
+          'export',
+          'MCP tool identity',
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+} finally {
+  if (mcpProcess && mcpProcess.exitCode === null && mcpProcess.signalCode === null) {
+    const exited = new Promise((resolve) => mcpProcess.once('close', resolve));
+    mcpProcess.stdin.end();
+    mcpProcess.kill('SIGTERM');
+    const timer = setTimeout(() => mcpProcess.kill('SIGKILL'), 2000);
+    try {
+      await exited;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  await new Promise((resolve) => {
+    endpoint.close(resolve);
+    endpoint.closeAllConnections();
+  });
+}

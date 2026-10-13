@@ -222,8 +222,6 @@ describe('claudeSession', () => {
     );
     expect(claudeSession.parse(bytes).prompts).toEqual(['real']);
   });
-
-  
 });
 
 describe('codexSession', () => {
@@ -254,11 +252,7 @@ describe('codexSession', () => {
     );
     expect(codexSession.parse(bytes)).toEqual({ id: 'sid-1', prompts: ['the real ask'] });
   });
-
-  
 });
-
-
 
 describe('openCodeAdapter credentials', () => {
   /**

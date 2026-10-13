@@ -4,8 +4,8 @@
 CrewAI, the OpenAI Agents SDK and anything else that reads a base-URL variable. Until this
 directory existed, that was a sentence.
 
-Each check here records a real framework against a stub origin, kills the origin, replays the
-recording offline, and asserts the numbers. It is the difference between "we support X" and a line
+Each check records a real framework against a stub origin and inspects the stored network and
+model requests/responses, causal links, payloads and framework activity. It is the difference between "we support X" and a line
 in CI that goes red.
 
 ## Why end to end rather than the adapter contract
@@ -22,10 +22,8 @@ thing and counting what came back.
 Three properties, and every one of them is load-bearing:
 
 - **Free.** A matrix that costs tokens per run is a matrix somebody eventually turns off.
-- **Deterministic.** Replay is judged on matching the recorded bytes. An origin that varied its
-  answer would make an exact match indistinguishable from a lucky one.
-- **Offline.** The second half of every check kills the origin before replaying. If a replay reaches
-  the network the check fails by construction rather than by assertion.
+- **Deterministic.** Fixed responses let the checks verify captured payloads and tool results.
+- **Local.** All model and embedding traffic must go to the configured loopback origins.
 
 The stub answers the shapes real frameworks use, not the simplest one: streaming SSE, tool calls,
 and the Anthropic messages endpoint. Those are where a recording proxy is most likely to break, and
@@ -48,12 +46,12 @@ a matrix that only exercised a plain completion would have said nothing about ei
 | `langgraph-nodes` | which node ran, in which superstep — including one that calls no model | the sixth capture layer, for graphs |
 | `llama-index` | LlamaIndex's own OpenAI LLM, which reads the older base-URL variable and not the new one | LlamaIndex |
 | `haystack` | a Haystack `Pipeline` whose generator takes no `api_base_url` | Haystack 3.x, and any component that lets the OpenAI SDK build its own client |
-| `haystack-rag` | the same, embedding at query time: document embeddings, a query embedding, retrieval, then an answer | RAG pipelines whose embeddings must replay too |
+| `haystack-rag` | the same, embedding at query time: document embeddings, a query embedding, retrieval, then an answer | RAG pipelines with explicitly counted embedding requests |
 | `browser-use` | its own `ChatOpenAI` passes an unset `base_url` through | browser-use, and the pattern any wrapper using the official SDK follows |
-| `vision-repaint` | a screenshot recorded intact, and replayed against a different one | agents with eyes, and what a match means when the pixels move |
+| `vision-repaint` | a screenshot recorded intact through redaction | agents with eyes and image payload preservation |
 | `ai-sdk-openai` | a real `@ai-sdk/openai` client reading `OPENAI_BASE_URL`, no fetch preload | the Vercel AI SDK's env-aware path, which the bare-`fetch` fixtures cannot pin |
 | `mastra` | a model provider that takes its origin in code rather than from the environment | Mastra, and any JS agent that never reads a variable |
-| `mcp-stdio` | an MCP server launched from a config, recorded and then taken away | the MCP shim, and replay with the server gone |
+| `mcp-stdio` | an MCP server launched from a config with recorded arguments and results | the MCP shim and correlated JSON-RPC capture |
 | `fetch-hook` | `NODE_OPTIONS` preload on `globalThis.fetch` | the Vercel AI SDK, and any JS agent with its origin compiled in |
 | `rag-index` | a concurrent index build, an embedding batch, and an answer over retrieved context | IndexRAG, LlamaIndex, GraphRAG, LightRAG — every pipeline that indexes before it answers |
 | `rag-split-origin` | the same run with embeddings at a **second origin of the same wire dialect** | any stack whose chat and embeddings do not share a provider |
@@ -70,16 +68,11 @@ version, and nothing here could have noticed. Running CrewAI also turned up two 
 documenting: a bare model name always reaches the native provider while a prefixed one can need
 LiteLLM installed, and `LLM(base_url=…)`, long documented as silently ignored, is now honoured.
 
-**The two `rag-*` checks cover a shape none of the others could.** An indexing pipeline sends the
-same *message* many times over — the prompt template is fixed and the document that varies rides
-in the **system** prompt — so the matching ladder, built for a conversation where the trailing
-message is the question, served each document whichever answer the cursor happened to be on. Every
-check above would have stayed green through that: the counts were right, `unmatched=0`, `exit=0`,
-and only the contents were wrong. `rag-index` asserts each request gets its own answer and that
-the embedding calls replay at all, which before `RetrievalRule` was a 502 on the first one.
-`rag-split-origin` asserts *where* each half went, and that assertion is the whole reason it is
-not a copy of `rag-index` — without it, "two origins" and "one origin" look identical from the
-numbers, which is exactly how embedding traffic came to be forwarded to the chat origin.
+**The two `rag-*` checks cover concurrent indexing and embeddings.** They assert five model
+requests and responses plus two distinct embedding calls, identified by request phase, path and
+request ID. `rag-index` also verifies derived search context. `rag-split-origin` checks both the
+host and port of every embedding request and confirms chat requests/responses stayed at the chat
+origin. Start and body events for one request must not inflate these counts.
 
 **`openai-agents` is not a duplicate of `openai-async` either.** The Agents SDK defaults to the
 Responses API; `AsyncOpenAI` in that check uses chat completions. So the older check covered the

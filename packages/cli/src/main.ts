@@ -347,14 +347,7 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
           error: {
             message: `--json does not cover '${args.command}'`,
             // Naming what it does cover beats making someone try them one at a time.
-            supported: [
-              'list',
-              'show',
-              'events',
-              'graph',
-              'record',
-              'doctor',
-            ],
+            supported: ['list', 'show', 'events', 'graph', 'record', 'doctor'],
           },
         });
         return 2;

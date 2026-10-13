@@ -67,7 +67,6 @@ export const codexSession: SessionSupport = {
     }
     return { id, prompts };
   },
-
 };
 
 /**
@@ -115,5 +114,4 @@ export const codexAdapter: Adapter = {
   },
 
   session: codexSession,
-
 };

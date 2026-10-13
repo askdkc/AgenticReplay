@@ -61,7 +61,6 @@ export const claudeSession: SessionSupport = {
     }
     return { id, ...(title === undefined ? {} : { title }), prompts };
   },
-
 };
 
 /**
@@ -103,5 +102,4 @@ export const claudeCodeAdapter: Adapter = {
   mcpConfigArgs(path) {
     return ['--mcp-config', path, '--strict-mcp-config'];
   },
-
 };

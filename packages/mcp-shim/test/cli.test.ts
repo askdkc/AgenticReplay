@@ -227,8 +227,6 @@ describe('main', () => {
     expect(await done).toBe(3);
   });
 
-  
-
   /**
    * The same tear one level in: a record whose `raw` is not an object.
    *
@@ -256,16 +254,10 @@ describe('main', () => {
    * And the other way round here too: the record that matters is complete, and what follows it is
    * too short to be recognised as a boundary by anything but the end of the record itself.
    */
-  
-
-  
-
-  
 
   /**
    * And the same line arriving from the client rather than out of the recording. `runMock` parsed
    * it, cast it, and read `message.id` — inside a `'line'` handler, where a throw takes the process
    * down rather than costing one frame.
    */
-  
 });

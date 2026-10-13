@@ -106,8 +106,6 @@ describe('record, then read it back', () => {
     expect(payload.auth).toMatch(/^Bearer <secret:sk_api_key:[0-9a-f]{8}>$/);
   });
 
-  
-
   it('leaves the secret nowhere on disk — events, blobs, manifest or redactions', async () => {
     await record();
     const dir = (await resolveRunSelector(cwd, 'last')).dir;

@@ -88,10 +88,6 @@ describe('agenticreplay --json', () => {
     expect(runs.map((r: { runId: string }) => r.runId)).toContain(recorded.runId);
   });
 
-  
-
-  
-
   it('keeps stdout parseable when the run warns, by putting diagnostics on stderr', async () => {
     // The case that decides the design: a warning interleaved into stdout breaks every consumer.
     stdout.length = 0;
@@ -178,6 +174,4 @@ describe('agenticreplay --json', () => {
     const doc = JSON.parse(piped);
     expect(doc).toMatchObject({ exitCode: 0, modelExchanges: 2 });
   });
-
-  
 });

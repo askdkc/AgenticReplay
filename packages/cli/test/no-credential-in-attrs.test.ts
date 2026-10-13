@@ -136,5 +136,4 @@ describe('a trace carries no credential-bearing URL, in any attribute', () => {
     ).toEqual([]);
     expect(JSON.stringify(events)).not.toContain(secret);
   });
-
 });

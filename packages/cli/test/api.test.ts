@@ -118,8 +118,6 @@ describe('AgenticReplay — the programmatic API', () => {
     expect(events.some((e) => e.type === 'fs.change')).toBe(true);
   });
 
-  
-
   it('exports a self-contained file and says where it went', async () => {
     const recorded = await record();
     const target = join(workspace, 'bug.html');

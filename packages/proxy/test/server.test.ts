@@ -511,8 +511,6 @@ describe('proxy — record mode', () => {
     expect(up.calls).toHaveLength(0);
   });
 
-  
-
   it('never records the caller auth header', async () => {
     const up = stubUpstream(ANTHROPIC_REPLY);
     const seen: RecordedExchange[] = [];
@@ -610,10 +608,6 @@ describe('proxy — record mode', () => {
     expect(proxy.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 });
-
-
-
-
 
 describe('proxy — streaming', () => {
   /**
@@ -719,10 +713,6 @@ describe('proxy — streaming', () => {
     expect(seen[0]!.rawResponse).toContain('message_stop');
   });
 });
-
-
-
-
 
 describe('proxy — health', () => {
   it('answers /__agenticreplay/health without touching the recording', async () => {

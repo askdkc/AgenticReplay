@@ -5,13 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  TraceReader,
-  listRuns,
-  resolveRunSelector,
-  runGraph,
-  chainTo,
-} from '@agenticreplay/core';
+import { TraceReader, listRuns, resolveRunSelector, runGraph, chainTo } from '@agenticreplay/core';
 import { isBlobRef, validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
@@ -141,18 +135,6 @@ describe('end to end: record and inspect', () => {
     expect((await (await TraceReader.open(result.runDir)).verifyIntegrity()).ok).toBe(true);
   });
 
-  
-
-  
-
-  
-
-  
-
-  
-
-  
-
   /**
    * A refusal must not cost you your working tree.
    *
@@ -164,7 +146,6 @@ describe('end to end: record and inspect', () => {
    *
    * Asserted on the file rather than on the error, because the error was never the problem.
    */
-  
 
   /**
    * Nor may a refusal leave a run behind.
@@ -177,7 +158,6 @@ describe('end to end: record and inspect', () => {
    * why it went unnoticed; it is the same rule, and the rule is that an invocation which cannot
    * work decides so before it touches anything.
    */
-  
 
   /**
    * The same rule, for the other refusal in the same window.
@@ -192,7 +172,6 @@ describe('end to end: record and inspect', () => {
    * `planTlsCapture` is the refusing half on its own and mints nothing; `attach` already calls it
    * before its run directory for exactly this reason.
    */
-  
 
   /**
    * The refusal that hoisting alone would still have missed.
@@ -206,7 +185,6 @@ describe('end to end: record and inspect', () => {
    * Worth its own test because it is the one that proves the rule generalises. `createProxy`,
    * `RunCa.create` and `adapter.prepare` all sit in the same window and are not on any list.
    */
-  
 
   /**
    * And the same on the two paths where only scratch is at stake.
@@ -216,7 +194,6 @@ describe('end to end: record and inspect', () => {
    * run for `agenticreplay list` to show, plus a worktree in `$TMPDIR` that `agenticreplay gc` will not reclaim
    * because no manifest points at it. Cheaper than the checkout, the same rule.
    */
-  
 
   /**
    * The restore is inside the thing that undoes it, so the caller cannot guard it.
@@ -230,7 +207,6 @@ describe('end to end: record and inspect', () => {
    * and the failure lands where it matters: on `read-tree`, inside the restore. `agenticreplay gc` on a
    * half-copied trace gets there the same way.
    */
-  
 
   /**
    * A replay that dies after minting a certificate authority must take the key with it.
@@ -246,7 +222,6 @@ describe('end to end: record and inspect', () => {
    * then, and a proxy that is not closed keeps Node's event loop alive — so a regression shows up
    * as this test timing out rather than as a hang nobody notices until a user reports it.
    */
-  
 
   /**
    * The one line a reader checks to know whether a run can spend money.
@@ -256,9 +231,6 @@ describe('end to end: record and inspect', () => {
    * bug was that one value was printed for two behaviours; a test that only pins `--loose` would
    * pass again the moment someone hardcoded the other way round.
    */
-  
-
-  
 
   /**
    * "Your files are restored when the replay ends" has two halves, and the put-back kept neither
@@ -268,21 +240,18 @@ describe('end to end: record and inspect', () => {
    * writes files without removing any, so a file the recording had and the operator has deleted
    * since came back, and stayed.
    */
-  
 
   /**
    * The same promise, for what the replayed agent writes rather than what the restore does. An exact
    * replay makes the recorded agent do what it did, so a file it created during the recording is
    * created again — and the put-back, whose copy never had it, left it in the operator's tree.
    */
-  
 
   /**
    * A file standing where the recording had a directory is in the way of every path under it, and
    * the restore deletes it to make the directory. `lstat` answers ENOTDIR for those paths, which
    * read as "nothing there" — so an ignored file at such a path was destroyed without a copy.
    */
-  
 
   /**
    * A junction is a directory as far as git is concerned: the copy holds what is inside it as
@@ -291,7 +260,6 @@ describe('end to end: record and inspect', () => {
    * restore would only have written that file back and the put-back taken it away again. On POSIX
    * git records a symlink as itself, so there this holds trivially; on Windows it is the case.
    */
-  
 
   /**
    * The other half of the case above: a file where the recording had a directory, and one the copy
@@ -301,9 +269,6 @@ describe('end to end: record and inspect', () => {
    * claim was that the put-back skips a file over a non-empty directory, which git 2.43 (Linux) and
    * 2.55 (Windows) both do not.
    */
-  
-
-  
 
   /**
    * `--worktree` promises never to touch your files, and two branches ahead of the one that reads
@@ -311,9 +276,6 @@ describe('end to end: record and inspect', () => {
    * --no-fs fell through to the in-place warning and ran the agent over the working tree anyway —
    * the recorded edit landed on uncommitted work.
    */
-  
-
-  
 
   /**
    * A RUN CAN BE WITHOUT THE STORE ITS OWN EVENTS POINT AT: pulled from a gateway it was pushed to
@@ -323,11 +285,6 @@ describe('end to end: record and inspect', () => {
    * path said what had happened. Each refusal also left an empty directory in `$TMPDIR` that
    * nothing named and `agenticreplay gc` never reclaims.
    */
-  
-
-  
-
-  
 
   /**
    * The directory a run was recorded in is that directory however the path to it is spelled.
@@ -337,7 +294,6 @@ describe('end to end: record and inspect', () => {
    * the replay called it "elsewhere", skipped the safety copy, and the recorded edit replaced
    * uncommitted work in the very directory the run was made in.
    */
-  
 
   it('records the commit the run started from', async () => {
     // `manifest.git` is in the schema, the Python reader parses it, and nothing ever wrote it — so
@@ -388,16 +344,6 @@ describe('end to end: record and inspect', () => {
     expect(manifest.ended_at, 'a failed run must still be sealed').toBeDefined();
     expect(manifest.integrity?.events_sha256).toBeDefined();
   });
-
-  
-
-  
-
-  
-
-  
-
-  
 
   it('never writes the agent api key into the trace', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-e2e-secret-key-should-never-appear-anywhere';

@@ -45,12 +45,7 @@ export async function listCommand(
   // Keep a parent relation visible when reading an older run with replay provenance.
   out.table(
     ['RUN', 'CREATED', 'FROM', 'DIR'],
-    runs.map((r) => [
-      r.runId,
-      r.createdAt,
-      r.parentRun ?? '',
-      r.dir,
-    ]),
+    runs.map((r) => [r.runId, r.createdAt, r.parentRun ?? '', r.dir]),
   );
 }
 

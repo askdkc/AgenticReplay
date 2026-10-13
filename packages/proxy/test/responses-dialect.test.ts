@@ -78,8 +78,6 @@ describe('the responses dialect is wired into the default set', () => {
     expect(selectDialect(dialects, '/v1/messages')?.id).toBe('anthropic');
     expect(selectDialect(dialects, '/v1/chat/completions')?.id).toBe('openai');
   });
-
-  
 });
 
 describe('recording a responses run', () => {
@@ -120,7 +118,3 @@ describe('recording a responses run', () => {
     expect(ex.usage?.input_tokens).toBe(12);
   });
 });
-
-
-
-
