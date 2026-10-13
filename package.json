@@ -29,13 +29,12 @@
     "typescript": "^5.7.0",
     "vitest": "^4.1.11"
   },
-  "description": "Record, replay and fork debugger for AI agents",
+  "description": "Record and inspect AI agent API traffic and activity",
   "mcpName": "io.github.askdkc/agenticreplay",
   "keywords": [
     "ai",
     "agent",
     "debugger",
-    "replay",
     "record",
     "llm",
     "observability",

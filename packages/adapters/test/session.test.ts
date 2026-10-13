@@ -223,9 +223,7 @@ describe('claudeSession', () => {
     expect(claudeSession.parse(bytes).prompts).toEqual(['real']);
   });
 
-  it('resumes by id', () => {
-    expect(claudeSession.resumeArgs('abc')).toEqual(['--resume', 'abc']);
-  });
+  
 });
 
 describe('codexSession', () => {
@@ -257,43 +255,10 @@ describe('codexSession', () => {
     expect(codexSession.parse(bytes)).toEqual({ id: 'sid-1', prompts: ['the real ask'] });
   });
 
-  it('resumes by id', () => {
-    expect(codexSession.resumeArgs('sid-1')).toEqual(['exec', 'resume', 'sid-1']);
-  });
+  
 });
 
-describe('driveArgs', () => {
-  /**
-   * The recording's own flags still have to shape the replay: a run made with `--model x` that
-   * replays without it is a different run, and would diverge on every request.
-   */
-  it('extends the recorded argv rather than replacing it', () => {
-    expect(claudeCodeAdapter.driveArgs?.(['ask'], ['--model', 'x'])).toEqual([
-      '--model',
-      'x',
-      '-p',
-      'ask',
-    ]);
-  });
 
-  it('gives Codex the exec form when the recording had none', () => {
-    expect(codexAdapter.driveArgs?.(['ask'], [])).toEqual(['exec', '--skip-git-repo-check', 'ask']);
-  });
-
-  // `codex exec` with the prompt on stdin already carries the subcommand and its flags.
-  it('appends the prompt to an exec recording, keeping its flags', () => {
-    expect(codexAdapter.driveArgs?.(['ask'], ['exec', '--skip-git-repo-check'])).toEqual([
-      'exec',
-      '--skip-git-repo-check',
-      'ask',
-    ]);
-  });
-
-  it('drives nothing when the transcript yielded no prompt', () => {
-    expect(claudeCodeAdapter.driveArgs?.([], [])).toBeUndefined();
-    expect(codexAdapter.driveArgs?.([], [])).toBeUndefined();
-  });
-});
 
 describe('openCodeAdapter credentials', () => {
   /**

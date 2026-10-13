@@ -206,34 +206,9 @@ describe('agenticreplay setup', () => {
     expect(text()).not.toContain('sk-typed');
   });
 
-  it('records a default model list, so compare needs no flags afterwards', async () => {
-    // The half that makes setup worth running. A gateway with no models chosen still leaves you
-    // typing a model list every time, which is the thing the command exists to remove.
-    await setupCommand(
-      parseArgs([
-        'setup',
-        '--gateway',
-        'https://gw.example',
-        '--key',
-        'sk-x',
-        '--models',
-        'claude-opus-5,gpt-5.2',
-      ]),
-      out,
-      { env, probe: async () => ['claude-opus-5', 'gpt-5.2'] },
-    );
-    expect((await readConfig(env)).models).toEqual(['claude-opus-5', 'gpt-5.2']);
-  });
+  
 
-  it('offers the gateway list as the default answer when asking', async () => {
-    await setupCommand(parseArgs(['setup']), out, {
-      env,
-      probe: async () => ['alpha', 'beta', 'gamma', 'delta'],
-      // Blank means "take the suggestion", which is the whole point of suggesting one.
-      ask: async (q) => (q.toLowerCase().includes('models') ? '' : 'https://typed.example'),
-    });
-    expect((await readConfig(env)).models).toEqual(['alpha', 'beta', 'gamma']);
-  });
+  
 
   it('leaves the model list unset when there is nothing to suggest and nothing typed', async () => {
     await setupCommand(parseArgs(['setup', '--gateway', 'https://gw.example']), out, {
@@ -453,83 +428,4 @@ describe('agenticreplay models', () => {
   });
 });
 
-describe('setup makes compare work without flags', () => {
-  /**
-   * The point of the whole feature. Writing a config that nothing reads would be worse than not
-   * having one, so this drives a real record through a real proxy with only the config to go on,
-   * and checks two things at once: the traffic went to the configured gateway, and it carried the
-   * key — which is the half that turns "reachable" into "authorised".
-   */
-  let home: string;
-  let workspace: string;
-  let model: Awaited<ReturnType<typeof startFakeModel>>;
-  let out: Output;
 
-  beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-cfg-'));
-    workspace = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-ws-'));
-    model = await startFakeModel();
-    out = new Output({ write: () => {}, isTTY: false });
-  });
-
-  afterEach(async () => {
-    await model.close();
-    await rm(home, { recursive: true, force: true });
-    await rm(workspace, { recursive: true, force: true });
-  });
-
-  it('routes live traffic to the configured gateway, carrying the key', async () => {
-    const env = { ...process.env, XDG_CONFIG_HOME: home };
-    await writeConfig({ gateway: { url: model.url, api_key: 'sk-gateway-key' } }, env);
-
-    const plan = await upstreamPlan(parseArgs(['record']), env);
-
-    expect(plan.upstream?.anthropic).toBe(model.url);
-    expect(plan.upstream?.openai).toBe(model.url);
-    expect(JSON.stringify(plan.headers)).toContain('sk-gateway-key');
-  });
-
-  it('withholds the gateway key when even one dialect is redirected', async () => {
-    // The case the previous test missed, and the one that actually happens. Redirecting a single
-    // dialect leaves the other still pointing at the gateway, so a `.some()` check passed and the
-    // key was returned — and `upstreamHeaders` are applied to *every* live call, not per dialect,
-    // so the gateway's credential went to api.anthropic.com. Verified against the built CLI before
-    // this fix: upstream {anthropic: api.anthropic.com, openai: gw.example}, headers carrying the
-    // key.
-    //
-    // Because the headers are global to the proxy, the only safe rule is unanimity: attach the key
-    // when every origin we might reach is the gateway, and otherwise not at all.
-    const env = { ...process.env, XDG_CONFIG_HOME: home };
-    await writeConfig({ gateway: { url: 'https://gw.example', api_key: 'sk-gateway-key' } }, env);
-
-    const plan = await upstreamPlan(
-      parseArgs(['record', '--upstream-anthropic', 'https://api.anthropic.com']),
-      env,
-    );
-
-    expect(plan.upstream?.anthropic).toBe('https://api.anthropic.com');
-    expect(plan.upstream?.openai).toBe('https://gw.example');
-    expect(plan.headers, 'a redirected dialect must disarm the key entirely').toBeUndefined();
-  });
-
-  it('withholds the gateway key when a flag sends traffic somewhere else', async () => {
-    // Redirecting one dialect to a vendor must not hand that vendor a credential the gateway
-    // issued. This is the failure that would be silent and expensive.
-    const env = { ...process.env, XDG_CONFIG_HOME: home };
-    await writeConfig({ gateway: { url: 'https://gw.example', api_key: 'sk-gateway-key' } }, env);
-
-    const plan = await upstreamPlan(
-      parseArgs([
-        'record',
-        '--upstream-anthropic',
-        'https://api.anthropic.com',
-        '--upstream-openai',
-        'https://api.openai.com',
-      ]),
-      env,
-    );
-
-    expect(plan.upstream?.anthropic).toBe('https://api.anthropic.com');
-    expect(plan.headers).toBeUndefined();
-  });
-});

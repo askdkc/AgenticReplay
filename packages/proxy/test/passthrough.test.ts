@@ -494,29 +494,7 @@ describe('record mode — a path no dialect claims', () => {
   });
 });
 
-describe('a fork — hybrid mode — meets a path no dialect claims', () => {
-  it('forwards it, because a fork runs a live agent', async () => {
-    // Refusing here reintroduced the exact failure passthrough exists to prevent, one mode over:
-    // the fork dies on the first call agenticreplay cannot read. `record` and `hybrid` both run an agent
-    // against the network; only strict replay has nothing to forward to.
-    const up = stubUpstream(EMBEDDING);
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'gpt-5.2-mini',
-      fetchImpl: up.fetchImpl,
-      passthroughUpstream: 'https://api.openai.com',
-    });
-    closers.push(proxy.close);
 
-    const res = await post(`${proxy.url}/v1/embeddings`, { input: 'hello' });
-
-    expect(res.status).toBe(200);
-    expect(up.calls[0]!.url).toBe('https://api.openai.com/v1/embeddings');
-    expect(proxy.stats().passedThrough).toBe(1);
-  });
-});
 
 describe('the method guard', () => {
   it('refuses a non-POST on a dialect path instead of forwarding it upstream', async () => {
@@ -572,28 +550,4 @@ describe('passthrough carries the credentials a gateway needs', () => {
   });
 });
 
-describe('replay mode — a path no dialect claims', () => {
-  it('refuses honestly instead of reaching the network', async () => {
-    const dead = (async () => {
-      throw new Error('replay must not reach the network');
-    }) as unknown as typeof fetch;
-    const unmatched: { reason: string }[] = [];
-    const proxy = await createProxy({
-      mode: 'replay',
-      exchanges: [],
-      fetchImpl: dead,
-      passthroughUpstream: 'https://api.openai.com',
-      onUnmatched: (u) => void unmatched.push(u),
-    });
-    closers.push(proxy.close);
 
-    const res = await post(`${proxy.url}/v1/embeddings`, { input: 'hello' });
-
-    expect(res.status).toBe(502);
-    // The message has to say why, because "502" during a replay reads as agenticreplay being broken.
-    expect(res.text).toContain('/v1/embeddings');
-    expect(res.text.toLowerCase()).toContain('replay');
-    expect(unmatched).toHaveLength(1);
-    expect(proxy.stats().unmatched).toBe(1);
-  });
-});

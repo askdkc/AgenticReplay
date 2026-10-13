@@ -24,31 +24,14 @@ export interface Dialect {
   toCanonicalResponse(raw: unknown): CanonicalResponse;
   /** Parse a recorded SSE body into a response, for streamed exchanges. */
   parseStream(body: string): CanonicalResponse;
-  /** Rewrite the model on a raw request body, for fork replay onto a different model. */
-  withModel(raw: unknown, model: string): unknown;
   /** Request path this dialect posts to, for a request translated *into* it. */
   requestPath: string;
-  /**
-   * Does this dialect serve the given model?
-   *
-   * Kept on the dialect rather than in a table in the proxy, for the same reason everything else
-   * here is: the proxy is handed a list of dialects and knows nothing about which exist, so a
-   * third party can add one without the routing needing to learn about it.
-   */
-  ownsModel(model: string): boolean;
-  /** Build a wire request from the canonical form — the inbound half of a cross-provider fork. */
-  fromCanonicalRequest(req: CanonicalRequest): unknown;
-  /** Build a wire response the agent will accept — the outbound half. */
-  fromCanonicalResponse(res: CanonicalResponse, streamed: boolean): string;
 }
 
 export function anthropicDialect(translators: {
   toCanonicalRequest: (raw: unknown) => CanonicalRequest;
   toCanonicalResponse: (raw: unknown) => CanonicalResponse;
   parseSse: (body: string) => CanonicalResponse;
-  fromCanonicalRequest: (req: CanonicalRequest) => Record<string, unknown>;
-  fromCanonicalResponse: (res: CanonicalResponse) => Record<string, unknown>;
-  toSse: (res: CanonicalResponse) => string;
 }): Dialect {
   return {
     id: 'anthropic',
@@ -57,16 +40,9 @@ export function anthropicDialect(translators: {
     // OpenCode catalog providers mount Anthropic under /anthropic/v1, /coding/v1, etc.
     // Keep the version segment: an arbitrary /messages route may belong to another API.
     matches: (p) => p.startsWith('/v1/messages') || p.endsWith('/v1/messages'),
-    // Claude is the only family Anthropic serves, so the test is the name rather than a list that
-    // would need editing every time a model ships.
-    ownsModel: (m) => /^(?:.*\/)?claude[-.]/i.test(m.trim()),
     toCanonicalRequest: translators.toCanonicalRequest,
     toCanonicalResponse: translators.toCanonicalResponse,
     parseStream: translators.parseSse,
-    withModel: (raw, model) => ({ ...(raw as Record<string, unknown>), model }),
-    fromCanonicalRequest: translators.fromCanonicalRequest,
-    fromCanonicalResponse: (res, streamed) =>
-      streamed ? translators.toSse(res) : JSON.stringify(translators.fromCanonicalResponse(res)),
   };
 }
 
@@ -74,9 +50,6 @@ export function openaiDialect(translators: {
   toCanonicalRequest: (raw: unknown) => CanonicalRequest;
   toCanonicalResponse: (raw: unknown) => CanonicalResponse;
   parseSse: (body: string) => CanonicalResponse;
-  fromCanonicalRequest: (req: CanonicalRequest) => Record<string, unknown>;
-  fromCanonicalResponse: (res: CanonicalResponse) => Record<string, unknown>;
-  toSse: (res: CanonicalResponse) => string;
 }): Dialect {
   return {
     id: 'openai',
@@ -86,25 +59,17 @@ export function openaiDialect(translators: {
     // depending on how their SDK joins the base URL. Accept either rather than making the user
     // discover which one their harness picked.
     matches: (p) => p.endsWith('/chat/completions') || p.endsWith('/completions'),
-    // Everything that is not Claude. The chat-completions shape is what GLM, Qwen, DeepSeek and
-    // every gateway speak, so it is the right default rather than a list of known vendors — an
-    // unknown model reaches an OpenAI-compatible endpoint, which is where an unknown model lives.
-    ownsModel: (m) => !/^(?:.*\/)?claude[-.]/i.test(m.trim()),
     toCanonicalRequest: translators.toCanonicalRequest,
     toCanonicalResponse: translators.toCanonicalResponse,
     parseStream: translators.parseSse,
-    withModel: (raw, model) => ({ ...(raw as Record<string, unknown>), model }),
-    fromCanonicalRequest: translators.fromCanonicalRequest,
-    fromCanonicalResponse: (res, streamed) =>
-      streamed ? translators.toSse(res) : JSON.stringify(translators.fromCanonicalResponse(res)),
   };
 }
 
 /**
  * The Codex CLI's subscription transport is an OpenAI Responses-shaped endpoint, but it is not
  * the public `/v1/responses` API: it lives at `/backend-api/codex/responses`, sends zstd-compressed
- * JSON and returns a Responses SSE stream. Keeping this dialect here lets the proxy replay the
- * bytes exactly while still using the normal canonical matcher and trace timeline.
+ * JSON and returns a Responses SSE stream. The recording proxy parses these calls into the
+ * common trace format while preserving the received wire evidence.
  */
 export function codexDialect(): Dialect {
   return {
@@ -112,16 +77,9 @@ export function codexDialect(): Dialect {
     defaultUpstream: 'https://chatgpt.com',
     requestPath: '/backend-api/codex/responses',
     matches: (p) => p === '/backend-api/codex/responses',
-    // Only Codex subscription model ids belong here. Generic GPT names must continue to route to
-    // the public OpenAI dialect when a fork changes an ordinary provider request.
-    ownsModel: (model) => /^gpt-5\.6-(?:sol|terra|luna)$/i.test(model.trim()),
     toCanonicalRequest: codexToCanonicalRequest,
     toCanonicalResponse: codexToCanonicalResponse,
     parseStream: parseCodexSse,
-    withModel: (raw, model) => ({ ...(raw as Record<string, unknown>), model }),
-    fromCanonicalRequest: canonicalToCodexRequest,
-    fromCanonicalResponse: (res, streamed) =>
-      streamed ? canonicalToCodexSse(res) : JSON.stringify(canonicalToCodexResponse(res)),
   };
 }
 
@@ -295,49 +253,6 @@ function codexTools(raw: unknown): CanonicalTool[] {
   return out;
 }
 
-function canonicalToCodexRequest(req: CanonicalRequest): Record<string, unknown> {
-  const input: Record<string, unknown>[] = [];
-  for (const message of req.messages) {
-    const blocks = message.content.filter((block) => block.type === 'text');
-    if (blocks.length) {
-      input.push({
-        type: 'message',
-        role: message.role,
-        content: blocks.map((block) => ({
-          type: 'input_text',
-          text: block.type === 'text' ? block.text : '',
-        })),
-      });
-    }
-  }
-  return {
-    model: req.model,
-    ...(req.system === undefined ? {} : { instructions: req.system }),
-    input,
-    ...(req.tools === undefined
-      ? {}
-      : { tools: req.tools.map((tool) => ({ type: 'function', ...tool })) }),
-    ...(req.max_tokens === undefined ? {} : { max_output_tokens: req.max_tokens }),
-    ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
-    ...(req.top_p === undefined ? {} : { top_p: req.top_p }),
-    ...(req.stream === undefined ? {} : { stream: req.stream }),
-  };
-}
-
-function canonicalToCodexResponse(res: CanonicalResponse): Record<string, unknown> {
-  return {
-    id: res.id,
-    object: 'response',
-    model: res.model,
-    status: 'completed',
-    output: res.content,
-  };
-}
-
-function canonicalToCodexSse(res: CanonicalResponse): string {
-  return `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: canonicalToCodexResponse(res) })}\n\n`;
-}
-
 function asRecord(raw: unknown): Record<string, unknown> {
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
@@ -377,18 +292,12 @@ function omitUndefined<T extends Record<string, unknown>>(value: T): T {
  * top-level items, and the stream is typed events rather than choice deltas. One dialect trying to
  * be both would have to sniff the body shape on every request, and guess wrong on the empty ones.
  *
- * It is registered *after* `openaiDialect` for a reason that only shows up on forks: `ownsModel`
- * cannot distinguish them — both serve everything that is not Claude — so the later position means
- * an ordinary chat-completions run forking to another OpenAI model still goes to chat completions.
- * A Responses run stays on Responses through the recorded-dialect preference in `goLive`.
+ * It is registered after `openaiDialect`; the request path selects the wire protocol.
  */
 export function responsesDialect(translators: {
   toCanonicalRequest: (raw: unknown) => CanonicalRequest;
   toCanonicalResponse: (raw: unknown) => CanonicalResponse;
   parseSse: (body: string) => CanonicalResponse;
-  fromCanonicalRequest: (req: CanonicalRequest) => Record<string, unknown>;
-  fromCanonicalResponse: (res: CanonicalResponse) => Record<string, unknown>;
-  toSse: (res: CanonicalResponse) => string;
 }): Dialect {
   return {
     id: 'openai-responses',
@@ -397,14 +306,9 @@ export function responsesDialect(translators: {
     // Agents reach it as `/v1/responses` or `/responses` depending on whether their SDK considers
     // the version segment part of the base url, and a gateway may mount it under a prefix.
     matches: (p) => p.endsWith('/responses'),
-    ownsModel: (m) => !/^(?:.*\/)?claude[-.]/i.test(m.trim()),
     toCanonicalRequest: translators.toCanonicalRequest,
     toCanonicalResponse: translators.toCanonicalResponse,
     parseStream: translators.parseSse,
-    withModel: (raw, model) => ({ ...(raw as Record<string, unknown>), model }),
-    fromCanonicalRequest: translators.fromCanonicalRequest,
-    fromCanonicalResponse: (res, streamed) =>
-      streamed ? translators.toSse(res) : JSON.stringify(translators.fromCanonicalResponse(res)),
   };
 }
 

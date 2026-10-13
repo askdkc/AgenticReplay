@@ -143,20 +143,6 @@ export async function setupCommand(
         out.plain(`    … and ${available.length - 20} more — agenticreplay models`);
     }
 
-    // Ask which of them to compare by default, so `agenticreplay compare` needs no flags afterwards. This
-    // is the half that makes setup worth running: a gateway with nothing chosen still leaves you
-    // typing a model list on every invocation, which is what the command exists to remove.
-    const chosen = args.str('models') ?? (ask ? await askModels(ask, available) : undefined);
-    if (chosen) {
-      config.models = chosen
-        .split(',')
-        .map((m) => m.trim())
-        .filter((m) => m !== '');
-      if (config.models.length > 0) {
-        await writeConfig(config, env);
-        out.info('config.models', { models: config.models.join(',') });
-      }
-    }
   } catch (err) {
     out.warn('gateway.unreachable', {
       // A failed fetch names the URL it was given, credential and all.
@@ -169,30 +155,8 @@ export async function setupCommand(
   // Built from what the gateway actually serves, never from two model names picked here. Model ids
   // are gateway-specific — OrcaRouter namespaces them by provider, a direct provider does not — so a
   // hardcoded pair is a copyable line that fails against the gateway agenticreplay just configured.
-  out.plain(nextStep(config, available));
+  out.plain('  agenticreplay record claude -- -p "..."   # record and inspect an agent run');
   return config;
-}
-
-/** The line worth copying next, using real model ids wherever we have them. */
-function nextStep(config: AgenticReplayConfig, available: string[]): string {
-  if (config.models && config.models.length > 0)
-    return '  agenticreplay compare last --verify "npm test"';
-  if (available.length > 0) {
-    return `  agenticreplay compare last --models ${available.slice(0, 2).join(',')} --verify "npm test"`;
-  }
-  return '  agenticreplay models                    # what this gateway serves, then compare two of them';
-}
-
-/** Offer the gateway's own list, so the answer is a choice rather than a spelling test. */
-async function askModels(
-  ask: (question: string) => Promise<string>,
-  available: string[],
-): Promise<string | undefined> {
-  const suggestion = available.slice(0, 3).join(',');
-  const answer = await ask(
-    `Models to compare by default${suggestion ? ` [${suggestion}]` : ''} (comma-separated, blank to skip): `,
-  );
-  return answer === '' ? (suggestion === '' ? undefined : suggestion) : answer;
 }
 
 export async function modelsCommand(

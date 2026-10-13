@@ -1,8 +1,9 @@
-import { realpath } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { GitInfo } from '@agenticreplay/schema';
 import { runGit } from './git.js';
-import type { FileChange, ForcedInsideNested, MaterializeOptions, TreeFile } from './shadow.js';
+import type { FileChange, ForcedInsideNested } from './shadow.js';
 import { ShadowIndex } from './shadow.js';
 
 export interface FsCaptureOptions {
@@ -16,10 +17,7 @@ export interface FsCaptureOptions {
 }
 
 export interface TurnSnapshot {
-  tree: string;
   changes: FileChange[];
-  /** True when there was no previous tree to diff against, so `changes` is empty by definition. */
-  firstSnapshot: boolean;
   /**
    * Nested repositories inside a declared artifact path that this snapshot could not hold, named
    * the first time each is seen. Absent from every ordinary snapshot; see
@@ -55,16 +53,27 @@ export class FsCapture {
     readonly runDir: string,
     readonly cwd: string,
     private readonly shadow: ShadowIndex,
+    private readonly scratchDir: string,
   ) {}
 
-  /** Spec §1: the shadow object store lives at `<run_dir>/fs`. */
+  /** Keep the diff index outside the run; only file operation events belong in the recording. */
   static async start(opts: FsCaptureOptions): Promise<FsCapture> {
-    const shadow = await ShadowIndex.create({
-      gitDir: join(opts.runDir, 'fs'),
-      workTree: opts.cwd,
-      ...(opts.forced === undefined ? {} : { forced: opts.forced }),
-    });
-    return new FsCapture(opts.runDir, opts.cwd, shadow);
+    const scratchDir = await mkdtemp(join(tmpdir(), 'agenticreplay-fs-'));
+    try {
+      const shadow = await ShadowIndex.create({
+        gitDir: join(scratchDir, 'index'),
+        workTree: opts.cwd,
+        ...(opts.forced === undefined ? {} : { forced: opts.forced }),
+      });
+      return new FsCapture(opts.runDir, opts.cwd, shadow, scratchDir);
+    } catch (err) {
+      await rm(scratchDir, { recursive: true, force: true });
+      throw err;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await rm(this.scratchDir, { recursive: true, force: true });
   }
 
   static async isAvailable(): Promise<boolean> {
@@ -87,26 +96,11 @@ export class FsCapture {
     const uncommitted = this.shadow.uncommittedNested;
     const inside = this.shadow.forcedInsideNested;
     return {
-      tree,
       changes,
-      firstSnapshot: previous === undefined,
       ...(skipped.length === 0 ? {} : { skippedGitlinks: skipped }),
       ...(uncommitted.length === 0 ? {} : { uncommittedNested: uncommitted }),
       ...(inside.length === 0 ? {} : { forcedInsideNested: inside }),
     };
-  }
-
-  currentTree(): string | undefined {
-    return this.previousTree;
-  }
-
-  async restore(tree: string, destDir: string, opts?: MaterializeOptions): Promise<void> {
-    await this.shadow.materialize(tree, destDir, opts);
-  }
-
-  /** See {@link ShadowIndex.gitlinks}: what a restore of this tree would refuse, asked up front. */
-  async gitlinks(tree: string): Promise<string[]> {
-    return this.shadow.gitlinks(tree);
   }
 
   /** See {@link ShadowIndex.uncommittedNested}: what no snapshot of this work tree can hold. */
@@ -117,21 +111,6 @@ export class FsCapture {
   /** See {@link ShadowIndex.forcedInsideNested}: declared paths no snapshot here can hold. */
   get forcedInsideNested(): readonly ForcedInsideNested[] {
     return this.shadow.forcedInsideNested;
-  }
-
-  /** See {@link ShadowIndex.has}: whether a restore of this tree has anything to restore from. */
-  async hasTree(tree: string): Promise<boolean> {
-    return this.shadow.has(tree);
-  }
-
-  /** See {@link ShadowIndex.files}: the files a restore of this tree would write. */
-  async files(tree: string): Promise<TreeFile[]> {
-    return this.shadow.files(tree);
-  }
-
-  /** See {@link ShadowIndex.uncaptured}: what the last snapshot left behind under these paths. */
-  async uncaptured(paths: readonly string[]): Promise<string[]> {
-    return this.shadow.uncaptured(paths);
   }
 
   /**

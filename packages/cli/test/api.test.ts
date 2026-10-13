@@ -118,29 +118,7 @@ describe('AgenticReplay — the programmatic API', () => {
     expect(events.some((e) => e.type === 'fs.change')).toBe(true);
   });
 
-  it('returns the checkpoints a fork can start from', async () => {
-    const recorded = await record();
-    const checkpoints = await agenticreplay.checkpoints(recorded.runId);
-    expect(checkpoints.length).toBeGreaterThan(0);
-    expect(checkpoints[0]).toMatchObject({ seq: expect.any(Number), turn: expect.any(Number) });
-  });
-
-  it('replays and returns the numbers, so nothing has to be scraped from a log line', async () => {
-    const recorded = await record();
-    const before = model.calls.length;
-
-    const replay = await agenticreplay.replay(recorded.runId);
-
-    expect(replay).toMatchObject({
-      runId: recorded.runId,
-      mode: 'exact',
-      canonicalExact: 2,
-      divergences: 0,
-      liveCalls: 0,
-      exitCode: 0,
-    });
-    expect(model.calls.length).toBe(before);
-  });
+  
 
   it('exports a self-contained file and says where it went', async () => {
     const recorded = await record();

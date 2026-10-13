@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { snapshotWithRetry, type SnapshotSource } from '../src/snapshot.js';
 
-function source(results: Array<Error | { tree: string; changes: unknown[] }>): SnapshotSource {
+function source(results: Array<Error | { changes: unknown[] }>): SnapshotSource {
   let i = 0;
   return {
     async snapshotTurn() {
@@ -15,9 +15,9 @@ function source(results: Array<Error | { tree: string; changes: unknown[] }>): S
 
 describe('snapshotWithRetry', () => {
   it('returns the snapshot when it works first time', async () => {
-    const r = await snapshotWithRetry(source([{ tree: 'abc', changes: [] }]), 1, { delayMs: 0 });
+    const r = await snapshotWithRetry(source([{ changes: [] }]), 1, { delayMs: 0 });
     expect(r.ok).toBe(true);
-    expect(r.snapshot?.tree).toBe('abc');
+    expect(r.snapshot?.changes).toEqual([]);
     expect(r.attempts).toBe(1);
   });
 
@@ -26,11 +26,11 @@ describe('snapshotWithRetry', () => {
     // snapshots overlapping on the index lock.
     const src = source([
       new Error('git add failed (128): error: short read while indexing auth.ts'),
-      { tree: 'def', changes: [] },
+      { changes: [] },
     ]);
     const r = await snapshotWithRetry(src, 1, { delayMs: 0 });
     expect(r.ok).toBe(true);
-    expect(r.snapshot?.tree).toBe('def');
+    expect(r.snapshot?.changes).toEqual([]);
     expect(r.attempts).toBe(2);
   });
 

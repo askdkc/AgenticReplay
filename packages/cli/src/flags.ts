@@ -18,14 +18,8 @@ export const GLOBAL = ['ci', 'json', 'verbose', 'color', 'help', 'version', 'h']
 /** Read by `config.ts` for any command that can reach a provider. */
 const UPSTREAM = ['upstream-anthropic', 'upstream-openai'] as const;
 
-/** Read by `tls-capture.ts`, which record, replay and compare all set up. */
+/** Read by `tls-capture.ts`, which record and attach share. */
 const TLS = ['tls-intercept', 'tls-hosts', 'max-body-bytes', 'max-buffered-bytes'] as const;
-
-/**
- * How much of a retrieval call's answer to keep. Only the commands that *make* one have it:
- * replay serves what a recording already holds, and cannot change what was stored then.
- */
-const RETRIEVAL = ['retrieval-store'] as const;
 
 export const BY_COMMAND: Record<string, readonly string[]> = {
   quickstart: ['dir', 'full'],
@@ -41,42 +35,17 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   // one was missed.
   push: ['gateway', 'force', 'fs'],
   pull: ['gateway', 'force'],
-  record: ['fs', 'shell', 'agent-spans', 'mcp-config', ...RETRIEVAL, ...TLS, ...UPSTREAM],
+  record: ['fs', 'shell', 'agent-spans', 'mcp-config', ...TLS, ...UPSTREAM],
   attach: [
     'for',
     'bind',
     'advertise',
     'port',
     'remote-ca-path',
-    'replay',
-    'loose',
-    ...RETRIEVAL,
     ...TLS,
     ...UPSTREAM,
   ],
-  replay: [
-    'from',
-    'model',
-    'fs',
-    'in-place',
-    'worktree',
-    'loose',
-    'trace',
-    'port',
-    'ui',
-    'mcp-config',
-    'serialize',
-    ...TLS,
-    ...UPSTREAM,
-    'quiet',
-  ],
-  // `fs` because compare forks through the same code replay does, and that path reads
-  // `args.bool('fs', true)` twice: once for the checkpoint restore, once for the fork's own
-  // capture. Without the entry `agenticreplay compare --no-fs` was refused while `agenticreplay replay --no-fs`
-  // worked, for two spellings of the same fork.
-  compare: ['from', 'models', 'verify', 'share', 'loose', 'fs', ...TLS, ...UPSTREAM],
   show: [],
-  checkpoints: [],
   events: [],
   // `inspect.ts` serves graph, export and ui from one file, so the flags of all three are read
   // there. Reading a file rather than a command is how the first version of this list came to
@@ -93,7 +62,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   list: ['remote', 'gateway', 'source', 'limit'],
   gc: ['older-than', 'keep', 'dry-run'],
   doctor: [],
-  setup: ['gateway', 'key', 'key-env', 'models'],
+  setup: ['gateway', 'key', 'key-env'],
   models: [],
   mcp: [],
   help: [],
@@ -183,11 +152,8 @@ export function assertKnownFlags(args: ParsedArgs): void {
  */
 const POSITIONALS: Record<string, number> = {
   record: 1,
-  replay: 1,
-  compare: 1,
   show: 1,
   events: 1,
-  checkpoints: 1,
   graph: 1,
   export: 1,
   // push defaults to the last run, like every other run-taking command; pull needs to be told

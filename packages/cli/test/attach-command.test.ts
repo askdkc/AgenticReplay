@@ -8,7 +8,6 @@ import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { attachCommand } from '../src/commands/attach.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 
 const run = promisify(execFile);
@@ -138,9 +137,7 @@ describe('agenticreplay attach', () => {
    * `agenticreplay attach --replay`, or `--replay --tls-intercept`, silently became a fresh *recording*
    * session pointed at the live provider. Exactly the wrong direction to fail in.
    */
-  it('refuses --replay with no run rather than recording instead', async () => {
-    await expect(session(['--replay'], async () => {})).rejects.toThrow(/--replay/);
-  });
+  
 
   it('leaves no half-made run behind when the session cannot start', async () => {
     await expect(
@@ -194,40 +191,7 @@ describe('agenticreplay attach', () => {
    * to reports zero unmatched requests, because zero requests arrived — an assertion that passes
    * for a session that did nothing at all.
    */
-  it('serves a recording back to an agent it does not launch', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'hello from the sandbox' }],
-        }),
-      });
-    });
-
-    let body = '';
-    const replayed = await session(['--replay', recorded.runId], async (proxyUrl) => {
-      const res = await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'hello from the sandbox' }],
-        }),
-      });
-      body = await res.text();
-    });
-
-    expect(replayed.reused).toBe(1);
-    expect(replayed.unmatched).toBe(0);
-    // A replay session reports what it served, not a recording it did not make.
-    expect(lines.join('')).toContain('info served');
-    expect(lines.join('')).toContain('reused=1/1');
-    // Served from the trace, so the model this test stood up was never called a second time.
-    expect(model.calls).toHaveLength(1);
-    expect(body).toContain('editing auth.ts');
-  });
+  
 
   /**
    * A replay session has to hand the operator something to paste, and `exec` — the honest default
@@ -235,118 +199,24 @@ describe('agenticreplay attach', () => {
    * the trace records which adapter made the recording, so the variables that agent reads are the
    * variables it will read again.
    */
-  it('takes the agent from the recording, so the block is not empty', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
-    lines.length = 0;
+  
 
-    await session(['--replay', recorded.runId], async () => {});
-
-    expect(lines.join('')).toContain('export ANTHROPIC_BASE_URL=');
-  });
-
-  it('still lets --for override the agent the recording names', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
-    lines.length = 0;
-
-    await session(['--replay', recorded.runId, '--for', 'generic-openai'], async () => {});
-
-    expect(lines.join('')).toContain('export OPENAI_BASE_URL=');
-  });
+  
 
   /**
    * A replay session that could not answer the agent has to be detectable by a script, not only
    * by a human reading the log — CI is exactly where a sandbox replay runs.
    */
-  it('reports a request the recording could not answer', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
+  
 
-    const replayed = await session(['--replay', recorded.runId], async (proxyUrl) => {
-      // A question the recording never held an answer for.
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'something else entirely' }],
-        }),
-      });
-    });
-
-    expect(replayed.unmatched).toBeGreaterThan(0);
-    expect(replayed.exitCode).toBe(1);
-  });
-
-  it('exits zero for a session that served everything it was asked for', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
-    const replayed = await session(['--replay', recorded.runId], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
-    expect(replayed.exitCode).toBe(0);
-  });
+  
 
   it('reports incomplete coverage when a recording session observed no requests', async () => {
     const result = await session(['--for', 'claude'], async () => {});
     expect(result.exitCode).toBe(2);
   });
 
-  it('says the recording is being served, not recorded, so nothing looks like a fresh run', async () => {
-    const recorded = await session(['--for', 'claude'], async (proxyUrl) => {
-      await fetch(`${proxyUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-opus-5',
-          messages: [{ role: 'user', content: 'x' }],
-        }),
-      });
-    });
-    lines.length = 0;
-    await session(['--replay', recorded.runId], async () => {});
-    expect(lines.join('')).toContain('egress=blocked');
-  });
+  
 
   it('says so plainly when the session ended having captured nothing', async () => {
     const result = await session([], async () => {});

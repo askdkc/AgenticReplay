@@ -1,8 +1,8 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { FsCapture, gitAvailable, runGit } from '../src/index.js';
-import { cleanupTempDirs, listFilesRecursive, makeTempDir } from './helpers.js';
+import { cleanupTempDirs, makeTempDir } from './helpers.js';
 
 const hasGit = await gitAvailable();
 const itGit = it.skipIf(!hasGit);
@@ -33,14 +33,9 @@ async function write(dir: string, rel: string, content: string): Promise<void> {
 }
 
 describe('FsCapture.start', () => {
-  itGit('creates the shadow store under the run dir', async () => {
+  itGit('keeps its diff index out of the recorded run', async () => {
     const { runDir } = await fixture();
-    expect((await stat(join(runDir, 'fs', 'objects'))).isDirectory()).toBe(true);
-  });
-
-  itGit('has no current tree before the first snapshot', async () => {
-    const { capture } = await fixture();
-    expect(capture.currentTree()).toBeUndefined();
+    await expect(stat(join(runDir, 'fs'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -49,22 +44,18 @@ describe('snapshotTurn', () => {
     const { cwd, capture } = await fixture();
     await write(cwd, 'a.txt', 'one\n');
     const first = await capture.snapshotTurn(0);
-    expect(first.firstSnapshot).toBe(true);
     expect(first.changes).toEqual([]);
-    expect(first.tree).toMatch(/^[0-9a-f]{40}$/);
-    expect(capture.currentTree()).toBe(first.tree);
+    expect(first).not.toHaveProperty('tree');
   });
 
   itGit('diffs each later turn against the previous tree', async () => {
     const { cwd, capture } = await fixture();
     await write(cwd, 'a.txt', 'one\n');
-    const first = await capture.snapshotTurn(0);
+    await capture.snapshotTurn(0);
     await write(cwd, 'a.txt', 'one\ntwo\n');
     await write(cwd, 'b.txt', 'new file\n');
     const second = await capture.snapshotTurn(1);
-    expect(second.firstSnapshot).toBe(false);
-    expect(second.tree).not.toBe(first.tree);
-    expect(capture.currentTree()).toBe(second.tree);
+    expect(second).not.toHaveProperty('tree');
     expect([...second.changes].sort((l, r) => l.path.localeCompare(r.path))).toEqual([
       { path: 'a.txt', status: 'modified', insertions: 1, deletions: 0 },
       { path: 'b.txt', status: 'added', insertions: 1, deletions: 0 },
@@ -74,11 +65,9 @@ describe('snapshotTurn', () => {
   itGit('reports no changes and the same tree for an untouched turn', async () => {
     const { cwd, capture } = await fixture();
     await write(cwd, 'a.txt', 'one\n');
-    const first = await capture.snapshotTurn(0);
+    await capture.snapshotTurn(0);
     const second = await capture.snapshotTurn(1);
-    expect(second.tree).toBe(first.tree);
     expect(second.changes).toEqual([]);
-    expect(second.firstSnapshot).toBe(false);
   });
 
   itGit('records a deletion between turns', async () => {
@@ -103,33 +92,15 @@ describe('snapshotTurn', () => {
   });
 
   itGit('never captures the run dir it writes into, nor secrets', async () => {
-    const { root, cwd, runDir, capture } = await fixture();
+    const { cwd, runDir, capture } = await fixture();
     await write(cwd, 'src/app.ts', 'export const ok = 1;\n');
     await write(cwd, '.env', 'API_KEY=sk-live-secret\n');
     await write(cwd, 'id_rsa', 'PRIVATE KEY\n');
     await write(runDir, 'events.jsonl', '{"seq":0}\n');
-    const { tree } = await capture.snapshotTurn(0);
-    const dest = join(root, 'restored');
-    await capture.restore(tree, dest);
-    expect(await listFilesRecursive(dest)).toEqual(['src/app.ts']);
-  });
-});
-
-describe('restore', () => {
-  itGit('rebuilds an earlier turn byte for byte', async () => {
-    const { root, cwd, capture } = await fixture();
-    await write(cwd, 'nested/deep/u.txt', 'héllo ünicode ✓\n漢字\n');
-    await write(cwd, 'a.txt', 'turn zero\n');
-    const first = await capture.snapshotTurn(0);
-    await write(cwd, 'a.txt', 'turn one\n');
-    await rm(join(cwd, 'nested'), { recursive: true });
-    await capture.snapshotTurn(1);
-
-    const dest = join(root, 'fork-workspace');
-    await capture.restore(first.tree, dest);
-    expect(await listFilesRecursive(dest)).toEqual(['a.txt', 'nested/deep/u.txt']);
-    expect(await readFile(join(dest, 'a.txt'), 'utf8')).toBe('turn zero\n');
-    expect(await readFile(join(dest, 'nested/deep/u.txt'), 'utf8')).toBe('héllo ünicode ✓\n漢字\n');
+    await capture.snapshotTurn(0);
+    await write(cwd, 'src/app.ts', 'export const ok = 2;\n');
+    const next = await capture.snapshotTurn(1);
+    expect(next.changes.map((change) => change.path)).toEqual(['src/app.ts']);
   });
 });
 

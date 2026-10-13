@@ -10,7 +10,6 @@ import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
 const run = promisify(execFile);
@@ -91,15 +90,5 @@ describe('end to end: an agent with a hardcoded provider origin', () => {
     expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toContain('fixed = true');
   });
 
-  it('replays offline, which is the whole reason to have captured it', async () => {
-    const result = await record('node');
-    const before = model.calls.length;
-
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    expect(replay.canonicalExact).toBe(2);
-    expect(replay.liveCalls).toBe(0);
-    expect(model.calls.length).toBe(before);
-  });
+  
 });

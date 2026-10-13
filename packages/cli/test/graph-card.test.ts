@@ -238,12 +238,5 @@ describe('renderGraphCard covers every event a card can be about', () => {
     expect(svg).not.toContain('not shown');
   });
 
-  it('draws a divergence too, which is what a replay trace is about', () => {
-    const g = runGraph([ev(1, 'model.request'), ev(2, 'divergence', { causes: [1] })]);
-    const svg = renderGraphCard(scopeForCard(g, new Set([2])), {
-      runId: 'r',
-      highlight: new Set([2]),
-    });
-    expect(svg).not.toContain('not shown');
-  });
+  
 });

@@ -204,26 +204,7 @@ describe('record mode — a forwarded origin', () => {
     expect(proxy.stats().passedThrough).toBe(1);
   });
 
-  it('lets a configured gateway have an unclaimed tail on a fork, where the fork decides', async () => {
-    // Substituting the model is the operator choosing where answers come from, so the fork's
-    // configured origin decides for an unclaimed tail too. A retrieval call is the exception, and
-    // it is one for a reason that does not apply here: agenticreplay knows what it is and forwards it
-    // unchanged, so the destination it announces is the only one anything can say about it.
-    const up = stubUpstream({ object: 'list', data: [] });
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'gpt-5.6-luna',
-      fetchImpl: up.fetchImpl,
-      upstream: { openai: 'https://api.orcarouter.ai' },
-    });
-    closers.push(proxy.close);
-
-    await post(`${proxy.url}${forwardBasePath(ZEN_GO)}/v1/moderations`, { input: 'hello' });
-
-    expect(up.calls[0]!.url).toBe('https://api.orcarouter.ai/v1/moderations');
-  });
+  
 
   it('treats an undecodable /forward/ path as an ordinary unclaimed path', async () => {
     const up = stubUpstream({ ok: true });
@@ -252,55 +233,6 @@ describe('record mode — a forwarded origin', () => {
   });
 });
 
-describe('a cross-provider fork drops the forwarded base', () => {
-  it('serves the fork target from its own origin, not the recorded one', async () => {
-    // Forking an OpenAI-compatible recording onto a Claude model means the answer comes from
-    // api.anthropic.com; the forwarded base pointed at the recorded provider and is incoherent
-    // for the translation. The explicit upstream or the target default decides instead.
-    const up = stubUpstream({
-      id: 'm1',
-      content: [],
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'claude-opus-5',
-      fetchImpl: up.fetchImpl,
-    });
-    closers.push(proxy.close);
 
-    await post(`${proxy.url}${forwardBasePath(ZEN_GO)}/chat/completions`, TURN);
 
-    expect(up.calls[0]!.url).toBe('https://api.anthropic.com/v1/messages');
-  });
-});
 
-describe('replay — a forwarded path is matched, not forwarded', () => {
-  it('serves a matching exchange from the recording', async () => {
-    // Recorded through the same forward path, so the fixture is an exchange the proxy itself
-    // built — the matcher compares canonical forms, and a hand-written one is a test of the
-    // author's memory of the translator.
-    const reply = { id: 'c1', choices: [{ message: { role: 'assistant', content: 'recorded' } }] };
-    const recorder = stubUpstream(reply);
-    const record = await createProxy({ mode: 'record', fetchImpl: recorder.fetchImpl });
-    closers.push(record.close);
-    await post(`${record.url}${forwardBasePath(ZEN_GO)}/chat/completions`, TURN);
-
-    const up = stubUpstream({ id: 'live', choices: [] });
-    const proxy = await createProxy({
-      mode: 'replay',
-      exchanges: record.exchanges(),
-      fetchImpl: up.fetchImpl,
-    });
-    closers.push(proxy.close);
-
-    const res = await post(`${proxy.url}${forwardBasePath(ZEN_GO)}/chat/completions`, TURN);
-
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.text).choices[0].message.content).toBe('recorded');
-    expect(up.calls).toHaveLength(0);
-    expect(proxy.stats().matchedExact).toBe(1);
-  });
-});

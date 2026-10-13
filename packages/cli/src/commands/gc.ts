@@ -1,7 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, rm, rmdir, stat, unlink } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { listRuns, runsDir } from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
@@ -9,8 +8,6 @@ import type { Output } from '../out.js';
 
 export interface GcResult {
   runsRemoved: number;
-  /** Scratch fork worktrees reclaimed alongside their runs. */
-  worktreesRemoved: number;
   blobsRemoved: number;
   bytesReclaimed: number;
 }
@@ -47,12 +44,10 @@ interface RunFacts {
   dir: string;
   createdAt: string;
   createdMs: number;
-  /** The run this one was forked from, from the manifest or from its own `fork` event. */
+  /** Historical parent link read from older manifests for retention compatibility. */
   parentRun?: string;
   bytes: number;
   orphans: OrphanBlob[];
-  /** Scratch worktree this run executed in, when it is one agenticreplay created for a fork. */
-  worktree?: string;
   /** Why blobs were left alone, when they were. */
   skippedReason?: string;
 }
@@ -77,7 +72,7 @@ export async function gcCommand(
   const runs = await listRuns(cwd);
   if (runs.length === 0) {
     out.plain(`no runs in ${runsDir(cwd)} — nothing to reclaim`);
-    return { runsRemoved: 0, worktreesRemoved: 0, blobsRemoved: 0, bytesReclaimed: 0 };
+    return { runsRemoved: 0, blobsRemoved: 0, bytesReclaimed: 0 };
   }
 
   const facts: RunFacts[] = [];
@@ -130,7 +125,6 @@ export async function gcCommand(
   }
 
   let runsRemoved = 0;
-  let worktreesRemoved = 0;
   let blobsRemoved = 0;
   let bytesReclaimed = 0;
 
@@ -139,15 +133,6 @@ export async function gcCommand(
     runsRemoved += 1;
     bytesReclaimed += run.bytes;
     if (!dryRun) await rm(run.dir, { recursive: true, force: true });
-    // The fork's scratch worktree goes with its run. It is deliberately *not* removed when the
-    // fork finishes — it holds what the model actually did, so deleting it then would destroy the
-    // thing you forked in order to look at — but nothing reclaimed it either, so a single
-    // `agenticreplay compare --models a,b,c,d` left four full copies of the workspace behind forever.
-    if (run.worktree !== undefined) {
-      worktreesRemoved += 1;
-      bytesReclaimed += await runDirBytes(run.worktree);
-      if (!dryRun) await rm(run.worktree, { recursive: true, force: true });
-    }
   }
 
   for (const run of facts) {
@@ -183,31 +168,12 @@ export async function gcCommand(
 
   out.phase('gc', {
     runs: runsRemoved,
-    worktrees: worktreesRemoved || undefined,
     blobs: blobsRemoved,
     bytes: bytesReclaimed,
     dry_run: dryRun || undefined,
   });
 
-  return { runsRemoved, worktreesRemoved, blobsRemoved, bytesReclaimed };
-}
-
-/**
- * Does this path look like a directory agenticreplay made for a fork to run in?
- *
- * Deliberately narrow, and deliberately only half the test — the caller also requires the run to
- * carry a `fork_point`. Directly inside the OS temp directory, with the prefix `replayFork` uses.
- * Anything else is left alone, including a fork whose worktree someone moved somewhere they care
- * about: an unreclaimed directory costs disk, and the alternative costs somebody's work.
- *
- * So `agenticreplay replay --worktree` is out of reach here, because an exact replay's trace has no fork
- * point. That is the right way round: you asked for a scratch copy to look at, agenticreplay printed where
- * it put it, and a garbage collector that deletes the thing you asked to keep is worse than one
- * that leaves a directory behind. The pre-replay safety snapshot is not gc's problem either —
- * replay owns that one and removes it once your files are back.
- */
-function isScratchWorktree(dir: string): boolean {
-  return resolve(dirname(dir)) === resolve(tmpdir()) && basename(dir).startsWith('agenticreplay-');
+  return { runsRemoved, blobsRemoved, bytesReclaimed };
 }
 
 function readOlderThan(args: ParsedArgs): number | undefined {
@@ -250,27 +216,9 @@ async function inspectRun(runId: string, dir: string, createdAt: string): Promis
   try {
     const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as {
       parent_run?: unknown;
-      fork_point?: unknown;
       ended_at?: unknown;
-      cwd?: unknown;
     };
     if (typeof manifest.parent_run === 'string') facts.parentRun = manifest.parent_run;
-    // Only a fork's cwd is ever ours to delete. A plain recording runs in the user's project, and
-    // `gc` removing that would be the worst bug this tool could have — so the fork check is the
-    // load-bearing half of the guard, and the path check is the belt.
-    //
-    // The fork check is `fork_point`, not `parent_run`. It used to be the latter, back when the
-    // only run with a parent was a fork; an exact replay now writes a trace of its own findings
-    // that also names a parent, and it ran in the user's *own* directory. A project that happens
-    // to live at $TMPDIR/agenticreplay-something would have satisfied the belt on its own, and the run
-    // holding the evidence of what happened there is the one gc would have used to delete it.
-    if (
-      typeof manifest.fork_point === 'number' &&
-      typeof manifest.cwd === 'string' &&
-      isScratchWorktree(manifest.cwd)
-    ) {
-      facts.worktree = manifest.cwd;
-    }
     sealed = typeof manifest.ended_at === 'string';
   } catch {
     // A run whose manifest is unreadable is still a directory with a size; it just cannot be

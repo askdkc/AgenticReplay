@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { TraceWriter } from '@agenticreplay/core';
-import type { TraceEvent } from '@agenticreplay/schema';
 import {
   DEFAULT_MAX_CAPTURED_BYTES,
   HostPolicy,
@@ -35,12 +34,6 @@ import { captureLimits } from './capture-limits.js';
 export interface TlsCaptureRequest {
   args: ParsedArgs;
   out: Output;
-  /**
-   * Hosts the run being reproduced decrypted, recovered from its own trace.
-   *
-   * Present for replay and fork, absent for a fresh recording. See `recordedTlsHosts`.
-   */
-  recordedHosts?: readonly string[];
   writer?: TraceWriter;
   /** Used by an exact replay running with --no-trace, where there is no writer to own the CA. */
   runDir?: string;
@@ -81,44 +74,18 @@ export interface TlsCapture {
  * went on failing late, past the restore. The roots are read again below, microseconds later and
  * on a path the run was going to read anyway.
  */
-export async function planTlsCapture(
-  args: ParsedArgs,
-  recordedHosts?: readonly string[],
-): Promise<void> {
+export async function planTlsCapture(args: ParsedArgs): Promise<void> {
   captureLimits(args);
-  if (!interceptionRequested(args, recordedHosts)) return;
-  HostPolicy.from([...resolveTlsHosts(args.list('tls-hosts'), recordedHosts)]);
+  if (!args.bool('tls-intercept')) return;
+  HostPolicy.from([...resolveTlsHosts(args.list('tls-hosts'))]);
   await extraOriginRoots();
 }
 
-/**
- * Is this run intercepting?
- *
- * A run recorded through interception has to be replayed through it. The agent this exists for
- * talks to its own backend over TLS it establishes itself, so without interception the replay
- * proxy never sees the request at all: it tunnels the CONNECT to an origin that is offline or,
- * worse, live. That failed as `reused=0/n` — which reads as a broken recording rather than as a
- * missing flag, and the flag is one nobody thinks to repeat when the command they type is
- * `agenticreplay replay last`.
- *
- * So the recording decides. It already knows: every intercepted run writes a `tls_intercept` note
- * naming the hosts it decrypted. Nothing is inferred and nothing is widened — an operator who
- * never turned interception on gets a replay that never turns it on either, and
- * `--no-tls-intercept` refuses outright.
- */
-function interceptionRequested(args: ParsedArgs, recordedHosts?: readonly string[]): boolean {
-  const askedFor = args.bool('tls-intercept');
-  // `--no-tls-intercept` is the only way to tell "left unset" apart from "explicitly refused", and
-  // the difference matters: absence means agenticreplay may decide, refusal means it may not.
-  const refused = args.has('tls-intercept') && !askedFor;
-  return askedFor || (!refused && recordedHosts !== undefined);
-}
-
 export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCapture> {
-  const { args, out, writer, writes, recordedHosts } = req;
+  const { args, out, writer, writes } = req;
 
   const tlsHosts = args.list('tls-hosts');
-  const interceptTls = interceptionRequested(args, recordedHosts);
+  const interceptTls = args.bool('tls-intercept');
 
   // Naming hosts without asking for interception captures nothing and says nothing, which reads
   // as "agenticreplay ignored my traffic" rather than as "agenticreplay ignored my flag".
@@ -130,7 +97,7 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
 
   // Resolved before anything is minted, so a contradictory list — one that both replaces the
   // defaults and adds to them — fails while the run directory still holds no private key.
-  const hosts = resolveTlsHosts(tlsHosts, recordedHosts);
+  const hosts = resolveTlsHosts(tlsHosts);
   HostPolicy.from([...hosts]);
   const trustedOriginCerts = await extraOriginRoots();
   const runDir = writer?.runDir ?? req.runDir;
@@ -267,7 +234,7 @@ function warnUnclaimed(
   // is not unclaimed, it does replay, and there is no dialect to go and write. Recording an
   // index build printed one of these per endpoint and told the operator the run could not be
   // reproduced, at the moment agenticreplay had just made sure it could.
-  if (exchange.rule !== undefined || exchange.modelDialect !== undefined) return;
+  if (exchange.modelDialect !== undefined) return;
   // No response ever arrived, so this one is not evidence that a path went unrecognised. It is
   // kept as network traffic because an exchange with nothing to replay cannot be a model exchange
   // whatever dialect exists -- and telling the operator to write one would not change that. A
@@ -324,28 +291,6 @@ function warnUnclaimed(
     consequence: 'it replays as opaque network traffic and cannot be forked to another model',
     next: 'docs/plugins.md to add a dialect for it',
   });
-}
-
-/**
- * The hosts a recorded run decrypted, read back out of its own trace.
- *
- * `trustRunCa` writes this note on every intercepted run — a digest and a host list, never the
- * certificate and never the key — so the trace is self-describing about the one thing a faithful
- * replay cannot guess. Returns undefined for a run recorded without interception, which is the
- * signal that the replay must not turn it on either.
- */
-export function recordedTlsHosts(events: readonly TraceEvent[]): readonly string[] | undefined {
-  for (const event of events) {
-    if (event.type !== 'note' || event.attrs?.['rule'] !== 'tls_intercept') continue;
-    const hosts = event.attrs['hosts'];
-    if (typeof hosts !== 'string') continue;
-    const parsed = hosts
-      .split(',')
-      .map((h) => h.trim())
-      .filter((h) => h !== '');
-    if (parsed.length > 0) return parsed;
-  }
-  return undefined;
 }
 
 /**
@@ -447,7 +392,6 @@ export async function persistNetExchange(
   const responseChanges = (exchange.transformations ?? []).filter((t) =>
     t.location.startsWith('response'),
   );
-  const translated = responseChanges.some((t) => t.rule === 'provider-protocol-translation');
   const request = await writer.append({
     type: 'net.request',
     // The agent made the call. No actor names "some server on the internet", so the reply is
@@ -468,20 +412,7 @@ export async function persistNetExchange(
       // Absent means intercepted — every exchange the interceptor produces. The proxy's plaintext
       // passthrough says so explicitly, because it decrypted nothing.
       intercepted: exchange.intercepted ?? true,
-      // The two fields that make a `net.*` pair replayable rather than merely recorded: which
-      // rule claimed the call, and what a later run looks it up by. Purely additive — a reader
-      // that does not know about them sees the same pair it always did, and their absence means
-      // what it has always meant: agenticreplay holds these bytes and not their meaning.
-      ...(exchange.rule === undefined ? {} : { rule: exchange.rule }),
       ...(exchange.modelDialect === undefined ? {} : { model_dialect: exchange.modelDialect }),
-      ...(translated
-        ? {
-            replay_eligible: false,
-            replay_ineligible_reason: 'origin_response_translated_for_client',
-          }
-        : {}),
-      ...(exchange.replayKey === undefined ? {} : { replay_key: exchange.replayKey }),
-      ...(exchange.batchKey === undefined ? {} : { batch_key: exchange.batchKey }),
       headers: exchange.requestHeaders,
       bytes: exchange.requestBytes,
       truncated: exchange.requestTruncated,
@@ -531,16 +462,6 @@ export async function persistNetExchange(
       // Only when it happened, so a normal exchange carries no field saying it was normal. It
       // reads differently from `truncated`: the agent stopped reading, agenticreplay did not stop keeping.
       ...(exchange.abandoned ? { abandoned: true } : {}),
-      ...(exchange.rule === undefined ? {} : { rule: exchange.rule }),
-      ...(exchange.replayKey === undefined ? {} : { replay_key: exchange.replayKey }),
-      // A digest of the answer. Under `--retrieval-store=digest` it is *instead* of the answer,
-      // and `stored` says which, so nothing has to infer the difference from an empty payload.
-      ...(exchange.responseDigest === undefined
-        ? {}
-        : {
-            response_sha256: exchange.responseDigest,
-            stored: exchange.responseBody === '' ? 'digest' : 'full',
-          }),
       duration_ms: exchange.durationMs,
     },
     ...(exchange.responseTruncated

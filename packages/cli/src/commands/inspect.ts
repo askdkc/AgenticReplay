@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises';
 import {
   TraceReader,
   chainTo,
-  deriveCheckpoints,
   listRuns,
   pickChainTarget,
   resolveRunSelector,
@@ -21,7 +20,7 @@ import {
 import { priceFor } from '@agenticreplay/providers';
 import type { Output } from '../out.js';
 import type { ParsedArgs } from '../args.js';
-import { formatCost } from './compare.js';
+import { formatCost } from './cost.js';
 import { renderChainCard, renderGraphCard, scopeForCard } from '../share-card.js';
 import { cardTarget, gifFrames, svgToPng, svgsToGif, type CardFormat } from '../rasterize.js';
 import { recordableOrigin, unusableOrigin } from '@agenticreplay/proxy';
@@ -43,20 +42,13 @@ export async function listCommand(
     out.plain('  agenticreplay record claude      # record one');
     return;
   }
-  // FROM is what makes a directory full of `agenticreplay compare` output readable: four runs with no
-  // stated relationship are four mysteries, and the relationship is already in every manifest.
+  // Keep a parent relation visible when reading an older run with replay provenance.
   out.table(
     ['RUN', 'CREATED', 'FROM', 'DIR'],
     runs.map((r) => [
       r.runId,
       r.createdAt,
-      // `@<seq>` only where there is a fork point. A replay trace has a parent and no checkpoint,
-      // and `run_x@?` reads as missing data rather than as the different thing it is.
-      r.parentRun === undefined
-        ? ''
-        : r.forkPoint === undefined
-          ? r.parentRun
-          : `${r.parentRun}@${r.forkPoint}`,
+      r.parentRun ?? '',
       r.dir,
     ]),
   );
@@ -222,32 +214,6 @@ export async function showCommand(
       cost: formatCost(cost),
     });
   }
-}
-
-/** `agenticreplay checkpoints` — where can I fork from? */
-export async function checkpointsCommand(
-  args: ParsedArgs,
-  out: Output,
-  cwd = process.cwd(),
-): Promise<void> {
-  const reader = await TraceReader.open(
-    (await resolveRunSelector(cwd, args.positionals[0] ?? 'last')).dir,
-  );
-  const events = await reader.events();
-  const checkpoints = deriveCheckpoints(events);
-
-  if (checkpoints.length === 0) {
-    out.plain('no checkpoints in this run');
-    out.plain('  checkpoints need a filesystem snapshot; was this recorded with --no-fs?');
-    return;
-  }
-
-  out.table(
-    ['SEQ', 'TURN', 'TREE'],
-    checkpoints.map((c) => [String(c.seq), String(c.turn), (c.fsTree ?? '').slice(0, 12)]),
-  );
-  out.plain('');
-  out.plain(`  agenticreplay replay last --from ${checkpoints.at(-1)!.seq} --model <other-model>`);
 }
 
 /**

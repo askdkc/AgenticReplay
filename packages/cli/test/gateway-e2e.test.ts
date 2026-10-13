@@ -9,7 +9,6 @@ import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
 const run = promisify(execFile);
@@ -77,17 +76,7 @@ describe('end to end: a gateway that spawns the agent', () => {
     expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toContain('fixed = true');
   });
 
-  it('replays the whole thing offline, gateway and agent together', async () => {
-    const result = await record('generic-openai');
-    const before = model.calls.length;
-
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    expect(replay.canonicalExact).toBe(2);
-    expect(replay.unmatched).toBe(0);
-    expect(model.calls.length).toBe(before);
-  });
+  
 
   it('works through the openclaw adapter, which is written for exactly this', async () => {
     // The adapter cannot launch the real `openclaw` binary here, but the environment it builds is

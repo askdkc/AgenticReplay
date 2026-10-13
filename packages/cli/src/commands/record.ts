@@ -403,30 +403,10 @@ async function runRecording(
   /** The status those errors carried, so the warning can name it rather than describe it. */
   const errorStatuses = new Map<number, number>();
 
-  /**
-   * How much of a retrieval answer to keep.
-   *
-   * `full` by default, because it is the only setting that can be replayed. `digest` exists
-   * because these bodies are large in a way a chat response is not — six paragraphs at 768
-   * dimensions is 98 KB of JSON floats, and an index build makes thousands of such calls — so a
-   * recording made to check that a later run agrees, rather than to reproduce one, can keep the
-   * hash and none of the vectors.
-   */
-  const retrievalStore = args.str('retrieval-store') ?? 'full';
-  if (retrievalStore !== 'full' && retrievalStore !== 'digest') {
-    throw new Error(
-      `--retrieval-store must be 'full' or 'digest', not '${retrievalStore}'\n` +
-        '  full   keep the response, so the run can be replayed offline\n' +
-        '  digest keep only its sha256, which proves a later run agreed but cannot serve it',
-    );
-  }
-
   const proxy = await createProxy({
-    mode: 'record',
     upstream: plan.upstream,
     upstreamHeaders: plan.headers,
     upstreamHeadersOrigin: plan.headersOrigin,
-    retrievalStore,
     onRequestStart: startRequest,
     onExchange: (exchange: RecordedExchange) => {
       modelExchanges += 1;
@@ -501,6 +481,7 @@ async function runRecording(
    * the exit code is unknown rather than zero, so it is left absent.
    */
   async function abandon(err: unknown): Promise<never> {
+    if (fs) await fs.dispose().catch(() => undefined);
     await proxy.close().catch(() => undefined);
     await writes.drain().catch(() => undefined);
     if (ca) await ca.dispose().catch(() => undefined);
@@ -535,7 +516,7 @@ async function runRecording(
 
       // Listed before the agent starts, so the file it writes can be told from the ones already
       // there. The harness's transcript is the only record of what the person typed; without it an
-      // interactive run is captured but not replayable.
+      // interactive run is captured but its API exchanges remain the primary conversation record.
       const before = await snapshotDir(adapter.session?.dir(cwd, process.env));
 
       if (shell) {
@@ -768,8 +749,7 @@ async function runRecording(
   /**
    * The harness's own transcript, and with it the prompts nothing on the wire carries.
    *
-   * Written before `run.end` so it is part of the run rather than an appendix, and stored as the
-   * harness's own bytes so a fork can put the file back and resume into it natively.
+   * Written before `run.end` so it is part of the run rather than an appendix, and stored as a compact action note so interactive prompts that never reached the API remain visible.
    */
   let session: Awaited<ReturnType<typeof captureSession>>;
   if (adapter.session) {
@@ -781,29 +761,20 @@ async function runRecording(
   }
   if (session) {
     await writer.append({
-      type: 'session.snapshot',
+      type: 'note',
       actor: 'harness',
       turn,
       attrs: {
+        rule: 'session_prompts',
         harness: adapter.id,
-        session_id: session.id,
-        ...(session.title === undefined ? {} : { title: session.title }),
-        rel_path: session.relPath,
         prompts: session.prompts.length,
-        bytes: session.bytes.byteLength,
       },
-      // The writer spills anything over the inline limit to a content-addressed blob, so the
-      // transcript rides the same path every other large payload does — redaction included.
-      payload: {
-        prompts: session.prompts,
-        transcript: new TextDecoder().decode(session.bytes),
-      },
+      payload: { prompts: session.prompts },
     });
   }
 
   const observed = networkExchanges;
   if (requestTurns.size !== networkExchanges) writer.markCaptureIncomplete('unfinalized_request');
-  if (retrievalStore === 'digest') writer.markCaptureIncomplete('body_storage_disabled');
   writer.setCaptureSummary({
     status: observed > 0 ? 'complete' : 'incomplete',
     issues: observed > 0 ? [] : ['no_requests_observed'],
@@ -853,56 +824,25 @@ async function runRecording(
     // are guessing at. A call agenticreplay forwarded is a call the agent made *to agenticreplay*: the variables
     // were read and the redirection worked, so "the agent never called the proxy" is false on its
     // face and costs the reader a search through a configuration that was right all along.
-    const captured = proxy.stats().retrievalTotal;
-    const opaque = proxy.stats().passedThrough - captured;
+    const opaque = proxy.stats().passedThrough;
     const paths = unclaimed.list();
 
-    // An index build is the case: every call it makes is an embedding, and every one of them is
-    // recorded *and* replayable. There is nothing wrong with that run, and warning about it would
-    // teach someone to ignore the line that matters. Said as a fact rather than as a problem.
-    const retrievalOnly = captured > 0 && opaque === 0;
-    const cause =
-      opaque > 0
-        ? `the agent called the proxy ${opaque} time(s), on ` +
-          `${paths.length > 0 ? paths.join(', ') : 'paths no wire dialect claims'} — recorded as ` +
-          'network traffic rather than as replayable model exchanges'
-        : baseUrls.length > 0
-          ? 'the agent never called the proxy — it may not read a base-URL variable'
-          : adapter.capture === 'config'
-            ? // Not a missing flag. This adapter redirects by writing the harness's own config,
-              // so an empty capture means there was nothing in that config to redirect — the
-              // harness has no provider configured, or it is on a built-in login whose origin a
-              // file cannot move. Telling this operator to add `--tls-intercept` would send them
-              // after a route that cannot work: MiniMax Code's client is Node's `fetch`, which
-              // reads no proxy variable, so interception sees nothing either.
-              `${adapter.id} is redirected through its own config, and this run had no ` +
-              'configured provider to redirect'
-            : tls.ca
-              ? 'this adapter captures at the transport, and nothing agenticreplay decrypted looked like a model call'
-              : 'this adapter captures at the transport, and interception was not on';
-    if (retrievalOnly) {
-      out.info('capture.retrieval_only', {
-        exchanges: 0,
-        retrieval: captured,
-        // Under `digest` the trace holds a hash of each answer and not the answer, so promising
-        // an offline replay would be a claim this run cannot meet — which is the shape of
-        // dishonesty every other line here exists to avoid.
-        note:
-          retrievalStore === 'digest'
-            ? 'this run made no model calls, and --retrieval-store=digest kept only a hash of ' +
-              'each answer: enough to check a later run agreed, not enough to replay'
-            : 'this run made no model calls; its retrieval calls are recorded and replay offline',
-      });
-    } else {
-      out.warn('capture.empty', {
-        exchanges: 0,
-        cause,
-        ...(opaque > 0 ? { passed_through: opaque } : {}),
-        ...(captured > 0 ? { retrieval: captured } : {}),
-        set: baseUrls.join(',') || 'none',
-        next: opaque > 0 ? 'agenticreplay show to read what was forwarded' : 'agenticreplay doctor',
-      });
-    }
+    out.warn('capture.empty', {
+      exchanges: 0,
+      cause:
+        opaque > 0
+          ? `the agent called the proxy ${opaque} time(s), on ${paths.length > 0 ? paths.join(', ') : 'unclassified paths'}; those requests are recorded as network traffic`
+          : baseUrls.length > 0
+            ? 'the agent never called the proxy — it may not read a base-URL variable'
+            : adapter.capture === 'config'
+              ? `${adapter.id} is redirected through its own config, and this run had no configured provider to redirect`
+              : tls.ca
+                ? 'this adapter captures at the transport, and nothing agenticreplay decrypted looked like a model call'
+                : 'this adapter captures at the transport, and interception was not on',
+      ...(opaque > 0 ? { passed_through: opaque } : {}),
+      set: baseUrls.join(',') || 'none',
+      next: opaque > 0 ? 'agenticreplay show to read what was forwarded' : 'agenticreplay doctor',
+    });
   }
 
   /**
@@ -952,30 +892,11 @@ async function runRecording(
     });
   }
 
-  /**
-   * A recording that captured turns but cannot be replayed.
-   *
-   * `capture.empty` covers the run that recorded nothing. This is the other half: an interactive
-   * run records its model calls perfectly, but the prompts that caused them were typed into a
-   * terminal and exist nowhere agenticreplay can see. Replaying it launches an agent with nothing to make
-   * it ask anything, and it comes back blank — which the user discovers only after paying for the
-   * recording. Saying so here, while they are still looking at it, is the whole point.
-   */
-  const drivable = args.passthrough.length > 0 || (session?.prompts.length ?? 0) > 0;
-  if (modelExchanges > 0 && !drivable) {
-    out.warn('replay.undrivable', {
-      exchanges: modelExchanges,
-      cause: adapter.session
-        ? 'no prompt in argv, and none found in the harness transcript'
-        : `no prompt in argv, and ${adapter.id} exposes no transcript agenticreplay can read`,
-      effect: 'this run can be inspected, but replay and fork have nothing to drive the agent with',
-      next: `agenticreplay show ${writer.runId}`,
-    });
-  }
+  if (fs) await fs.dispose().catch(() => undefined);
 
   out.plain('');
-  out.plain(`  agenticreplay replay ${writer.runId}            # reproduce it exactly`);
-  out.plain(`  agenticreplay replay ${writer.runId} --ui       # open the timeline`);
+  out.plain(`  agenticreplay show ${writer.runId}             # inspect the recorded activity`);
+  out.plain(`  agenticreplay ui ${writer.runId}               # open the timeline`);
 
   return {
     runId: writer.runId,

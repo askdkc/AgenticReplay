@@ -6,9 +6,7 @@ import { Output } from './out.js';
 import { attachCommand } from './commands/attach.js';
 import { quickstartCommand } from './commands/quickstart.js';
 import { recordCommand } from './commands/record.js';
-import { replayCommand } from './commands/replay.js';
 import {
-  checkpointsCommand,
   graphCommand,
   exportCommand,
   gatewayRunsFor,
@@ -17,7 +15,6 @@ import {
   uiCommand,
 } from './commands/inspect.js';
 import { pullCommand, pushCommand } from './commands/sync.js';
-import { compareCommand } from './commands/compare.js';
 import { scrubCommand } from './commands/scrub.js';
 import { gcCommand } from './commands/gc.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -25,12 +22,11 @@ import { modelsCommand, setupCommand } from './commands/setup.js';
 import { withoutCredentials } from '@agenticreplay/proxy';
 import { AGENTICREPLAY_VERSION } from './version.js';
 
-const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record, replay and fork debugger for AI agents
+const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI agent activity
 
-  agenticreplay quickstart                a project, a recorded run and an offline replay of it —
-                                 no key, no agent installed, no network
+  agenticreplay quickstart                a project and a recorded run — no key, no network
         --dir <path>             where to put it (default: ./agenticreplay-quickstart)
-        --full                   the whole timeline and the replay as it happened
+        --full                   show the complete recorded timeline
   agenticreplay record <agent>            run an agent and capture supported API traffic
   agenticreplay attach                    record an agent agenticreplay does not launch — one in a sandbox,
                                  a container, or on another machine
@@ -38,23 +34,7 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record, replay and fork
         --bind <addr>            address to listen on (default: 127.0.0.1)
         --advertise <host>       how the sandbox reaches this machine, when they differ
         --remote-ca-path <p>     where the CA will live over there (default: /tmp/agenticreplay-ca.crt)
-        --replay <run>           serve a recording back to that agent instead of recording,
-                                 for a run whose agent is not on this machine
-  agenticreplay replay [run]              reproduce a run exactly, network off
-        --quiet                  discard the replayed agent's own output, keep the verdict
-        --ui                     open the timeline when it finishes
-  agenticreplay replay [run] --from N     fork from a checkpoint and continue live
-        --model <id>             continue on a different model
-        --no-fs                  fork the conversation only — do not restore the workspace,
-                                 which a pulled run lacks unless it was pushed with --fs
-  agenticreplay compare [run] --models a,b,c
-                                 fork the same checkpoint onto several models
-        --from N                 checkpoint to fork every model from
-        --verify <cmd>           run this in each fork; its exit code is the verdict
-        --no-fs                  as for replay: fork without the workspace
-        --share [f.svg|png]      write the verdict table as a shareable card
   agenticreplay show [run]                the timeline, in the terminal
-  agenticreplay checkpoints [run]         where you can fork from
   agenticreplay graph [run]               what caused what — recorded edges and derived ones
         --to N                   just the chain that produced event N
   agenticreplay export [run] -o file.html a single self-contained file you can attach
@@ -77,23 +57,18 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record, replay and fork
         --gateway <url>          with --remote: where to look (a gateway you named)
         --source gateway|upload  with --remote: what it recorded, or what was pushed
         --limit N                with --remote: how many (default 20)
-  agenticreplay gc --older-than 7d        reclaim space, forks' scratch worktrees included
+  agenticreplay gc --older-than 7d        reclaim old recording data
                                  --keep N, --dry-run
   agenticreplay doctor                    check this machine can record at all
-  agenticreplay setup                     point agenticreplay at a gateway once, to compare many models
+  agenticreplay setup                     point recording at an API gateway
                                  requires an explicit --gateway URL
         --gateway <url>          origin that serves the model APIs
         --key <k> | --key-env V  store the key, or read it from an environment variable
-        --models a,b,c           default model list, so compare needs no flags
   agenticreplay models                    what the configured gateway serves, and what it costs
 
   [run] is a run id, or "last" (the default).
 
 Flags
-  --loose        on replay, continue live past an unmatched request
-  --in-place     replay against this directory as it stands, restoring nothing
-  --worktree     replay in a scratch copy; never touches your files
-  --no-trace     do not record the exact replay itself as a run of its own
   --no-fs        skip filesystem capture
   --no-shell     skip shell capture (PATH shim in front of sh/bash)
   --no-agent-spans  skip the agent-structure layer (OpenAI Agents SDK)
@@ -117,8 +92,7 @@ capture.
   --max-body-bytes <n>         capture ceiling per body (default 67108864); overflow fails capture
   --max-buffered-bytes <n>     aggregate retained-body budget (default 268435456)
   --tls-intercept              decrypt HTTPS for the hosts below, for this run only
-                               replay and fork turn this back on by themselves, using the
-                               hosts the recording names; --no-tls-intercept refuses
+                               decrypt only the selected hosts for this recording
   --tls-hosts a,b,c            decrypt exactly these, replacing the default list
   --tls-hosts +a,+b            decrypt these *as well as* the default model API hosts
                                everything else is tunnelled unread; "*" is refused
@@ -128,7 +102,7 @@ capture.
   If a machine is already behind a TLS-inspecting proxy, name its root in AGENTICREPLAY_TLS_UPSTREAM_CA.
 
 Sending traffic somewhere other than the vendor — a gateway, a proxy, a local model — is what
-these two are for. They apply to record, replay, fork and compare alike:
+these two are for:
 
   --upstream-anthropic <url>   origin for /v1/messages       (env AGENTICREPLAY_UPSTREAM_ANTHROPIC)
   --upstream-openai <url>      origin for /chat/completions  (env AGENTICREPLAY_UPSTREAM_OPENAI)
@@ -139,7 +113,7 @@ Everything after -- goes to the agent:
 For a script, an agent, or CI — every command below also answers as data:
 
   --json         one JSON document on stdout, diagnostics on stderr
-                 list · show · events · checkpoints · graph · record · replay · compare
+                 list · show · events · graph · record
                  · doctor
 
   agenticreplay mcp       serve agenticreplay to an agent over MCP on stdio, so it can read its own runs:
@@ -196,23 +170,14 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
 
     switch (args.command) {
       case 'quickstart':
-        // Non-zero when the demo did not actually happen, so a broken environment is a failure a
-        // script can see rather than a wall of green text that says the opposite.
-        return (await quickstartCommand(args, out, cwd)).ok ? 0 : 1;
+        await quickstartCommand(args, out, cwd);
+        return 0;
       case 'record':
         return (await recordCommand(args, out, cwd)).exitCode;
       case 'attach':
         return (await attachCommand(args, out, cwd)).exitCode;
-      case 'replay':
-        return (await replayCommand(args, out, cwd)).exitCode;
-      case 'compare':
-        await compareCommand(args, out, cwd);
-        return 0;
       case 'show':
         await showCommand(args, out, cwd);
-        return 0;
-      case 'checkpoints':
-        await checkpointsCommand(args, out, cwd);
         return 0;
       case 'graph':
         await graphCommand(args, out, cwd);
@@ -355,9 +320,6 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
       case 'events':
         emit(await agenticreplay.events(selector));
         return 0;
-      case 'checkpoints':
-        emit(await agenticreplay.checkpoints(selector));
-        return 0;
       case 'graph':
         emit(
           await agenticreplay.graph(selector, {
@@ -375,14 +337,6 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
         emit(result);
         return result.exitCode;
       }
-      case 'replay': {
-        const result = await replayCommand(args, out, cwd);
-        emit(result);
-        return result.exitCode;
-      }
-      case 'compare':
-        emit(await compareCommand(args, out, cwd));
-        return 0;
       case 'doctor': {
         const result = await doctorCommand(args, out, cwd);
         emit(result);
@@ -397,11 +351,8 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
               'list',
               'show',
               'events',
-              'checkpoints',
               'graph',
               'record',
-              'replay',
-              'compare',
               'doctor',
             ],
           },

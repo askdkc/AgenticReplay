@@ -128,12 +128,6 @@ export const indexRagAdapter: Adapter = {
     // the run read, and a recording that cannot be read without the reader's own disk is not a
     // recording. The cost is real for a large corpus, and `--no-fs` is the way to decline it.
     capture: ['cache', 'vector_store', 'dataset', 'test_results_*.json'],
-    // Whole directories, never "the valid parts". IndexRAG's resume skips by `chunk_id`, and the
-    // cache holds `success: false` entries in the same shape as successes — so keeping what looks
-    // valid promotes the previous run's failures to completed work, which is a worse wrong answer
-    // than the one being fixed.
-    resetBeforeReplay: ['cache', 'vector_store'],
-    concurrencyFlag: { flag: '--concurrency', serialValue: '1' },
   },
 };
 

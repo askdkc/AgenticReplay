@@ -10,8 +10,7 @@ export { fetchPinned } from '@agenticreplay/core';
 
 /**
  * User-level configuration, which exists for exactly one job: let
- * `agenticreplay compare --models a,b,c` reach several models without re-typing a gateway URL and a key on
- * every invocation.
+ * route live model API traffic through the configured gateway while recording.
  *
  * That means this file holds a credential, and everything here follows from it. The file is
  * `0600` inside a `0700` directory, the key can live in an environment variable instead of on
@@ -33,8 +32,6 @@ export interface GatewayConfig {
 
 export interface AgenticReplayConfig {
   gateway?: GatewayConfig;
-  /** Default model list for `agenticreplay compare` when `--models` is not given. */
-  models?: string[];
 }
 
 /** XDG, with the documented fallback. Honours `XDG_CONFIG_HOME` so tests need no real home. */

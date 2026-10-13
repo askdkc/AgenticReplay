@@ -2,11 +2,9 @@ import { resolve } from 'node:path';
 import {
   TraceReader,
   chainTo,
-  deriveCheckpoints,
   listRuns,
   resolveRunSelector,
   runGraph,
-  type Checkpoint,
   type RunGraph,
   type RunRef,
 } from '@agenticreplay/core';
@@ -15,8 +13,6 @@ import { buildTimeline, detectLoops, exportTraceHtml, summarize } from '@agentic
 import { parseArgs } from './args.js';
 import { Output, type LogEntry } from './out.js';
 import { recordCommand, type RecordResult } from './commands/record.js';
-import { replayCommand, type ReplayResult } from './commands/replay.js';
-import { compareCommand, type CompareRow } from './commands/compare.js';
 
 /**
  * Driving agenticreplay from code.
@@ -58,10 +54,6 @@ export interface Timeline {
   eventCount: number;
   /** `null` where the run has no exit code — a trace cut short, not an exit of zero. */
   exitCode: number | null;
-  /** Present when this run came from another — a fork, or an exact replay's own trace. */
-  parentRun?: string;
-  forkPoint?: number;
-  forkModel?: string;
   usage: { input: number; output: number };
   events: TimelineRow[];
   /** Runs where the agent repeated itself rather than making progress. */
@@ -90,28 +82,10 @@ export interface RecordOutcome extends RecordResult {
   warnings: LogEntry[];
 }
 
-export interface ReplayOptions {
-  /** Checkpoint to fork from. Omit for an exact replay. */
-  from?: number;
-  /** Model to run from the fork point onward. */
-  model?: string;
-  /** Run in a scratch worktree instead of over the working tree. */
-  worktree?: boolean;
-  flags?: string[];
-}
-
-export interface CompareOptions {
-  from?: number;
-  models: string[];
-  /** Command whose exit code is the verdict. */
-  verify?: string;
-  flags?: string[];
-}
-
 /**
  * What every command run through this API is told: agenticreplay's stdout belongs to someone else.
  *
- * `record`, `replay` and `compare` all spawn a real agent, and they spawn it with
+ * `record` spawns a real agent with
  * `stdio: 'inherit'` — the file descriptor, which no in-process substitution can intercept. So an
  * embedded caller got the agent's output written over its own, and under `agenticreplay mcp` that
  * descriptor *is* the JSON-RPC transport: one line of agent chatter ends the session.
@@ -156,9 +130,6 @@ export class AgenticReplay {
       adapter: summary.adapter,
       eventCount: summary.eventCount,
       exitCode: summary.exitCode,
-      parentRun: manifest.parent_run,
-      forkPoint: manifest.fork_point,
-      forkModel: manifest.fork_model,
       usage: { input: summary.totalUsage.input, output: summary.totalUsage.output },
       events: buildTimeline(events).map((row) => ({
         seq: row.seq,
@@ -176,11 +147,6 @@ export class AgenticReplay {
         tree: loop.tree,
       })),
     };
-  }
-
-  /** Where a fork can start: points whose conversation prefix is complete and tree was snapshotted. */
-  async checkpoints(selector = 'last'): Promise<Checkpoint[]> {
-    return deriveCheckpoints(await this.events(selector));
   }
 
   /**
@@ -220,23 +186,6 @@ export class AgenticReplay {
       ...result,
       warnings: entries.filter((e) => e.level === 'warn' || e.level === 'error'),
     };
-  }
-
-  async replay(selector = 'last', options: ReplayOptions = {}): Promise<ReplayResult> {
-    const argv = ['replay', selector];
-    if (options.from !== undefined) argv.push('--from', String(options.from));
-    if (options.model !== undefined) argv.push('--model', options.model);
-    if (options.worktree === true) argv.push('--worktree');
-    argv.push(...QUIET, ...(options.flags ?? []));
-    return replayCommand(parseArgs(argv), this.#collect().out, this.cwd);
-  }
-
-  async compare(selector = 'last', options: CompareOptions): Promise<CompareRow[]> {
-    const argv = ['compare', selector, '--models', options.models.join(',')];
-    if (options.from !== undefined) argv.push('--from', String(options.from));
-    if (options.verify !== undefined) argv.push('--verify', options.verify);
-    argv.push(...QUIET, ...(options.flags ?? []));
-    return compareCommand(parseArgs(argv), this.#collect().out, this.cwd);
   }
 
   /** Write the run as one self-contained HTML file. */

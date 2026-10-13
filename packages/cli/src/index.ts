@@ -8,8 +8,6 @@ export * from './serial.js';
 export * from './snapshot.js';
 export * from './share-card.js';
 export * from './commands/record.js';
-export * from './commands/replay.js';
-export * from './commands/compare.js';
 export * from './commands/inspect.js';
 export * from './commands/scrub.js';
 export * from './commands/gc.js';

@@ -62,9 +62,6 @@ export const claudeSession: SessionSupport = {
     return { id, ...(title === undefined ? {} : { title }), prompts };
   },
 
-  resumeArgs(id) {
-    return ['--resume', id];
-  },
 };
 
 /**
@@ -107,9 +104,4 @@ export const claudeCodeAdapter: Adapter = {
     return ['--mcp-config', path, '--strict-mcp-config'];
   },
 
-  /** `-p` is how Claude Code takes a prompt without a terminal, which a replay never has. */
-  driveArgs(prompts, recorded) {
-    const first = prompts[0];
-    return first === undefined ? undefined : [...recorded, '-p', first];
-  },
 };

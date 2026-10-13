@@ -537,28 +537,9 @@ describe('checkAdapterContract', () => {
    * though it could not. The shipped adapter asserts this by hand in its own test; this is where
    * the next one has to answer it.
    */
-  it('refuses a reset path the recording would not hold', async () => {
-    const orphan = goodAdapter({
-      artifacts: { capture: ['vector_store'], resetBeforeReplay: ['cache'] },
-    });
-    expect(await failedChecks(orphan)).toEqual(['artifacts-resettable']);
-    expect(await detailOf(orphan, 'artifacts-resettable')).toContain('cache');
-  });
+  
 
-  it('accepts a reset path the capture covers, however precisely each is spelled', async () => {
-    expect(
-      await failedChecks(
-        goodAdapter({
-          artifacts: {
-            capture: ['cache', 'vector_store', 'dataset'],
-            resetBeforeReplay: ['cache/**', 'vector_store'],
-          },
-        }),
-      ),
-    ).toEqual([]);
-    // And an adapter with no artifacts at all is not asked the question.
-    expect(await failedChecks(goodAdapter())).toEqual([]);
-  });
+  
 
   it('gives a failing result a one-line summary naming the checks', async () => {
     const result = await checkAdapterContract(goodAdapter({ id: 'bad', harnessVersions: 'nope' }));

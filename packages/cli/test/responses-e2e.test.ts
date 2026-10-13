@@ -5,12 +5,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints } from '@agenticreplay/core';
+import { TraceReader } from '@agenticreplay/core';
 import { validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startResponsesModel } from './fixtures/responses-model.mjs';
 
 const run = promisify(execFile);
@@ -96,24 +95,7 @@ describe('end to end: a Responses API agent', () => {
     expect(lines.find((l) => l.includes('capture.empty'))).toBeUndefined();
   });
 
-  it('replays offline, byte for byte, with nothing unmatched', async () => {
-    const result = await record();
-    const before = model.calls.length;
+  
 
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    expect(replay.mode).toBe('exact');
-    expect(replay.canonicalExact).toBeGreaterThan(0);
-    // Nothing went live, and the whole claim behind it: the model was not asked again.
-    expect(replay.liveCalls).toBe(0);
-    expect(model.calls.length).toBe(before);
-  });
-
-  it('derives checkpoints, so the run can be forked', async () => {
-    const result = await record();
-    const reader = await TraceReader.open(result.runDir);
-    const checkpoints = deriveCheckpoints(await reader.events());
-    expect(checkpoints.length).toBeGreaterThan(0);
-  });
+  
 });

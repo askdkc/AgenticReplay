@@ -43,42 +43,7 @@ describe('--json is a valueless flag', () => {
   });
 });
 
-describe('a Responses turn forked onto Claude', () => {
-  /** What the agent resends once it has made one tool call: a message, then a top-level call. */
-  const TURN = {
-    model: 'gpt-5.2',
-    input: [
-      { role: 'user', content: [{ type: 'input_text', text: 'fix the auth test' }] },
-      { role: 'assistant', content: [{ type: 'output_text', text: 'editing auth.ts' }] },
-      { type: 'function_call', call_id: 'call_0', name: 'edit_file', arguments: '{"path":"a.ts"}' },
-      { type: 'function_call_output', call_id: 'call_0', output: 'ok' },
-    ],
-  };
 
-  it('does not produce two assistant messages in a row', () => {
-    // The Anthropic API rejects consecutive same-role messages, so the flagship cross-provider
-    // fork — a Codex run continued on Claude — 400s on its first turn. The tool call belongs to
-    // the assistant turn that precedes it, not to a turn of its own.
-    const canonical = responsesToCanonicalRequest(TURN);
-    const roles = canonical.messages.map((m) => m.role);
-    expect(roles).toEqual(['user', 'assistant', 'user']);
-    expect(roles.some((r, i) => i > 0 && r === roles[i - 1])).toBe(false);
-  });
-
-  it('keeps the text and the tool call together in that assistant turn', () => {
-    const canonical = responsesToCanonicalRequest(TURN);
-    expect(canonical.messages[1]!.content).toEqual([
-      { type: 'text', text: 'editing auth.ts' },
-      { type: 'tool_use', id: 'call_0', name: 'edit_file', input: { path: 'a.ts' } },
-    ]);
-  });
-
-  it('survives translation into the Anthropic wire shape', () => {
-    const wire = canonicalToAnthropicRequest(responsesToCanonicalRequest(TURN));
-    const roles = (wire['messages'] as { role: string }[]).map((m) => m.role);
-    expect(roles.some((r, i) => i > 0 && r === roles[i - 1])).toBe(false);
-  });
-});
 
 describe('the embedded API never lets an agent write to the caller’s stdout', () => {
   let workspace: string;
@@ -143,18 +108,7 @@ describe('the embedded API never lets an agent write to the caller’s stdout', 
   });
 });
 
-describe('compare forwards the flags its forks need', () => {
-  it('passes --json down, so a forked agent cannot print into the document', () => {
-    // compare shells out to replay for every model. A flag dropped here is a silent no-op one
-    // layer down — the same class of bug --tls-intercept was already fixed for in this function.
-    const forwarded = forkFlagsFor(['compare', 'last', '--models', 'a,b', '--json']);
-    expect(forwarded).toContain('--json');
-  });
 
-  it('does not pass --json down when it was not asked for', () => {
-    expect(forkFlagsFor(['compare', 'last', '--models', 'a,b'])).not.toContain('--json');
-  });
-});
 
 /**
  * The flags `compare` builds for one fork.

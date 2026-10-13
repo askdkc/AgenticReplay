@@ -49,10 +49,6 @@ export const VALUELESS = new Set([
   'remote',
   'ui',
   'json',
-  'loose',
-  'in-place',
-  'worktree',
-  'trace',
   'fs',
   'shell',
   'agent-spans',
@@ -69,9 +65,7 @@ export const VALUELESS = new Set([
   // reproduced a different run than the one asked for, in silence. `flags.test.ts` now reads the
   // source and holds this list to every flag the code treats as a boolean, so the next one added
   // without an entry here fails a test rather than a user.
-  'quiet',
   'full',
-  'serialize',
   // `-h` parses to the body "h" (short flags take one dash), and main.ts reads it with
   // args.bool('h'). Found by the derived invariant test the day it was written, which is the
   // point of deriving it — the hand-written list had missed this one too.
@@ -94,7 +88,6 @@ export const VALUELESS = new Set([
  * than nine times by hand — which is what `agenticreplay gc --keep` had been doing alone.
  */
 export const NUMERIC = new Set([
-  'from',
   'to',
   'port',
   'keep',

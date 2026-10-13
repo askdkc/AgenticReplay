@@ -7,9 +7,8 @@
 #
 #   docker run -i --rm -v "$PWD/.agenticreplay:/work/.agenticreplay:ro" agenticreplay
 #
-# Read-only is deliberate. `agenticreplay replay` and `agenticreplay compare` execute a real agent and can spend
-# money, so a container that only ever reads is the honest default; drop `:ro` if you mean to
-# fork from in here.
+# Read-only is deliberate. This image is for inspecting traces, not changing them. Keep the mount
+# read-only when an agent only needs to review recorded activity.
 FROM node:24-alpine AS build
 WORKDIR /src
 COPY . .

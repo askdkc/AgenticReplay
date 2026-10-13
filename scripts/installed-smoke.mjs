@@ -88,6 +88,8 @@ const smokeEnv = {
 const help = await exec(bin, ['--help'], commandOptions(consumerDir, smokeEnv));
 if (!help.stdout.includes('agenticreplay record') || !help.stdout.includes('agenticreplay mcp'))
   throw new Error('installed CLI help is incomplete');
+if (/agenticreplay (replay|fork|compare|checkpoints)\b/.test(help.stdout))
+  throw new Error('installed CLI still advertises a re-execution command');
 
 const cliPackage = JSON.parse(
   await readFile(join(consumerDir, 'node_modules', 'agenticreplay', 'package.json'), 'utf8'),
@@ -195,6 +197,12 @@ if (
 const shown = await exec(bin, ['show', runId, '--json'], commandOptions(consumerDir, smokeEnv));
 if (!shown.stdout.includes(runId))
   throw new Error('installed show did not return the recorded run');
+const listed = await exec(bin, ['list', '--json'], commandOptions(consumerDir, smokeEnv));
+if (!listed.stdout.includes(runId))
+  throw new Error('installed list did not include the recorded run');
+const timeline = await exec(bin, ['timeline', runId, '--json'], commandOptions(consumerDir, smokeEnv));
+if (!timeline.stdout.includes(runId) && !timeline.stdout.includes('net.request'))
+  throw new Error('installed timeline did not return the recorded events');
 const exportPath = join(consumerDir, 'run.html');
 await exec(bin, ['export', runId, '-o', exportPath], commandOptions(consumerDir, smokeEnv));
 const exported = await readFile(exportPath, 'utf8');
@@ -225,23 +233,6 @@ if (
   throw new Error('stored request body did not prove explicit redaction');
 if (responseEvent?.payload !== sseBody)
   throw new Error('stored response body did not preserve the complete SSE sentinel');
-await new Promise((resolve) =>
-  endpoint.close(() => {
-    endpointClosed = true;
-    resolve();
-  }),
-);
-const replayed = await exec(
-  bin,
-  ['replay', runId, '--in-place', '--no-trace', '--no-fs', '--json'],
-  commandOptions(consumerDir, smokeEnv),
-);
-const replayResult = JSON.parse(replayed.stdout);
-const canonicalExact = replayResult.canonical_exact ?? replayResult.canonicalExact;
-const liveCalls = replayResult.live_calls ?? replayResult.liveCalls ?? 0;
-if (typeof canonicalExact !== 'number' || liveCalls !== 0)
-  throw new Error(`installed replay did not report an offline verdict: ${replayed.stdout}`);
-
 mcpProcess = spawn(bin, ['mcp'], {
   cwd: consumerDir,
   env: { ...process.env, ...smokeEnv },
@@ -277,6 +268,8 @@ await new Promise((resolve, reject) => {
         return finish(
           new Error(`installed MCP tool identity is missing AgenticReplay names: ${line}`),
         );
+      if (message.result.tools.some((tool) => /replay|fork|compare|checkpoint/i.test(tool.name)))
+        return finish(new Error(`installed MCP still advertises re-execution tools: ${line}`));
       return finish();
     }
   });
@@ -300,8 +293,9 @@ console.log(
         'packed metadata identity',
         'record endpoint body',
         'show',
+        'list',
+        'timeline',
         'export',
-        'replay',
         'MCP tool identity',
       ],
     },

@@ -4,10 +4,10 @@
 
 AgenticReplay logs AI API traffic to help debug and improve AI harnesses. It captures requests
 and responses from supported clients, including reasoning/thinking content or summaries returned
-by the API.
+by the API. It also records tool, shell, MCP and filesystem activity that helps explain an agent run.
 
-Compare the trace with tool results, captured shell commands and file changes to find where a run
-went wrong.
+Browse the timeline, inspect the causal graph, and export a self-contained HTML report to find
+where a run went wrong.
 
 ## Install
 

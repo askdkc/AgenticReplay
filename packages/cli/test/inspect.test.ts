@@ -341,30 +341,7 @@ describe('inspect commands', () => {
     });
   });
 
-  describe('checkpoints', () => {
-    it('lists forkable points and the command to use one', async () => {
-      await makeRun();
-      await checkpointsCommand(parseArgs(['checkpoints', 'last']), out, cwd);
-      const rendered = text();
-      expect(rendered).toMatch(/SEQ\s+TURN\s+TREE/);
-      expect(rendered).toContain('agenticreplay replay last --from');
-    });
-
-    it('explains the likely cause when a run has none', async () => {
-      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
-        adapter: { id: 'claude-code' },
-        argv: ['claude'],
-        cwd,
-        agenticreplayVersion: '0.1.0',
-      });
-      await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
-      await writer.close(0);
-
-      await checkpointsCommand(parseArgs(['checkpoints', 'last']), out, cwd);
-      expect(text()).toContain('no checkpoints');
-      expect(text()).toContain('--no-fs');
-    });
-  });
+  
 
   describe('export', () => {
     it('states what is about to leave the machine before writing it', async () => {

@@ -5,19 +5,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, deriveCheckpoints, resolveRunSelector } from '@agenticreplay/core';
+import { TraceReader } from '@agenticreplay/core';
 import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
-import {
-  MCP_SOURCE_FILENAME,
-  mcpForReplay,
-  mcpSourceFrom,
-  setupMcpCapture,
-  usedMcp,
-} from '../src/mcp.js';
+import { setupMcpCapture } from '../src/mcp.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 
 const run = promisify(execFile);
@@ -153,111 +146,7 @@ describe('mcp capture', () => {
     expect(runEnd!.mono_us - request!.mono_us).toBeGreaterThan(300_000);
   });
 
-  describe('replay and fork', () => {
-    // Replay and fork launch the same agent the recording did, so they share its blind spot: with
-    // no config the harness talks to servers agenticreplay cannot see, or — for one that requires the
-    // variable — does not start at all. Found by building a demo: replaying a working recording
-    // exited 2 with `matched=0` for a reason that had nothing to do with the recording.
-    it('re-instruments MCP from what the recording used, with no flag', async () => {
-      const recorded = await record();
-      const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      expect(result.exitCode, `the agent must still run:\n${lines.join('\n')}`).toBe(0);
-      expect(result.canonicalExact).toBeGreaterThan(0);
-
-      const traceDir = (await resolveRunSelector(workspace, result.traceRunId!)).dir;
-      const events = await (await TraceReader.open(traceDir)).events();
-      const mcp = events.filter((e) => e.type.startsWith('mcp.'));
-      expect(mcp.length, 'the replay discovered these calls; they exist nowhere else').toBe(2);
-      expect(mcp[0]!.attrs?.server).toBe('echo');
-      expect(recorded.runDir).not.toBe(traceDir);
-    });
-
-    it('records which config the recording used, since argv cannot carry it', async () => {
-      // `manifest.argv` holds the agent's own arguments and `--mcp-config` is agenticreplay's, so without
-      // this note a replay has no way to find the source config at all.
-      const recorded = await record();
-      const events = await (await TraceReader.open(recorded.runDir)).events();
-      const note = events.find((e) => e.type === 'note' && e.attrs?.rule === 'mcp_instrumented');
-      expect(note, 'no mcp_instrumented note').toBeDefined();
-      expect(note!.attrs?.source).toBe(join(workspace, 'mcp.json'));
-    });
-
-    it('captures MCP past the fork point too', async () => {
-      await record();
-      const checkpoints = deriveCheckpoints(
-        await (await TraceReader.open((await resolveRunSelector(workspace, 'last')).dir)).events(),
-      );
-      const result = await replayCommand(
-        parseArgs([
-          'replay',
-          'last',
-          '--from',
-          String(checkpoints[0]!.seq),
-          '--model',
-          'claude-haiku-4-5',
-          '--upstream-anthropic',
-          model.url,
-        ]),
-        out,
-        workspace,
-      );
-
-      const forkDir = (await resolveRunSelector(workspace, result.forkRunId!)).dir;
-      const events = await (await TraceReader.open(forkDir)).events();
-      const mcp = events.filter((e) => e.type.startsWith('mcp.'));
-      expect(mcp.length, `no mcp events in the fork:\n${lines.join('\n')}`).toBe(2);
-      for (const event of mcp) expect(validateEvent(event).valid).toBe(true);
-    });
-
-    it('replays a moved config, because the recording kept the bytes', async () => {
-      // This used to warn `mcp.source_missing` and drop the layer, and that was the best it could
-      // do: the replay found the config by reading a path out of the trace, so a config the
-      // operator moved was a config the replay could not open. The recording now keeps its own
-      // copy, which also removes the reason the path had to survive redaction — see
-      // `MCP_SOURCE_FILENAME`.
-      //
-      // The config lives *outside* the workspace here, because exact replay restores the recorded
-      // tree over the working directory — deleting a file that was in the snapshot just brings it
-      // back, which is the restore working correctly and would make this test pass for the wrong
-      // reason.
-      const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-cfg-'));
-      const configPath = join(elsewhere, 'mcp.json');
-      await writeFile(configPath, await readFile(join(workspace, 'mcp.json'), 'utf8'));
-      await record(configPath);
-      await rm(elsewhere, { recursive: true, force: true });
-      // Only what the replay said: the recording legitimately printed `mcp.instrumented`, and
-      // asserting over both would check the wrong half of the session.
-      lines.length = 0;
-
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      const printed = lines.join('');
-      expect(printed).toContain('mcp.instrumented');
-      expect(printed).not.toContain('mcp.source_missing');
-    });
-
-    it('still says so for a recording made before the copy was kept', async () => {
-      // The warning is not gone, and must not be: a trace recorded by an older agenticreplay has only the
-      // path, and a dropped capture layer must never read as a quiet success. Same run as above
-      // with the kept copy removed, which is exactly what those traces look like.
-      const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-cfg-'));
-      const configPath = join(elsewhere, 'mcp.json');
-      await writeFile(configPath, await readFile(join(workspace, 'mcp.json'), 'utf8'));
-      const { runDir } = await record(configPath);
-      await rm(elsewhere, { recursive: true, force: true });
-      await rm(join(runDir, MCP_SOURCE_FILENAME));
-      lines.length = 0;
-
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      const printed = lines.join('');
-      expect(printed).toContain('mcp.source_missing');
-      expect(printed, 'a dropped capture layer must not read as a quiet success').not.toContain(
-        'mcp.instrumented',
-      );
-    });
-  });
+  
 
   it('attributes a call to the turn it happened during', async () => {
     // The agent calls the server between two model turns, so there is a right answer and a wrong
@@ -275,41 +164,7 @@ describe('mcp capture', () => {
   });
 });
 
-describe('mcpSourceFrom', () => {
-  const note = (source: string) => ({
-    type: 'note',
-    attrs: { rule: 'mcp_instrumented', source },
-  });
 
-  it('prefers the flag over what the recording used', () => {
-    expect(mcpSourceFrom('/given/on/the/command/line.json', [note('/recorded.json')])).toBe(
-      '/given/on/the/command/line.json',
-    );
-  });
-
-  it('falls back to the recording, so a replay needs no flag', () => {
-    expect(mcpSourceFrom(undefined, [note('/recorded.json')])).toBe('/recorded.json');
-  });
-
-  it('is undefined for a run that never had MCP', () => {
-    expect(mcpSourceFrom(undefined, [{ type: 'model.request' }])).toBeUndefined();
-  });
-
-  it('ignores a note of a different rule, and an empty source', () => {
-    expect(
-      mcpSourceFrom(undefined, [
-        { type: 'note', attrs: { rule: 'tls_intercept', source: '/wrong.json' } },
-        { type: 'note', attrs: { rule: 'mcp_instrumented', source: '' } },
-      ]),
-    ).toBeUndefined();
-  });
-
-  it('knows whether a run captured MCP at all', () => {
-    expect(usedMcp([{ type: 'mcp.request' }])).toBe(true);
-    expect(usedMcp([{ type: 'mcp.response' }])).toBe(true);
-    expect(usedMcp([{ type: 'model.request' }, { type: 'note' }])).toBe(false);
-  });
-});
 
 /**
  * The recording keeps the config it was given, so a replay does not depend on a path.
@@ -329,79 +184,7 @@ describe('mcpSourceFrom', () => {
  * `redactions.json` too. The file's own comment says an exemption granted on the label was a hole
  * every time it was tried; this was that hole again.
  */
-describe('the config the recording kept', () => {
-  /** An Output that says nothing, because these assert on files rather than on what was printed. */
-  const quiet = () => new Output({ write: () => {}, isTTY: false });
 
-  let runDir: string;
-  let source: string;
-
-  beforeEach(async () => {
-    runDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-src-'));
-    source = join(runDir, 'given.json');
-    await writeFile(source, CONFIG_TEXT);
-  });
-
-  afterEach(async () => {
-    await rm(runDir, { recursive: true, force: true });
-  });
-
-  const CONFIG_TEXT = `{\n  "mcpServers": {\n    "probe": { "command": "python", "args": ["s.py"] }\n  }\n}\n`;
-
-  it('keeps the bytes it was handed, not a re-serialisation of them', async () => {
-    // Byte for byte, so key order and whitespace a later reader might depend on survive.
-    await setupMcpCapture({ sourceConfigPath: source, runDir, out: quiet() });
-    expect(await readFile(join(runDir, MCP_SOURCE_FILENAME), 'utf8')).toBe(CONFIG_TEXT);
-  });
-
-  it('keeps it beside the rewritten one, at the same mode', async () => {
-    await setupMcpCapture({ sourceConfigPath: source, runDir, out: quiet() });
-    const mode = (await stat(join(runDir, MCP_SOURCE_FILENAME))).mode & 0o777;
-    const rewritten = (await stat(join(runDir, 'mcp-config.json'))).mode & 0o777;
-    expect(mode).toBe(rewritten);
-  });
-
-  it('is what a replay reads, even after the original is gone', async () => {
-    await setupMcpCapture({ sourceConfigPath: source, runDir, out: quiet() });
-    // The case the note could never survive: the operator moved or deleted their config, or the
-    // path in the trace was redacted into something `stat` cannot find.
-    await rm(source);
-
-    const replayDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-replay-'));
-    try {
-      const capture = await mcpForReplay(
-        { str: () => undefined },
-        [{ type: 'note', attrs: { rule: 'mcp_instrumented', source: '/gone/<secret:x>/c.json' } }],
-        { runDir: replayDir } as never,
-        quiet(),
-        undefined,
-        runDir,
-      );
-      expect(capture, 'the replay found nothing to instrument').toBeTruthy();
-      expect(capture?.rewritten).toEqual(['probe']);
-    } finally {
-      await rm(replayDir, { recursive: true, force: true });
-    }
-  });
-
-  it('still falls back to the note, for a run recorded before this', async () => {
-    const replayDir = await mkdtemp(join(tmpdir(), 'agenticreplay-mcp-replay-'));
-    try {
-      const capture = await mcpForReplay(
-        { str: () => undefined },
-        [{ type: 'note', attrs: { rule: 'mcp_instrumented', source } }],
-        { runDir: replayDir } as never,
-        quiet(),
-        undefined,
-        // A directory with no kept copy in it, which is every run recorded before this change.
-        replayDir,
-      );
-      expect(capture?.rewritten).toEqual(['probe']);
-    } finally {
-      await rm(replayDir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe('a capture line that parsed is not yet a frame', () => {
   /**

@@ -1,9 +1,7 @@
 import type { FileChange } from '@agenticreplay/fs-capture';
 
 export interface SnapshotResult {
-  tree: string;
   changes: FileChange[];
-  firstSnapshot?: boolean;
   /** See `TurnSnapshot.skippedGitlinks`: declared paths this snapshot could not hold. */
   skippedGitlinks?: readonly string[];
   /** See `TurnSnapshot.uncommittedNested`: nested repositories with no commit to record them by. */
@@ -46,9 +44,8 @@ function isTransient(message: string): boolean {
  * Snapshot the workspace, retrying the races that come from watching a process that is still
  * writing.
  *
- * Never throws. A lost snapshot costs one checkpoint; an exception here would cost the user the
- * run they were actually trying to record, which is a far worse trade — and the run is the thing
- * that is hard to reproduce.
+ * Never throws. A lost sample omits file changes for one turn; an exception here would cost the
+ * user the run they were actually trying to record.
  */
 export async function snapshotWithRetry(
   source: SnapshotSource,

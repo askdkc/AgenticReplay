@@ -11,22 +11,12 @@ import {
 import type {
   CanonicalRequest,
   CanonicalResponse,
-  RetrievalRule,
   Usage,
 } from '@agenticreplay/plugin-api';
 import type { CaptureTransformation } from '@agenticreplay/schema';
 import {
   anthropicToCanonicalRequest,
   anthropicToCanonicalResponse,
-  canonicalToAnthropicRequest,
-  canonicalToAnthropicResponse,
-  canonicalToAnthropicSse,
-  canonicalToOpenaiRequest,
-  canonicalToOpenaiResponse,
-  canonicalToOpenaiSse,
-  canonicalToResponsesRequest,
-  canonicalToResponsesResponse,
-  canonicalToResponsesSse,
   openaiToCanonicalRequest,
   openaiToCanonicalResponse,
   parseAnthropicSse,
@@ -45,46 +35,21 @@ import {
 } from './dialects.js';
 import { decodeForwardPath, type ForwardPath } from './forward.js';
 import {
-  consume,
-  defaultRetrievalRules,
-  indexRetrievals,
-  selectRetrievalRule,
-  type RecordedRetrieval,
-  type RetrievalStore,
-} from './retrieval.js';
-import {
   attachTlsIntercept,
   decodeBody,
   DEFAULT_MAX_CAPTURED_BYTES,
-  type InterceptDecision,
-  type InterceptResponse,
   type NetExchange,
   type NetRequest,
   type TlsInterceptOptions,
 } from './intercept.js';
-import { RequestMatcher, type Divergence } from './matching.js';
 
 export type {
-  InterceptDecision,
   InterceptFailure,
-  InterceptForward,
-  InterceptResponse,
   NetExchange,
   NetRequest,
   TlsInterceptOptions,
   TunnelRecord,
 } from './intercept.js';
-
-/**
- * The interception point.
- *
- * Exact, fork and compare are not three subsystems — they are this one server with a cursor: the
- * position in the recorded stream where it stops serving from disk and starts serving from the
- * network. `record` puts the cursor before everything, `replay` after everything, `hybrid` at
- * `forkAt`.
- */
-
-export type ProxyMode = 'record' | 'replay' | 'hybrid';
 
 function scalarHeaders(headers: Record<string, string | string[]>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -172,30 +137,6 @@ function captureEncodingTransformation(
   ];
 }
 
-function protocolTranslationTransformation(
-  from: string,
-  to: string,
-  location = 'response.body',
-): CaptureTransformation {
-  return {
-    kind: 'encoding',
-    location,
-    rule: 'provider-protocol-translation',
-    count: 1,
-    reason: `${from} response translated to ${to} for the client`,
-  };
-}
-
-function modelOverrideTransformation(from: string, to: string): CaptureTransformation {
-  return {
-    kind: 'encoding',
-    location: 'request.body',
-    rule: 'model-override-and-serialization',
-    count: 1,
-    reason: `${from} request model overridden with ${to} and serialized for the live fork`,
-  };
-}
-
 function captureUrlTransformations(origin: string): CaptureTransformation[] {
   const scrubbed = recordableOrigin(origin);
   if (scrubbed === undefined || scrubbed === origin) return [];
@@ -245,24 +186,6 @@ export function betasForModelChange(value: string): string | undefined {
     .map((flag) => flag.trim())
     .filter((flag) => flag !== '' && !MODEL_GATED_BETAS.some((re) => re.test(flag)));
   return kept.length > 0 ? kept.join(',') : undefined;
-}
-
-/** The outbound headers for a live call, reconciled with a model the recording did not use. */
-function headersForModel(
-  headers: Record<string, string>,
-  forkModel: string | undefined,
-): Record<string, string> {
-  if (forkModel === undefined) return headers;
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== 'anthropic-beta') {
-      out[key] = value;
-      continue;
-    }
-    const kept = betasForModelChange(value);
-    if (kept !== undefined) out[key] = kept;
-  }
-  return out;
 }
 
 /**
@@ -461,155 +384,27 @@ export interface RecordedExchange {
 }
 
 export interface ProxyOptions {
-  mode: ProxyMode;
-  /** Recorded exchanges, for replay and hybrid. */
-  exchanges?: RecordedExchange[];
-  /** Index at which hybrid mode stops replaying and goes live. */
-  forkAt?: number;
-  /** Model to substitute on live requests — the whole point of `--model` on a fork. */
-  forkModel?: string;
-  /** Continue live instead of halting when replay finds no match. */
-  loose?: boolean;
   upstream?: Record<string, string>;
   dialects?: Dialect[];
   onExchange?: (e: RecordedExchange) => void;
   onRequestStart?: (request: NetRequest) => void | Promise<void>;
-  /** Maximum bytes retained per request or response body. */
   maxCapturedBytes?: number;
-  /** Aggregate retained body bytes across concurrent TLS exchanges. */
   maxBufferedBytes?: number;
-  onDivergence?: (d: Divergence & { seq: number }) => void;
-  /** Called once per live call that carried a model substitution. See {@link RouteDecision}. */
-  onRoute?: (decision: RouteDecision) => void;
-  /**
-   * Called when strict replay refuses a request. Separate from `onDivergence` because it is not a
-   * divergence: nothing was served, and the run is over. A count alone leaves the operator staring
-   * at `unmatched: 12` with no reason, which is how this failure stayed invisible.
-   */
-  onUnmatched?: (u: { seq: number; index: number; reason: string }) => void;
   fetchImpl?: typeof fetch;
   host?: string;
   port?: number;
-  /** Extra headers attached to live upstream calls, and the origin they belong to. */
   upstreamHeaders?: Record<string, string>;
-  /**
-   * The origin {@link upstreamHeaders} are meant for, when they belong to one.
-   *
-   * The gateway's key goes on requests to the gateway and on nothing else: a forwarded request
-   * can name a destination the gateway is not, and attaching the credential anyway would hand a
-   * third party a key they were never meant to see. Unset keeps the old behaviour — headers on
-   * every live call — for callers that attach them per purpose rather than per origin.
-   */
   upstreamHeadersOrigin?: string;
-  /**
-   * Where to send a POST whose path no dialect claims.
-   *
-   * AgenticReplay pointed the harness's base URL at itself, so every call the harness makes arrives here —
-   * including the ones agenticreplay has no translator for. Refusing those does not mean "not captured", it
-   * means the agent gets an error for a call that would have worked, from a tool whose whole job is
-   * not to change the run it is watching. Left unset, an origin is inferred; see `passthroughOrigin`.
-   */
   passthroughUpstream?: string;
-  /**
-   * An exchange agenticreplay forwarded but could not interpret.
-   *
-   * Deliberately the same type the TLS interceptor reports unrecognised traffic with, so both
-   * arrive in the trace as `net.request` / `net.response` and a reader does not have to learn a
-   * second shape for the same fact. TLS traffic keeps reporting through `tls.onNetExchange`; this
-   * is the plain-HTTP channel, so a caller wiring both never sees one exchange twice.
-   */
   onNetExchange?: (e: NetExchange) => void;
-  /**
-   * Endpoints whose answer is a function of their request — embeddings, rerank — so a recording
-   * can serve them back without a dialect. Defaults to {@link defaultRetrievalRules}; pass an
-   * empty array to turn the whole mechanism off and have these calls pass through as before.
-   */
-  retrievalRules?: RetrievalRule[];
-  /** Recorded retrieval calls, for replay and hybrid. See {@link RecordedRetrieval}. */
-  retrievals?: RecordedRetrieval[];
-  /**
-   * Whether a recorded retrieval call keeps its response body or only a digest of it.
-   *
-   * `full` is the default and the only one that can be replayed. `digest` exists because the
-   * bodies are large in a way chat responses are not — six paragraphs at 768 dimensions is 98 KB
-   * of JSON floats, and an index build makes thousands of those calls — so a run recorded to
-   * check consistency rather than to reproduce can keep the hash and none of the vectors.
-   */
-  retrievalStore?: RetrievalStore;
-  /**
-   * Terminate TLS for a named set of hosts, for a harness that ignores base-URL variables.
-   *
-   * Absent by default, and absence is the whole safety story: with no `tls` block the server
-   * registers no `'connect'` listener at all, so there is no code path that could decrypt
-   * anything. Opting in is what creates the capability.
-   */
   tls?: TlsInterceptOptions;
 }
 
 export interface ProxyStats {
-  mode: ProxyMode;
-  recorded: number;
-  matchedExact: number;
-  /** Served from the recording, but only after the ladder had to approximate. */
-  matchedInexact: number;
-  divergences: number;
   liveCalls: number;
-  unmatched: number;
-  /** Decrypted HTTPS exchanges. Zero unless TLS interception was asked for. */
   intercepted: number;
-  /** Connections passed through as opaque bytes because their host was not on the list. */
   tunnelled: number;
-  /** Requests forwarded on a path no dialect claims — captured, but not replayable. */
   passedThrough: number;
-  /**
-   * Retrieval calls served from the recording, and how many the recording holds.
-   *
-   * A separate axis from `matchedExact` on purpose. `exact` is a statement about a matching
-   * ladder these calls never climb — they are looked up by their own request, because the answer
-   * is a function of it — and folding them in would make a recording look more faithfully
-   * reproduced the more embeddings it happened to make. Reported as `retrieval=served/total`.
-   */
-  retrievalServed: number;
-  retrievalTotal: number;
-  /** Retrieval calls the recording could not answer and the run had to make live. */
-  retrievalLive: number;
-  /**
-   * Retrieval calls served from a recorded batch whose items arrived in a different order.
-   *
-   * Counted apart from the rest because the bytes were rebuilt rather than handed back: each text
-   * got the vector recorded for that exact text, at its new position. Exact, and worth saying.
-   */
-  retrievalReordered: number;
-  /**
-   * Exchanges served from a position other than the cursor — held from earlier, or stepped over
-   * to. Not a fidelity loss: either the request was byte-identical or it carried a divergence of
-   * its own. It says the run's *order* differed, which is what a worker pool does.
-   */
-  reordered: number;
-}
-
-/** What a run needs to tell the operator, and to tell the child process, about interception. */
-/**
- * One routing decision: which model, which wire format serves it, and where it was sent.
- *
- * `recorded` is the dialect the agent's own request used, which is what makes a cross-provider fork
- * legible — without it, "target: openai" leaves a reader unable to tell a substitution from a run
- * that was OpenAI all along.
- */
-export interface RouteDecision {
-  model: string;
-  /** Dialect that will serve it. */
-  target: string;
-  /** Dialect the agent's request arrived in. */
-  recorded: string;
-  /**
-   * Where the call went, sanitised the way an exchange's `upstream` is: userinfo and query out,
-   * path kept. Absent when the configured origin cannot be sanitised into one, because absent
-   * already means "not recorded" — see {@link recordableOrigin}.
-   */
-  origin?: string;
-  crossProvider: boolean;
-  reason: string;
 }
 
 export interface TlsInterceptInfo {
@@ -675,26 +470,17 @@ export function defaultDialects(): Dialect[] {
       toCanonicalRequest: anthropicToCanonicalRequest,
       toCanonicalResponse: anthropicToCanonicalResponse,
       parseSse: parseAnthropicSse,
-      fromCanonicalRequest: canonicalToAnthropicRequest,
-      fromCanonicalResponse: canonicalToAnthropicResponse,
-      toSse: canonicalToAnthropicSse,
     }),
     openaiDialect({
       toCanonicalRequest: openaiToCanonicalRequest,
       toCanonicalResponse: openaiToCanonicalResponse,
       parseSse: parseOpenaiSse,
-      fromCanonicalRequest: canonicalToOpenaiRequest,
-      fromCanonicalResponse: canonicalToOpenaiResponse,
-      toSse: canonicalToOpenaiSse,
     }),
     // After the chat dialect deliberately: see the note on `responsesDialect`.
     responsesDialect({
       toCanonicalRequest: responsesToCanonicalRequest,
       toCanonicalResponse: responsesToCanonicalResponse,
       parseSse: parseResponsesSse,
-      fromCanonicalRequest: canonicalToResponsesRequest,
-      fromCanonicalResponse: canonicalToResponsesResponse,
-      toSse: canonicalToResponsesSse,
     }),
   ];
 }
@@ -766,7 +552,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   //
   // `fetchImpl` stays the seam the tests inject through; only the default moves.
   const doFetch = options.fetchImpl ?? fetchPinned;
-  const recorded = options.exchanges ?? [];
   const captured: RecordedExchange[] = [];
   // Plain base-URL traffic needs the same aggregate bound as intercepted traffic. This counter
   // covers bodies retained by concurrent fetch responses while each response still streams to the
@@ -774,72 +559,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   let plainBufferedBytes = 0;
   const plainBufferLimit = options.maxBufferedBytes ?? 256 * 1024 * 1024;
 
-  const stats: ProxyStats = {
-    mode: options.mode,
-    recorded: recorded.length,
-    matchedExact: 0,
-    matchedInexact: 0,
-    divergences: 0,
-    liveCalls: 0,
-    unmatched: 0,
-    intercepted: 0,
-    tunnelled: 0,
-    passedThrough: 0,
-    retrievalServed: 0,
-    retrievalTotal: 0,
-    retrievalLive: 0,
-    retrievalReordered: 0,
-    reordered: 0,
-  };
-
-  // In hybrid mode only the exchanges below the fork point are replayable; everything at or above
-  // it must go live, which is exactly what makes a fork a fork.
-  const replayable =
-    options.mode === 'hybrid' ? recorded.slice(0, options.forkAt ?? recorded.length) : recorded;
-  /**
-   * The most requests this proxy has had open at once, and the count it is derived from.
-   *
-   * Only the proxy can know this, and the matcher needs it: a pipeline that issues ten requests
-   * together is answered in whatever order the origin finished them, so a replay's request can
-   * arrive up to nine positions from the cursor. See {@link LOOKAHEAD}.
-   */
-  let inFlight = 0;
-  let peakInFlight = 0;
-  function opened(): void {
-    inFlight += 1;
-    if (inFlight > peakInFlight) peakInFlight = inFlight;
-  }
-  function closed(): void {
-    if (inFlight > 0) inFlight -= 1;
-  }
-
-  // The recorded requests carry placeholders where secrets were; a live replay request carries the
-  // secrets themselves. Without a redactor on this side the two are never in the same
-  // representation, and a recording of any real harness — whose own system prompt carries a
-  // session id — cannot match itself.
-  // Shared with the passthrough failure path, which writes an upstream's own error message into
-  // the trace: a gateway that quotes the call it refused can quote the credential with it, and §7
-  // says never write it — not "write it and let a later layer catch it".
+  const stats: ProxyStats = { liveCalls: 0, intercepted: 0, tunnelled: 0, passedThrough: 0 };
   const redactor = new Redactor();
-  const matcher = new RequestMatcher(
-    replayable.map((e) => e.canonicalRequest),
-    { redactor, concurrency: () => peakInFlight },
-  );
-
-  /**
-   * The recording's retrieval calls, by key, ready to be consumed one at a time.
-   *
-   * Not filtered by the fork point. A fork keeps replaying these past the cursor on purpose: the
-   * vector for a paragraph does not depend on which chat model answers the question afterwards,
-   * so re-embedding it live would spend money to recompute an identical value and leave the
-   * fork's index differing from its parent's for no reason. See `RetrievalRule.forkable`.
-   */
-  const retrievalRules = options.retrievalRules ?? defaultRetrievalRules();
-  const retrievalIndex = indexRetrievals(options.retrievals ?? []);
-  stats.retrievalTotal = (options.retrievals ?? []).length;
 
   const server = createServer((req, res) => {
-    opened();
     void handle(req, res)
       .catch((err: unknown) => {
         // Whatever failed, its message may name the origin it was given — and this body reaches
@@ -851,7 +574,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
         json(res, 500, { error: { message: withoutCredentials(String(err)) } });
       })
-      .finally(closed);
+      ;
   });
 
   /**
@@ -926,175 +649,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     options.tls?.onNetExchange?.(exchange);
   }
 
-  /**
-   * Replay hook for requests inside an intercepted TLS session. The ordinary HTTP proxy reaches
-   * `handle()` below, but the TLS interceptor has already terminated the outer CONNECT and needs
-   * the same matcher before it opens an origin connection.
-   *
-   * Live calls used to return `undefined` here, which forwarded the client's bytes unchanged —
-   * so `agenticreplay replay --from N --model X` on a TLS-intercepted recording echoed `model=X` and then
-   * called the recorded model. `replayed=0 live=0` was the tell: `goLive` never ran, substitution
-   * never had a chance. Same-provider `--model` now rewrites the body and still talks to the
-   * intercepted origin (the only origin that origin's credential can reach). A cross-provider
-   * target would have to leave that host, which this path cannot do; that fails loudly instead of
-   * succeeding with the old model.
-   */
-  function onInterceptedRequest(
-    request: NetRequest,
-  ): InterceptDecision | undefined | Promise<InterceptDecision | undefined> {
-    const path = request.path.split('?')[0] ?? '/';
-    const dialect = selectDialect(dialects, path);
-    if (!dialect || request.method !== 'POST' || request.requestTruncated) return undefined;
-
-    let rawBody: string;
-    try {
-      rawBody = decodeBody(
-        request.requestBytes,
-        Array.isArray(request.requestHeaders['content-encoding'])
-          ? request.requestHeaders['content-encoding'].join(', ')
-          : request.requestHeaders['content-encoding'],
-        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
-      );
-    } catch (err) {
-      if (options.mode !== 'replay' || !options.loose) {
-        stats.unmatched += 1;
-        return replayError(`cannot decode intercepted request body: ${String(err)}`);
-      }
-      return undefined;
-    }
-
-    const result = tryReplay(dialect, rawBody);
-    if (result?.exchange) {
-      return {
-        status: result.exchange.status,
-        headers: {
-          'content-type': result.exchange.streamed ? 'text/event-stream' : 'application/json',
-        },
-        body: result.exchange.rawResponse,
-      };
-    }
-    if (result?.error) return replayError(result.error);
-    return liveIntercepted(dialect, request, rawBody);
-  }
-
-  /**
-   * A decrypted model call the recording will not serve — past the fork point, or unmatched on a
-   * hybrid / `--loose` run. Counted as live the way `handle()` → `goLive` is, so `fork.done`
-   * `live=N` is the number of exchanges the fork actually owned.
-   */
-  function liveIntercepted(
-    dialect: Dialect,
-    request: NetRequest,
-    rawBody: string,
-  ): InterceptDecision | undefined {
-    if (options.forkModel === undefined) {
-      stats.liveCalls += 1;
-      return undefined;
-    }
-
-    const target = dialect.ownsModel(options.forkModel)
-      ? dialect
-      : (dialects.find((d) => d.ownsModel(options.forkModel!)) ?? dialect);
-    const crossProvider = target.id !== dialect.id;
-
-    if (crossProvider) {
-      return replayError(
-        `--model ${options.forkModel} is served by ${target.id}, not the intercepted ` +
-          `${dialect.id} origin ${request.host}:${request.port}. A TLS-intercepted fork cannot ` +
-          `leave the host the recording talked to. Pick a model that origin serves`,
-      );
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawBody);
-    } catch (err) {
-      return replayError(`unparseable request body: ${String(err)}`);
-    }
-    const outboundBody = Buffer.from(
-      JSON.stringify(dialect.withModel(parsed, options.forkModel)),
-      'utf8',
-    );
-    stats.liveCalls += 1;
-    const origin = `https://${request.host}${request.port === 443 ? '' : `:${request.port}`}`;
-    const recordable = recordableOrigin(origin);
-    options.onRoute?.({
-      model: options.forkModel,
-      target: target.id,
-      recorded: dialect.id,
-      ...(recordable === undefined ? {} : { origin: recordable }),
-      crossProvider: false,
-      reason: `served by the recorded dialect ${dialect.id}`,
-    });
-    return { outboundBody };
-  }
-
-  function tryReplay(
-    dialect: Dialect,
-    rawBody: string,
-  ): { exchange?: RecordedExchange; error?: string } | undefined {
-    let canonical: CanonicalRequest;
-    try {
-      canonical = dialect.toCanonicalRequest(JSON.parse(rawBody));
-    } catch (err) {
-      return { error: `unparseable request body: ${String(err)}` };
-    }
-
-    const beyondFork =
-      options.mode === 'hybrid' && matcher.cursor >= (options.forkAt ?? replayable.length);
-    if (beyondFork) return undefined;
-
-    const result = matcher.match(canonical);
-    if (result.matched) {
-      const exchange = replayable[result.index]!;
-      if (result.reordered) stats.reordered += 1;
-      if (result.divergence) {
-        stats.matchedInexact += 1;
-        stats.divergences += 1;
-        options.onDivergence?.({ ...result.divergence, seq: exchange.seq });
-      } else {
-        stats.matchedExact += 1;
-      }
-      return { exchange };
-    }
-
-    stats.unmatched += 1;
-    if (options.mode === 'hybrid' || options.loose) {
-      stats.divergences += 1;
-      options.onDivergence?.({
-        level: 'major',
-        rung: 4,
-        distance: -1,
-        detail: result.reason ?? 'request does not match the recording; served live instead',
-        seq: replayable[result.index]?.seq ?? -1,
-      });
-      return undefined;
-    }
-    const reason = result.reason ?? 'request does not match the recording';
-    options.onUnmatched?.({
-      seq: replayable[result.index]?.seq ?? -1,
-      index: result.index,
-      reason,
-    });
-    return { error: `agenticreplay: replay halted — ${reason}` };
-  }
-
-  function replayError(message: string): InterceptResponse {
-    return {
-      status: 400,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'error',
-        error: {
-          type: 'invalid_request_error',
-          message:
-            `${message}. Re-run with \`agenticreplay replay <run> --loose\` to continue live from this point, ` +
-            'or `agenticreplay show <run>` to see what was recorded.',
-        },
-      }),
-    };
-  }
-
   const interception = options.tls
     ? attachTlsIntercept(
         server,
@@ -1107,7 +661,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
             ? {}
             : { maxBufferedBytes: options.maxBufferedBytes }),
           onRequestStart: options.onRequestStart,
-          ...(options.mode === 'record' ? {} : { onRequest: onInterceptedRequest }),
           onNetExchange: onDecrypted,
         },
         stats,
@@ -1152,122 +705,23 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     forwardBase?: string,
   ): Promise<void> {
     stats.liveCalls += 1;
-
-    // Which dialect actually serves the model we are about to ask for. Without this the origin
-    // came from the *recorded* request, so forking an Anthropic run onto gpt-5.2 posted an
-    // Anthropic body to api.anthropic.com naming a model that does not exist there — the
-    // cross-provider comparison the tool is pitched on could not have worked.
-    // The recorded dialect wins whenever it can serve the model, and only then do we go looking.
-    // Two dialects now share a provider — chat completions and Responses both answer for anything
-    // that is not Claude — so a bare `find` would route every Responses fork to chat completions
-    // and translate a turn that never needed translating.
-    const target =
-      options.forkModel === undefined || dialect.ownsModel(options.forkModel)
-        ? dialect
-        : (dialects.find((d) => d.ownsModel(options.forkModel!)) ?? dialect);
-    const crossProvider = target.id !== dialect.id;
-
-    let parsed: unknown = JSON.parse(rawBody);
-    if (crossProvider) {
-      // Through canonical, which is the only representation both dialects agree on.
-      const canonical = dialect.toCanonicalRequest(parsed);
-      parsed = target.fromCanonicalRequest({ ...canonical, model: options.forkModel! });
-    } else if (options.forkModel) {
-      parsed = dialect.withModel(parsed, options.forkModel);
-    }
-    // A recording must retain the provider's serialized bytes. Re-serializing an unchanged
-    // request silently loses whitespace, field ordering, and unknown textual fields before the
-    // endpoint oracle can compare it. Only a model/provider fork is allowed to construct a new
-    // request body.
-    const outboundBody = options.forkModel === undefined ? rawBody : JSON.stringify(parsed);
-    const requestTranslation =
-      options.forkModel === undefined
-        ? []
-        : [
-            crossProvider
-              ? protocolTranslationTransformation(dialect.id, target.id, 'request.body')
-              : modelOverrideTransformation(dialect.id, options.forkModel),
-          ];
-
-    // Prefer an override for the provider we are actually calling; fall back to the override for
-    // the recorded provider before the vendor default. That fallback is the gateway case, and it
-    // is the common one: someone who passed --upstream-anthropic pointed *this run* at a specific
-    // origin, and a gateway serves both dialects from it. Going to api.openai.com instead because
-    // the fork changed model would ignore an instruction the user gave explicitly.
-    // Where this call goes, in strict order of who decided it. A `/forward/` path names its own
-    // destination — that is the whole point of the encoding — so on a live call that agenticreplay is
-    // merely relaying (record, or a loose replay continuing past its recording) the request's own
-    // base outranks every configured origin: a gateway picked up from `agenticreplay setup` is a default
-    // for calls agenticreplay would otherwise have to guess at, not a licence to readdress one that
-    // announces where it was headed. A fork is different: substituting the model is the operator
-    // choosing where answers come from, so the fork target's explicit upstream — or the gateway —
-    // decides, and the forwarded base is dropped as incoherent for the substitution.
-    const relaying = options.forkModel === undefined && !crossProvider;
+    const outboundBody = rawBody;
     const origin =
-      relaying && forwardBase !== undefined
-        ? forwardBase
-        : (options.upstream?.[target.id] ??
-          options.upstream?.[dialect.id] ??
-          (target.id === 'openai-responses' || target.id === 'codex'
-            ? options.upstream?.openai
-            : undefined) ??
-          target.defaultUpstream);
-    // A relayed call keeps the path the client appended, because the base it names expects
-    // exactly that. Everything else is answered by an origin agenticreplay chose, which expects the
-    // dialect's own path — and the incoming path cannot be trusted to be it: a bare base url
-    // (no `/v1`) reaches this proxy as `/chat/completions`, and a gateway handed that without the
-    // version segment answers 404.
-    //
-    // The query survives the substitution either way, because it is not part of the endpoint's
-    // shape. A path says which endpoint; a query says how to call it, and the client set it —
-    // `?api-version=` is required on every Azure OpenAI call, and dropping it turns a working
-    // configuration into `404 Resource not found` with nothing in the run explaining why.
-    // Replacing a path is agenticreplay normalising an address it chose; replacing the parameters would
-    // be agenticreplay editing the request.
+      forwardBase ??
+      options.upstream?.[dialect.id] ??
+      (dialect.id === 'openai-responses' || dialect.id === 'codex' ? options.upstream?.openai : undefined) ??
+      dialect.defaultUpstream;
     const queryAt = path.indexOf('?');
     const query = queryAt === -1 ? '' : path.slice(queryAt);
-    const upstreamPath =
-      relaying && forwardBase !== undefined ? path : `${target.requestPath}${query}`;
+    const upstreamPath = forwardBase !== undefined ? path : `${dialect.requestPath}${query}`;
 
-    // Spec §2: "a gateway chose a model". AgenticReplay *is* the gateway on this path — it substitutes the
-    // model, picks the wire format that serves it, and picks the origin — and it was making all
-    // three of those choices silently. Which is the one thing a comparison must not do: reading
-    // `claude-opus-5 vs gpt-5.2` in a verdict table tells you nothing about where either went, and
-    // a fork that quietly fell back to the recorded provider's origin looked identical to one that
-    // did not. Emitted only when a decision was actually taken, so an ordinary recording — where
-    // agenticreplay forwards what it was given — stays free of an event saying "nothing was chosen".
-    if (options.forkModel !== undefined) {
-      // Sanitised here for the reason {@link buildExchange} sanitises the exchange's `upstream`,
-      // and it is the same value: an origin that came from configuration rather than off the wire,
-      // so a gateway that authenticates by URL carries its key in it. This payload is not just
-      // reported — `agenticreplay replay --model` and `agenticreplay compare --models` write it into the fork's
-      // trace as `route.decision.attrs` unchanged, and the trace redactor cannot help, because it
-      // matches key shapes and field names and this is a password inside a URL under `origin`.
-      // Omitted rather than replaced when it will not parse: no consumer reads it — the viewer
-      // renders model, target and reason — and a placeholder in a field others may parse as a URL
-      // is worse than the field being absent.
-      const recordable = recordableOrigin(origin);
-      options.onRoute?.({
-        model: options.forkModel,
-        target: target.id,
-        recorded: dialect.id,
-        ...(recordable === undefined ? {} : { origin: recordable }),
-        crossProvider,
-        // Deliberately does not open with the model name: the viewer already renders that as the
-        // row's label, so a reason that repeats it produces `gpt-5.2  gpt-5.2 is served by…` and
-        // spends the row's width saying the same thing twice.
-        reason: crossProvider
-          ? `served by ${target.id}, not the recorded ${dialect.id}`
-          : `served by the recorded dialect ${dialect.id}`,
-      });
-    }
     let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
     try {
       upstreamRes = await doFetch(`${origin}${upstreamPath}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          ...headersForModel(headers, options.forkModel),
+          ...headers,
           ...headersForOrigin(origin),
         },
         body: outboundBody,
@@ -1336,115 +790,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     const upstreamStreamed = upstreamType.includes('event-stream');
     const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
     const responseDecoded = responseEncoding !== undefined && responseEncoding.trim() !== '';
-
-    // The agent asked one provider and must be answered in that provider's shape, whatever served
-    // the request. Handing an agent a `chat.completion` body it cannot parse is indistinguishable
-    // from the model having failed.
-    //
-    // A cross-provider reply cannot be teed: translating it means having all of it, so this path
-    // buffers where the same-provider path streams. That is a real cost and it only applies to a
-    // fork that deliberately changed provider — the recording path, which is what an interactive
-    // session runs through, still streams.
-    if (crossProvider) {
-      const received = await readBoundedResponse(
-        upstreamRes,
-        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
-        plainBufferLimit,
-      );
-      if (received.truncated) {
-        emitNetExchange({
-          path: upstreamPath,
-          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
-          responseBody: received.text,
-          responseBytes: received.bytes,
-          responseTruncated: true,
-          status: upstreamRes.status,
-          responseComplete: false,
-          responseError: 'cross-provider response exceeded capture limit',
-          streamed: upstreamStreamed,
-          modelDialect: target.id,
-          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
-        });
-        res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({ error: { message: 'cross-provider response exceeded capture limit' } }),
-        );
-        return;
-      }
-      const raw = received.text;
-      // Keep the origin bytes even when protocol translation fails. The client receives an error,
-      // but the recorder must still prove that the origin answered and preserve the response that
-      // caused the translation failure.
-      let body: string;
-      const wantsStream = requestedStream(rawBody);
-      try {
-        const canonical = upstreamStreamed
-          ? target.parseStream(raw)
-          : target.toCanonicalResponse(JSON.parse(raw));
-        // Match the shape the agent asked for, not the shape the other provider happened to send.
-        body = dialect.fromCanonicalResponse(canonical, wantsStream);
-      } catch (err) {
-        emitNetExchange({
-          path: upstreamPath,
-          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
-          responseBody: raw,
-          responseBytes: received.bytes,
-          responseTruncated: false,
-          status: upstreamRes.status,
-          responseComplete: received.encodingError === undefined,
-          responseError:
-            received.encodingError ?? `cross-provider response translation failed: ${String(err)}`,
-          streamed: upstreamStreamed,
-          modelDialect: target.id,
-          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
-        });
-        res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({ error: { message: 'cross-provider response translation failed' } }),
-        );
-        return;
-      }
-      if (Buffer.byteLength(body) > (options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES)) {
-        emitNetExchange({
-          path: upstreamPath,
-          responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
-          responseBody: raw,
-          responseBytes: received.bytes,
-          responseTruncated: false,
-          status: upstreamRes.status,
-          responseComplete: false,
-          responseError: 'cross-provider translated response exceeded capture limit',
-          streamed: wantsStream,
-          modelDialect: target.id,
-          extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
-        });
-        res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            error: { message: 'cross-provider translated response exceeded capture limit' },
-          }),
-        );
-        return;
-      }
-      res.writeHead(upstreamRes.status, {
-        'content-type': wantsStream ? 'text/event-stream' : 'application/json',
-      });
-      res.end(body);
-      emitNetExchange({
-        path: upstreamPath,
-        responseHeaders: captureResponseHeaders(upstreamRes.headers, responseDecoded),
-        responseBody: raw,
-        responseBytes: received.bytes,
-        status: upstreamRes.status,
-        responseComplete: received.encodingError === undefined,
-        ...(received.encodingError === undefined ? {} : { responseError: received.encodingError }),
-        streamed: wantsStream,
-        modelDialect: target.id,
-        extraTransformations: [protocolTranslationTransformation(target.id, dialect.id)],
-      });
-      recordExchange(body, upstreamRes.status, wantsStream);
-      return;
-    }
 
     const contentType = upstreamType;
     const streamed = upstreamStreamed;
@@ -1535,7 +880,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         modelDialect: input.modelDialect ?? dialect.id,
         transformations: [
           ...captureHeaderTransformations(headers, recordableHeaders),
-          ...requestTranslation,
           ...captureEncodingTransformation('request.body', requestEncoding),
           ...captureResponseHeaderTransformations(upstreamRes.headers),
           ...captureEncodingTransformation('response.body', responseEncoding),
@@ -1591,7 +935,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   function passthroughOrigin(
     headers: Record<string, string | string[]>,
     forwardBase?: string,
-    opts: { verbatim?: boolean } = {},
   ): string {
     if (options.passthroughUpstream !== undefined) return options.passthroughUpstream;
     // A relayed request's own destination, before anything configured: on a live call with no
@@ -1605,7 +948,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // of one is how a fork's live embedding call left for the chat origin carrying the embedding
     // provider's own key: a 401 at best, and at worst an OpenAI-compatible gateway that answers
     // `/v1/embeddings` from a different model, putting foreign vectors in the fork's index.
-    if (forwardBase !== undefined && (opts.verbatim === true || options.forkModel === undefined)) {
+    if (forwardBase !== undefined) {
       return forwardBase;
     }
     const configured = [...new Set(Object.values(options.upstream ?? {}))];
@@ -1629,359 +972,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   /**
-   * Serve a retrieval call: from the recording where there is one, live where there is not.
-   *
-   * The lookup is by the request itself rather than by a cursor. Two reasons, and both matter.
-   * The answer is a function of the request, so position carries no information — the same text
-   * embedded on turn 3 and on turn 40 has the same vector. And an index build issues these
-   * hundreds at a time from a worker pool, so there is no order for a cursor to follow.
-   *
-   * A recorded call is consumed once, earliest first, so a run that asked the same thing twice
-   * gets both of its answers back and `retrieval=N/N` means every recorded call was reused —
-   * rather than one of them being served twice while another was never asked for.
-   */
-  async function serveRetrieval(
-    rule: RetrievalRule,
-    path: string,
-    rawBody: string,
-    headers: Record<string, string>,
-    recordableHeaders: Record<string, string | string[]>,
-    res: ServerResponse,
-    startedAt: number,
-    requestId: string,
-    forwardBase?: string,
-  ): Promise<void> {
-    let key: string;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawBody);
-      key = rule.key(parsed);
-    } catch (err) {
-      // A body this rule cannot key is a body agenticreplay cannot promise anything about. Passthrough is
-      // the honest fallback: forward it, record the bytes, say it is not replayable.
-      if (options.mode === 'replay') {
-        stats.unmatched += 1;
-        const reason = `${path} could not be keyed for replay: ${String(err)}`;
-        options.onUnmatched?.({ seq: -1, index: -1, reason });
-        json(res, 502, {
-          error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
-        });
-        return;
-      }
-      await passThrough(
-        path,
-        rawBody,
-        headers,
-        recordableHeaders,
-        res,
-        startedAt,
-        requestId,
-        forwardBase,
-      );
-      return;
-    }
-
-    // Across the fork cursor deliberately, in every mode that has a recording. A fork asks the
-    // same documents about a different chat model; re-embedding them live would spend money to
-    // recompute a value that cannot have changed, and would make the fork's index differ from the
-    // parent's for no reason anyone asked for. `RetrievalRule.forkable` is `false` for the same
-    // reason, one level up.
-    //
-    // Exact first, then the batch. A pipeline assembles its batch from a worker pool, so the same
-    // set of texts arrives in a different order on every run and an exact key alone found nothing
-    // — measured: two replays of one recording, two different keys, neither recorded. Where the
-    // endpoint's own contract says `data[i]` answers `input[i]`, the recorded answer for each
-    // text can be handed back against that text's new position, which is not an approximation.
-    // See {@link BatchRetrieval}.
-    let match = retrievalIndex.byKey.get(key)?.[0];
-    let rebuilt: string | undefined;
-    if (match === undefined) {
-      const batchKey = rule.batch?.key(parsed);
-      const candidate =
-        batchKey === undefined ? undefined : retrievalIndex.byBatch.get(batchKey)?.[0];
-      if (candidate !== undefined && candidate.rawResponse !== '') {
-        rebuilt = rule.batch?.reorder(
-          safeParse(candidate.rawRequest),
-          candidate.rawResponse,
-          parsed,
-        );
-        // An inexact reorder is no match at all. Filling the gaps would put another document's
-        // vector in the index, and nothing downstream could tell.
-        if (rebuilt !== undefined) match = candidate;
-      } else if (candidate !== undefined) {
-        match = candidate;
-      }
-    }
-    if (match !== undefined) {
-      // Consumed only where it is actually served. A recorded call agenticreplay cannot serve is still the
-      // answer to this request, and dropping it turned a client's retry — langchain retries a 502
-      // — into "no recorded retrieval call matches this request", which is false and sends the
-      // reader looking for a mismatch that is not there.
-      if (rebuilt !== undefined) {
-        consume(retrievalIndex, match);
-        stats.retrievalServed += 1;
-        stats.retrievalReordered += 1;
-        res.writeHead(match.status, { 'content-type': match.contentType });
-        res.end(rebuilt);
-        return;
-      }
-      if (match.rawResponse === '') {
-        // Recorded with `--retrieval-store=digest`: agenticreplay kept proof of the answer, not the answer.
-        const reason =
-          `${path} was recorded with --retrieval-store=digest, so the trace holds a digest of ` +
-          'the response and not the response. Re-record with the default (full) to replay it';
-        if (options.mode === 'replay' && !options.loose) {
-          stats.unmatched += 1;
-          options.onUnmatched?.({ seq: match.seq, index: -1, reason });
-          json(res, 502, {
-            error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
-          });
-          return;
-        }
-      } else {
-        consume(retrievalIndex, match);
-        stats.retrievalServed += 1;
-        res.writeHead(match.status, { 'content-type': match.contentType });
-        res.end(match.rawResponse);
-        return;
-      }
-    }
-
-    if (options.mode === 'replay' && !options.loose) {
-      stats.unmatched += 1;
-      const reason =
-        `no recorded retrieval call matches this request (rule ${rule.id}, key ` +
-        `${key.slice(0, 12)}…). The recording holds ${stats.retrievalTotal} retrieval ` +
-        `call${stats.retrievalTotal === 1 ? '' : 's'}, and this is not one of them`;
-      options.onUnmatched?.({ seq: -1, index: -1, reason });
-      json(res, 502, {
-        error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
-      });
-      return;
-    }
-
-    // Record, a fork past what it can serve, or a loose replay: make the call and keep the answer.
-    if (options.mode !== 'record') stats.retrievalLive += 1;
-    await forwardRetrieval(
-      rule,
-      key,
-      rule.batch?.key(parsed),
-      path,
-      rawBody,
-      headers,
-      recordableHeaders,
-      res,
-      startedAt,
-      requestId,
-      forwardBase,
-    );
-  }
-
-  /** A body that has already parsed once. Undefined rather than a throw where it has not. */
-  function safeParse(raw: string): unknown {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Make a retrieval call for real, and file it as a replayable `net.*` pair. */
-  async function forwardRetrieval(
-    rule: RetrievalRule,
-    key: string,
-    batchKey: string | undefined,
-    path: string,
-    rawBody: string,
-    headers: Record<string, string>,
-    recordableHeaders: Record<string, string | string[]>,
-    res: ServerResponse,
-    startedAt: number,
-    requestId: string,
-    forwardBase?: string,
-  ): Promise<void> {
-    stats.passedThrough += 1;
-    // On a recording, the count of retrieval calls *captured*. It is the same field replay uses
-    // for "how many the recording holds", which is the same quantity one command later — and it
-    // is what lets `capture.empty` tell an index build, whose every call is a retrieval call and
-    // every one of them replayable, apart from a run that captured nothing at all.
-    if (options.mode === 'record') stats.retrievalTotal += 1;
-    // Verbatim: everything below forwards this request unchanged, so where it says it was going
-    // stands, fork or no fork. See `passthroughOrigin`.
-    const origin = passthroughOrigin(headers, forwardBase, { verbatim: true });
-    let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
-    try {
-      upstreamRes = await doFetch(`${origin}${path}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...headers, ...headersForOrigin(origin) },
-        body: rawBody,
-      });
-    } catch (err) {
-      // The third of the three forwarding paths, and it had the same hole. An index build issues
-      // these hundreds at a time; a gateway that stops answering half way through used to leave
-      // a trace that simply had fewer retrieval calls in it than the run made, with nothing
-      // saying which ones or why.
-      //
-      // `status: 0` and the `net.*` shape, matching `passThrough`: no response header was ever
-      // seen, and a retrieval call is already recorded as network traffic rather than as a
-      // replayable model exchange.
-      options.onNetExchange?.({
-        requestId,
-        requestStartedAt: startedAt,
-        ...originParts(origin),
-        method: 'POST',
-        path,
-        intercepted: false,
-        rule: rule.id,
-        replayKey: key,
-        ...(batchKey === undefined ? {} : { batchKey }),
-        requestHeaders: recordableHeaders,
-        requestBody: rawBody,
-        requestBytes: Buffer.byteLength(rawBody),
-        requestTruncated: false,
-        status: 0,
-        responseHeaders: {},
-        responseBody: `agenticreplay did not forward this call: ${reasonFor(err, origin)}`,
-        responseTruncated: false,
-        responseComplete: false,
-        responseError: reasonFor(err, origin),
-        responseBytes: 0,
-        durationMs: Date.now() - startedAt,
-      });
-      throw err;
-    }
-
-    const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
-    const responseHeaders = captureResponseHeaders(
-      upstreamRes.headers,
-      responseEncoding !== undefined && responseEncoding.trim() !== '',
-    );
-    res.writeHead(upstreamRes.status, {
-      'content-type': responseHeaders['content-type'] ?? 'application/json',
-    });
-    let piped: PipedBody;
-    try {
-      piped = await pipeThrough(
-        upstreamRes,
-        res,
-        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
-        plainBufferLimit,
-      );
-    } catch (err) {
-      const partial =
-        err instanceof ResponsePipeAbortedError
-          ? err.partial
-          : (err as { partial?: PipedBody }).partial;
-      options.onNetExchange?.({
-        requestId,
-        requestStartedAt: startedAt,
-        ...originParts(origin),
-        method: 'POST',
-        path,
-        intercepted: false,
-        rule: rule.id,
-        replayKey: key,
-        ...(batchKey === undefined ? {} : { batchKey }),
-        requestHeaders: recordableHeaders,
-        requestBody: rawBody,
-        requestBytes: Buffer.byteLength(rawBody),
-        requestTruncated: false,
-        status: upstreamRes.status,
-        responseHeaders,
-        responseBody: partial?.text ?? '',
-        responseTruncated: partial?.truncated ?? false,
-        responseComplete: false,
-        responseError: String(err),
-        responseBytes: partial?.bytes ?? 0,
-        ...(err instanceof ResponsePipeAbortedError ? { abandoned: true } : {}),
-        durationMs: Date.now() - startedAt,
-      });
-      if (err instanceof ResponsePipeAbortedError) return;
-      throw err;
-    }
-    const body = piped.text;
-
-    const digest = createHash('sha256').update(body).digest('hex');
-    const keepBody = (options.retrievalStore ?? 'full') === 'full';
-    const { host, port } = originParts(origin);
-    options.onNetExchange?.({
-      requestId,
-      requestStartedAt: startedAt,
-      host,
-      port,
-      method: 'POST',
-      path,
-      intercepted: false,
-      rule: rule.id,
-      replayKey: key,
-      // Only where the rule offers one. Its absence in a trace means exactly what it says: this
-      // call can be found again by its own body and by nothing else.
-      ...(batchKey === undefined ? {} : { batchKey }),
-      requestHeaders: recordableHeaders,
-      requestBody: rawBody,
-      requestBytes: Buffer.byteLength(rawBody),
-      requestTruncated: false,
-      status: upstreamRes.status,
-      responseHeaders,
-      // Dropped rather than trimmed under `digest`: half a vector is not a smaller answer, it is
-      // a wrong one, and the digest already says whether a later run agreed.
-      responseBody: keepBody ? body : '',
-      responseDigest: digest,
-      responseTruncated: piped.truncated,
-      responseComplete: !piped.truncated && piped.encodingError === undefined,
-      ...(piped.truncated
-        ? { responseError: 'response exceeded capture limit' }
-        : piped.encodingError === undefined
-          ? {}
-          : { responseError: piped.encodingError }),
-      responseBytes: piped.bytes,
-      durationMs: Date.now() - startedAt,
-      transformations: [
-        ...captureHeaderTransformations(headers, recordableHeaders),
-        ...captureResponseHeaderTransformations(upstreamRes.headers),
-        ...captureEncodingTransformation('response.body', responseEncoding),
-        ...captureUrlTransformations(origin),
-        ...binaryBodyTransformation('request.body', rawBody),
-        ...binaryBodyTransformation('response.body', body),
-      ],
-    });
-  }
-
-  /** Split a configured origin into the host and port an exchange records. */
-  function originParts(origin: string): { host: string; port: number } {
-    try {
-      const url = new URL(origin);
-      return {
-        host: url.hostname,
-        port: url.port !== '' ? Number(url.port) : url.protocol === 'http:' ? 80 : 443,
-      };
-    } catch {
-      // An origin that does not parse is still worth recording under the string we were given —
-      // less anything secret in it. `host` goes into the trace verbatim (`persistNetExchange`
-      // writes it as a `net.request` attr), and §7 says a credential never gets written down.
-      // The trace's own redactor does not cover this: `hunter2` and `key=SECRET123` are under
-      // the 20-character entropy floor and match no shape rule.
-      //
-      // Dead above, live below. A caller that already has a response held a URL undici parsed,
-      // so the fallback cannot run on the success path; `passThrough`'s failure path is the one
-      // place it does, because an origin `new URL` rejects is exactly what made `doFetch` throw.
-      //
-      // `redactString` after the cut, not instead of it: its shape rules and 20-character
-      // entropy floor catch neither `hunter2` nor `key=SECRET123`, so it is a backstop for a
-      // real key that happens to be in there, not the thing doing the work.
-      return { host: redactor.redactString(scrubOrigin(origin)).value, port: 443 };
-    }
-  }
-
-  /**
-   * Forward a POST no dialect claims, and record that it happened.
-   *
-   * It is recorded as `NetExchange` rather than `RecordedExchange` on purpose: agenticreplay holds the bytes
-   * but not the meaning, so it cannot match this request on replay or rewrite its model on a fork.
-   * Filing it with the model exchanges would inflate `reused=n/m` with turns replay will never
-   * serve, and an operator would be reading a fidelity number that is not one.
-   */
-  /**
    * An origin string as a host and a port, for the two places that record one.
    *
    * An origin that does not parse is still worth recording under the string we were given.
@@ -1994,6 +984,15 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
    * leaves the key in, for the same shapes `scrubOrigin` exists to handle, so the known origin is
    * replaced by its scrubbed form before the prose pass ever looks at the sentence.
    */
+  function originParts(origin: string): { host: string; port: number } {
+    try {
+      const url = new URL(origin);
+      return { host: url.hostname, port: url.port ? Number(url.port) : url.protocol === 'http:' ? 80 : 443 };
+    } catch {
+      return { host: redactor.redactString(scrubOrigin(origin)).value, port: 443 };
+    }
+  }
+
   function reasonFor(err: unknown, origin: string): string {
     const scrubbed = String(err).split(origin).join(scrubOrigin(origin));
     return redactor.redactString(withoutCredentials(scrubbed)).value;
@@ -2010,24 +1009,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     forwardBase?: string,
     requestEncoding?: string,
   ): Promise<void> {
-    // `hybrid` is a fork, and a fork runs a live agent — so it forwards, exactly as `record` does.
-    // Refusing here killed the fork on the first call agenticreplay could not read, which is the failure
-    // passthrough exists to prevent, reintroduced one mode over.
-    if (options.mode === 'replay') {
-      // Strict replay has the network blocked and no recording to serve from — agenticreplay never
-      // understood this call well enough to match it. Say so: a bare 502 mid-replay reads as agenticreplay
-      // being broken, when the honest fact is narrower and more useful than that.
-      stats.unmatched += 1;
-      const reason =
-        `${path} was captured as opaque network traffic, not as a model exchange, so it ` +
-        'cannot be replayed. Recorded with --tls-intercept, or on a path no dialect claims.';
-      options.onUnmatched?.({ seq: -1, index: -1, reason });
-      json(res, 502, {
-        error: { message: `agenticreplay replay cannot reproduce ${path}: ${reason}` },
-      });
-      return;
-    }
-
     stats.passedThrough += 1;
     const origin = passthroughOrigin(headers, forwardBase);
     let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
@@ -2670,24 +1651,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       }
 
       if (!dialect) {
-        // Before passthrough, and only where no dialect claims the path: a dialect is the richer
-        // reading of a call — replayable, forkable, counted in `exact` — and a rule that outranked
-        // one would turn a chat completion into opaque bytes keyed by their own body.
-        const rule = selectRetrievalRule(retrievalRules, dialectPath, forwardHost(forward));
-        if (rule && isReadable(rawBody)) {
-          await serveRetrieval(
-            rule,
-            requestedPath,
-            rawBody,
-            headers,
-            recordableHeaders,
-            res,
-            startedAt,
-            requestId,
-            forward?.base,
-          );
-          return;
-        }
         await passThrough(
           requestedPath,
           rawBody,
@@ -2737,101 +1700,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         json(res, 400, errorBody);
         return;
-      }
-
-      if (options.mode === 'record') {
-        await goLive(
-          dialect,
-          requestedPath,
-          rawBody,
-          headers,
-          recordableHeaders,
-          res,
-          startedAt,
-          requestId,
-          inboundRequestEncoding,
-          forward?.base,
-        );
-        return;
-      }
-
-      // Replay and hybrid: try the recording first.
-      let canonical: CanonicalRequest;
-      try {
-        canonical = dialect.toCanonicalRequest(JSON.parse(rawBody));
-      } catch (err) {
-        json(res, 400, { error: { message: `unparseable request body: ${String(err)}` } });
-        return;
-      }
-
-      const beyondFork =
-        options.mode === 'hybrid' && matcher.cursor >= (options.forkAt ?? replayable.length);
-
-      if (!beyondFork) {
-        const result = matcher.match(canonical);
-        if (result.matched) {
-          const exchange = replayable[result.index]!;
-          if (result.reordered) stats.reordered += 1;
-          if (result.divergence) {
-            stats.matchedInexact += 1;
-            stats.divergences += 1;
-            options.onDivergence?.({ ...result.divergence, seq: exchange.seq });
-          } else {
-            stats.matchedExact += 1;
-          }
-          res.writeHead(exchange.status, {
-            'content-type': exchange.streamed ? 'text/event-stream' : 'application/json',
-          });
-          res.end(exchange.rawResponse);
-          return;
-        }
-
-        stats.unmatched += 1;
-
-        // Hybrid mode is *supposed* to continue live here — that is what forking means — but spec §4
-        // says replay must not silently approximate, and every inexact match is an event in the
-        // trace. Without this a fork could start diverging below its own fork point and every
-        // artifact it produced would look clean. Going live is the right behaviour; being quiet
-        // about it is not.
-        if (options.mode === 'hybrid' || options.loose) {
-          stats.divergences += 1;
-          options.onDivergence?.({
-            level: 'major',
-            rung: 4,
-            distance: -1,
-            detail: result.reason ?? 'request does not match the recording; served live instead',
-            seq: replayable[result.index]?.seq ?? -1,
-          });
-        }
-
-        if (!options.loose && options.mode === 'replay') {
-          // Halt loudly. Inventing a reply here would make every downstream conclusion worthless.
-          const reason = result.reason ?? 'request does not match the recording';
-          options.onUnmatched?.({
-            seq: replayable[result.index]?.seq ?? -1,
-            index: result.index,
-            reason,
-          });
-
-          // 400, emphatically not 409. Every mainstream client retries 408/409/429/5xx by default,
-          // so a 409 halt is re-sent until the retry budget is gone — the operator gets a stalled
-          // terminal and no reason, which is strictly worse than a wrong answer because it looks
-          // like a hang in agenticreplay rather than a mismatch in the recording. 400 is terminal everywhere.
-          //
-          // The envelope is the provider's own error shape for the same reason: clients read
-          // `error.message` and print it, so this sentence is what actually reaches the human.
-          json(res, 400, {
-            type: 'error',
-            error: {
-              type: 'invalid_request_error',
-              message:
-                `agenticreplay: replay halted — ${reason}. ` +
-                'Re-run with `agenticreplay replay <run> --loose` to continue live from this point, ' +
-                'or `agenticreplay show <run>` to see what was recorded.',
-            },
-          });
-          return;
-        }
       }
 
       await goLive(

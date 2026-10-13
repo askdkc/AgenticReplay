@@ -1,250 +1,36 @@
-# Writing a plugin
+# Writing an adapter
 
-There are exactly two extension points, and they are deliberately small. A surface you can widen
-later beats one you must support forever.
-
-## Adapter — how to launch and instrument one agent
+Adapters tell AgenticReplay how to launch an agent and route its supported model traffic through
+the recording proxy. They do not implement model providers or replay behavior.
 
 ```ts
-import type { Adapter, RecordContext, Launch } from '@agenticreplay/plugin-api';
+import type { Adapter, Launch, RecordContext } from '@agenticreplay/plugin-api';
 
 export const myAgent: Adapter = {
   id: 'my-agent',
   harnessVersions: '>=1.2.0 <2',
-
   async detect(cwd) {
-    // Cheap check: is this agent plausibly in use here?
     return existsSync(join(cwd, '.myagent'));
   },
-
   async prepare(ctx: RecordContext): Promise<Launch> {
     return {
       command: 'my-agent',
       args: ctx.userArgs,
-      env: {
-        // The whole trick: point the agent at the local recording proxy.
-        OPENAI_BASE_URL: `${ctx.proxyUrl}/v1`,
-      },
+      env: { OPENAI_BASE_URL: `${ctx.proxyUrl}/v1` },
     };
   },
 };
 ```
 
-That is the entire required surface. `sessionState?()` is optional and only worth implementing if
-your harness exposes internal state a fork would otherwise lose (context compaction state, todo
-lists, memory files).
+`RecordContext` provides the working directory, run directory, original arguments and environment,
+and the local proxy URL. `Launch` supplies a command, argument vector and environment overlay.
+Adapters may declare ignored output paths in `artifacts.capture` so meaningful generated files are
+included in file-change capture.
 
-**Before you write one**, check whether the agent respects a base-URL environment variable. That
-single fact decides how much work an adapter is — not, any longer, whether one is possible. There
-are three capture mechanisms, and an adapter picks whichever the harness allows:
+The adapter contract checks the identifier, detector, launch shape, proxy routing, credential
+handling, context immutability, paths, and declared harness version. Run
+`checkAdapterContract()` from `@agenticreplay/adapters` when validating an adapter.
 
-| The harness… | Capture by | Adapter looks like |
-|---|---|---|
-| reads a base-URL variable | pointing it at `ctx.proxyUrl` | one or two lines, as below |
-| is JavaScript and reads none | the fetch hook — see `node.ts` | a preload plus `NODE_OPTIONS` |
-| is neither | `--tls-intercept`, at the socket | nothing at all — see `exec.ts` |
-
-If it reads an unusual variable, the generic OpenAI adapter probably already covers you: it sets
-`OPENAI_BASE_URL`, `OPENAI_API_BASE` and `ANTHROPIC_BASE_URL` at once and takes the command from
-argv. If it reads none and is not JavaScript — a bot with its origin typed into its source, a Go
-binary, an editor that spawns the agent as a child — `agenticreplay record exec --tls-intercept -- <cmd>`
-records it with no adapter at all, and an adapter is only worth writing if you want a name for it.
-
-An adapter that relies on interception must say so with `capture: 'transport'`. It redirects
-nothing, which is otherwise indistinguishable from the broken adapter the contract's
-`redirects-model-traffic` check exists to catch; declaring it takes that one check's exemption and
-no other. See [SECURITY.md](../SECURITY.md) for what interception does and does not decrypt.
-
-### `artifacts` — when the harness's product is not the working tree
-
-Optional, and most adapters need none of it: a coding agent's output *is* the working tree, and
-the ordinary snapshot already holds it. A pipeline is the case this exists for — what it produces
-is an index or a cache, written to a path its own `.gitignore` excludes, because nobody wants a
-hundred megabytes of vectors in their repository.
-
-```ts
-artifacts: {
-  /** Snapshot these even where the workspace's .gitignore excludes them. */
-  capture: ['cache', 'vector_store', 'dataset'],
-  /** Delete these before a replay launches the harness. Whole paths, never "the valid parts". */
-  resetBeforeReplay: ['cache', 'vector_store'],
-  /** The flag `agenticreplay replay --serialize` reaches for. Declared; never applied on its own. */
-  concurrencyFlag: { flag: '--concurrency', serialValue: '1' },
-}
-```
-
-Three things worth knowing before you use it:
-
-- **`capture` cannot reach a credential.** The sensitive pathspecs are applied to the forced add
-  as well, and a pathspec exclusion is enforced by `git add` itself — no `-f` and no `.gitignore`
-  negation overrides it. An adapter declaring `.` still captures no `.env`.
-- **`capture` the inputs too, not only the outputs.** The corpus a pipeline reads is usually
-  ignored alongside the index it writes, and a replay in the recording's own directory finds it
-  anyway — which is what makes the omission easy to miss. A replay in a scratch worktree, or on
-  another machine, then starts with nothing to read and reproduces nothing.
-- **`resetBeforeReplay` deletes whole paths.** A pipeline that resumes skips by item id *including
-  items it recorded as failures*, so keeping what looks valid promotes the last run's failures to
-  completed work. AgenticReplay deletes only where it restores the tree afterwards; under `--in-place` it
-  warns and leaves them alone.
-
-### `replayArgs` — argv for a harness with no prompt
-
-`driveArgs` answers "what makes the agent ask the recorded question again", and it only applies to
-a harness with a transcript agenticreplay can read. A pipeline has neither: its argv *is* the whole
-instruction. `replayArgs(recorded)` is consulted before the transcript, so such an adapter can
-still adjust what a replay runs; return `undefined` to leave the recorded argv exactly as it was.
-
-### `RetrievalRule` — an endpoint whose answer is a function of its request
-
-Embeddings and rerank are not model exchanges and are not opaque traffic either. A rule claims the
-path, keys the call by its own body, and the recording serves it back:
-
-```ts
-const myEmbeddings: RetrievalRule = {
-  id: 'my-embeddings',
-  matches: (path) => path.endsWith('/embeddings'),
-  key: retrievalKey,                 // sha256 of the key-sorted request; override to narrow it
-  describe: (raw) => `${raw.input.length} inputs`,
-  forkable: false,                   // always — see below
-};
-```
-
-`forkable` is `false` and typed as the literal, not left off: changing an embedding model changes
-the vector space the index was built in, which is a rebuild rather than a fork. Keeping retrieval
-on the recording is precisely what makes `agenticreplay replay <run> --from N --model <other>` mean
-something — the chat model changes, the index does not.
-
-An optional `batch` handles the case where the same texts arrive in a different order on every run
-(a worker pool assembling the batch), but **only** where the endpoint's own contract guarantees
-which answer belongs to which input. OpenAI embeddings carries `data[i].index`; Cohere's embed
-does not, so it declares no `batch` rather than assuming one.
-
-See [integrations.md](integrations.md#rag-and-retrieval-frameworks) for the whole picture.
-
-## The adapter contract
-
-Adapters rot. A harness renames the variable it reads for its API origin, the adapter keeps setting
-the old one, and nothing looks wrong: the agent answers, the exit code is zero, and the trace is
-empty. `checkAdapterContract` is the guard against that, and it runs against any adapter — ours or
-yours:
-
-```ts
-import { checkAdapterContract, formatContractResult } from '@agenticreplay/adapters';
-import { myAgent } from './my-agent.js';
-
-const result = await checkAdapterContract(myAgent);
-console.log(formatContractResult(result)); // "my-agent: ok (9 checks)"
-if (!result.ok) process.exitCode = 1;
-```
-
-It never throws and it runs every check even after one fails, so one pass gives you the whole list.
-Pass `{ ctx: { userArgs: ['my-agent'] } }` if your adapter takes its command from argv.
-
-Nine checks are registered, and the count in that line is how many actually **ran**: a check that
-does not apply is skipped rather than counted as a pass. Only one skips today —
-`harness-versions`, when an adapter declares no range — so an adapter without a
-`harnessVersions` field prints `ok (8 checks)` and one with a range prints `ok (9 checks)`. The
-adapter above declares `>=1.2.0 <2`, so it gets nine.
-
-Each check is here because breaking it fails *silently*:
-
-- **`id-format`** — lowercase kebab-case. The id is what a user types after `agenticreplay record` and what
-  the trace records; mixed case and underscores turn into support questions.
-- **`detect-resolves`** — `detect()` must resolve, for a real directory and for a path that does not
-  exist. The registry reads a throwing detector as "no", so yours would silently never match, and
-  any caller that does not guard loses detection for every other adapter too.
-- **`prepare-shape`** — a non-empty `command` and an `args` array of strings. argv is a list, never
-  a pre-joined command line.
-- **`redirects-model-traffic`** — the env must set at least one of `ANTHROPIC_BASE_URL`,
-  `OPENAI_BASE_URL`, `OPENAI_API_BASE`, and *every* base-url variable it sets must point at
-  `ctx.proxyUrl`. This is the check that catches rot: point a variable the harness no longer reads
-  and capture returns nothing while everything still appears to work.
-- **`no-invented-keys`** — never fabricate a credential the incoming `ctx.env` did not have. Use
-  `passKey()` where the harness refuses to start without one — it substitutes an obviously-fake
-  placeholder — and `passThrough()` for a second provider. Harnesses pick a provider from the
-  credentials they can see, so an invented key can change which model the run calls.
-- **`no-ctx-mutation`** — `agenticreplay record` hands you `process.env` itself as `ctx.env` and the parsed
-  argv as `ctx.userArgs`. Mutating them edits the recorder's own environment and the argv written
-  into the manifest. Copy: `args: [...ctx.userArgs]`.
-- **`deterministic`** — two `prepare()` calls on the same context must agree. Replay prepares that
-  context again, so anything random or time-based reads as a divergence.
-- **`no-foreign-paths`** — no absolute path from outside `ctx.runDir` or `ctx.cwd` in the launch
-  env. Write scratch config under `ctx.runDir`, or your home directory ends up in a shared trace.
-- **`harness-versions`** — if you declare a range it has to be a semver range. `latest` says
-  nothing about what you tested.
-
-`packages/adapters/test/contract.test.ts` runs every adapter in `defaultAdapters()` through this,
-so a newly registered adapter is covered without opting in — and runs deliberately broken adapters
-through it too, so every check is proven to bite.
-
-### Start from the scaffold
-
-`scaffoldAdapter('my-agent')` returns the contents of a working adapter and its test — correct
-imports, a `detect` built on `hasBinary`, a `prepare` that redirects to `ctx.proxyUrl`, and one
-`TODO`: confirm which variable your harness actually reads. It returns data rather than writing
-files, so the generated adapter is itself run through `checkAdapterContract` in the test suite.
-
-### A PR adding an adapter includes its harness fixture
-
-`fixtures/harness/<id>.json` records the exact env-var names your adapter sets, the path each base
-url gets, the harness version range you verified against, and the date you verified it.
-`test/harness-versions.test.ts` compares that record to what `prepare()` produces now.
-
-**When a harness changes and you update an adapter, update the fixture in the same PR.** That is
-the whole point: the fixture diff is where a reviewer sees "this adapter now sets a different
-variable", and `verified_at` is the cue to ask whether you ran the harness or guessed. A fixture
-nobody has to touch only records what the adapter used to do.
-
-## Provider — a published interface with no caller yet
-
-**Read this first.** `Provider` is exported from `@agenticreplay/plugin-api` and nothing in AgenticReplay
-calls it. When a replay cursor goes live the proxy forwards the agent's own request bytes to a
-configured upstream, translating only where a fork changed the model — routing that through a
-`Provider` would mean re-serialising a request agenticreplay already holds verbatim, which loses fidelity for
-no gain. To point agenticreplay at a different model API today, use `agenticreplay setup`, or `--upstream-anthropic` /
-`--upstream-openai` per run.
-
-The repo used to ship live `Provider` clients and a registry to resolve them. They were deleted:
-about 400 lines of production code and 570 of tests that nothing invoked, kept alive only by a
-docstring claiming the live path went through them. The *interface* stays, because a format and an
-interface are cheap to publish and a wrong implementation is not.
-
-So implement this to be *ready* for a future live path, or to reuse the shape in your own tooling —
-not because registering one changes what `agenticreplay replay --model` does. It does not, yet.
-
-
-```ts
-import type { Provider, CanonicalRequest, CanonicalChunk } from '@agenticreplay/plugin-api';
-
-export class MyProvider implements Provider {
-  id = 'my-provider';
-  async models() { return [{ id: 'my-model-1' }]; }
-  async *invoke(req: CanonicalRequest): AsyncIterable<CanonicalChunk> {
-    // translate req → your wire format, stream back, yield a final `done` chunk
-  }
-  price(usage, model) { return null; }  // null means unknown — never guess a cost
-}
-```
-
-`price()` returning `null` for an unknown model is deliberate. A confidently wrong cost number is
-worse than an absent one, because it ends up in a comparison table someone makes a decision from.
-
-## The canonical IR, and why exchanges are recorded twice
-
-Every model exchange is stored in **both** forms:
-
-- the **raw provider bytes**, which is what makes exact replay exact;
-- the **canonical form** — a normalized message list, tool schema and sampling params — which is
-  what makes `--model glm-5.3-flash` possible on a run recorded against Claude.
-
-Never discard the raw bytes to save space. Blob dedup already handles size, and a lossy trace
-cannot be replayed exactly, which is the whole point of the tool.
-
-## Neutrality
-
-Plugins get no privileged API. A vendor plugin imports `@agenticreplay/plugin-api` and nothing else,
-and `scripts/check-neutrality.mjs` fails CI if that stops being true.
-
-If your plugin needs a capability the interface lacks, propose it for the public interface — with a
-second implementation showing it is not shaped around one vendor. That rule applies to the
-the maintainers' own provider plugin exactly as it applies to yours.
+A PR that adds an adapter should include a fixture naming the environment variables it sets and the
+harness version checked. Plugins import the public `@agenticreplay/plugin-api`; they should not
+reach into AgenticReplay implementation packages.

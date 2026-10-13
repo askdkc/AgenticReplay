@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { rewriteMcpConfig } from '@agenticreplay/adapters';
 import { EARLIEST_TS_MS, LATEST_TS_MS } from '@agenticreplay/schema';
-import type { TraceWriter } from '@agenticreplay/core';
 import { isMcpFrameRecord, objectsOnLine, MCP_RECORD_START } from '@agenticreplay/mcp-shim';
 import type { McpFrameRecord } from '@agenticreplay/mcp-shim';
+import type { TraceWriter } from '@agenticreplay/core';
 import type { Output } from './out.js';
 
 export interface McpCapture {
@@ -28,119 +28,6 @@ export interface McpCapture {
  * was recorded as a response. A format has one owner, and it is the thing that writes it.
  */
 export type { McpFrameRecord };
-
-/**
- * The recording's own copy of the config it was given, kept beside the frames it produced.
- *
- * A replay used to find the source by reading the path out of the `mcp_instrumented` note, and a
- * path is a poor thing to depend on. It has to survive the trace's redactor — `mkdtemp` and every
- * CI workspace end in a random segment, and `agenticreplay-int-mcp-stdio-feH8gJ` is 25 characters of
- * mixed-case base62, so roughly one in seven cleared the entropy sweep's threshold and reached the
- * trace as `<secret:high_entropy:…>`. `stat` then failed, MCP was dropped for the replay, and the
- * agent was launched with no `MCP_CONFIG_PATH`: `KeyError` from a recording that was perfectly
- * good, intermittently, according to what `mkdtemp` picked.
- *
- * It also has to still be there, and mean the same thing. Deleting the config, moving it, or
- * editing a server's command between the recording and the replay all changed what the replay ran
- * — for a file the operator has no reason to think of as part of the run.
- *
- * Keeping the bytes removes both. Nothing has to survive redaction, because this is not in the
- * trace; nothing outside the run directory has to still exist. It carries the same material as the
- * rewritten `mcp-config.json` written next to it — same directory, same `0600` — so it is not a
- * new kind of thing to protect.
- */
-export const MCP_SOURCE_FILENAME = 'mcp-source.json';
-
-/**
- * The MCP config a *replay* should instrument: the flag if one was given, else whatever the
- * recording itself used.
- *
- * Replay and fork launch the same agent the recording did, so they hit the same blind spot record
- * had before `--mcp-config` existed: without a config the harness either talks to servers agenticreplay
- * cannot see, or — for one that requires the variable — does not start at all. The recording knows
- * the answer; it just had nowhere to write it down, since `manifest.argv` holds only the agent's
- * own arguments and `--mcp-config` is agenticreplay's.
- *
- * The path is read back from the run's own `mcp_instrumented` note. Nothing is re-instrumented from
- * the *rewritten* config in the parent run directory: its servers already point at the parent's
- * frames file, so reusing it would append this replay's traffic to the recording it is replaying.
- */
-
-export function mcpSourceFrom(
-  flagValue: string | undefined,
-  events: { type: string; attrs?: Record<string, unknown> }[],
-): string | undefined {
-  if (flagValue) return flagValue;
-  for (const event of events) {
-    if (event.type !== 'note' || event.attrs?.rule !== 'mcp_instrumented') continue;
-    const source = event.attrs.source;
-    if (typeof source === 'string' && source !== '') return source;
-  }
-  return undefined;
-}
-
-/** Did this run capture MCP at all? Decides whether a replay without a config is worth warning about. */
-export function usedMcp(events: { type: string }[]): boolean {
-  return events.some((e) => e.type === 'mcp.request' || e.type === 'mcp.response');
-}
-
-/**
- * Set up MCP capture for a replay or a fork, from the flag or from what the recording used.
- *
- * Returns undefined — quietly — when the run never had MCP, which is most runs. When it did and the
- * source config has since moved or been deleted, that is said out loud rather than silently
- * dropping a capture layer: an absent `mcp.*` in the replay would otherwise read as "the agent made
- * no MCP calls" instead of "agenticreplay was not looking".
- */
-export async function mcpForReplay(
-  args: { str(name: string): string | undefined; bool?(name: string, dflt?: boolean): boolean },
-  events: { type: string; attrs?: Record<string, unknown> }[],
-  writer: TraceWriter,
-  out: Output,
-  /** The recording's own frames, so the servers are answered from rather than started. */
-  recordedFrames?: string,
-  /** The recording's directory, which holds its own copy of the config it was given. */
-  recordedRunDir?: string,
-): Promise<McpCapture | undefined> {
-  // The recording's copy first, and only then the path it wrote down. The copy cannot have been
-  // redacted, moved or edited since; the path can have been all three.
-  const kept = recordedRunDir === undefined ? undefined : join(recordedRunDir, MCP_SOURCE_FILENAME);
-  if (kept !== undefined && (await stat(kept).catch(() => null))) {
-    return setupMcpCapture({
-      sourceConfigPath: kept,
-      runDir: writer.runDir,
-      out,
-      ...(recordedFrames === undefined ? {} : { replayFrames: recordedFrames }),
-    });
-  }
-
-  const source = mcpSourceFrom(args.str('mcp-config'), events);
-  if (source === undefined) {
-    if (usedMcp(events)) {
-      out.warn('mcp.not_instrumented', {
-        why: 'the recording captured MCP but did not record which config it came from',
-        next: 'pass --mcp-config <path> to capture it here too',
-      });
-    }
-    return undefined;
-  }
-  if (!(await stat(source).catch(() => null))) {
-    out.warn('mcp.source_missing', {
-      path: source,
-      note: 'the config the recording used is no longer there; MCP will not be captured',
-    });
-    return undefined;
-  }
-  return setupMcpCapture({
-    sourceConfigPath: source,
-    runDir: writer.runDir,
-    out,
-    // A replay that starts the real servers is not a replay of them: it is a second live run whose
-    // answers happen to be read back through the same shim. Answering from the recording is what
-    // makes an MCP run reproducible after the server it talked to is gone.
-    ...(recordedFrames === undefined ? {} : { replayFrames: recordedFrames }),
-  });
-}
 
 /**
  * Point the launched agent at the instrumented config.
@@ -226,27 +113,12 @@ export async function setupMcpCapture(opts: {
   sourceConfigPath: string;
   runDir: string;
   out: Output;
-  /**
-   * Frames to answer from instead of starting the servers.
-   *
-   * Capture was only half of what this layer is for. The reason to record a server's traffic is
-   * that the run stays reproducible once the server is not — the token revoked, the repository
-   * moved, the service retired. Replay re-instrumented the same config and started the real server
-   * again, so an MCP recording could be read but not reproduced, and came apart on the first call
-   * when the server had gone. Pointed at a capture, the shim serves from it and launches nothing.
-   */
-  replayFrames?: string;
 }): Promise<McpCapture | undefined> {
   const raw = await readFile(opts.sourceConfigPath, 'utf8').catch(() => undefined);
   if (raw === undefined) {
     opts.out.warn('mcp.config_unreadable', { path: opts.sourceConfigPath });
     return undefined;
   }
-  // Kept before it is parsed, so a later run reads back what this run was handed — byte for byte,
-  // key order and all. See {@link MCP_SOURCE_FILENAME} for why a path was not good enough.
-  await writeFile(join(opts.runDir, MCP_SOURCE_FILENAME), raw, { mode: 0o600 }).catch(
-    () => undefined,
-  );
 
   let parsed: unknown;
   try {
@@ -258,13 +130,7 @@ export async function setupMcpCapture(opts: {
 
   const framesPath = join(opts.runDir, 'mcp-frames.jsonl');
   const shim = resolveShimEntry();
-  // Recording and replay are the same rewrite with a different flag: `--out` writes what the
-  // servers say, `--replay` says it back. Both keep `--out` so a replay records its own frames and
-  // is itself a run that can be read.
-  const shimArgs =
-    opts.replayFrames === undefined
-      ? [shim, '--out', framesPath]
-      : [shim, '--out', framesPath, '--replay', opts.replayFrames];
+  const shimArgs = [shim, '--out', framesPath];
   const { config, rewritten, skipped } = rewriteMcpConfig(parsed, process.execPath, shimArgs);
 
   const configPath = join(opts.runDir, 'mcp-config.json');
@@ -273,7 +139,7 @@ export async function setupMcpCapture(opts: {
   opts.out.info('mcp.instrumented', {
     servers: rewritten.length,
     skipped: skipped.length,
-    mode: opts.replayFrames === undefined ? 'record' : 'replay',
+    mode: 'record',
     config: configPath,
   });
 

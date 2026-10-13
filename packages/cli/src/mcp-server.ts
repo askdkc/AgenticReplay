@@ -40,8 +40,7 @@ const RUN_ARG = {
   run: {
     type: 'string',
     description:
-      'Run id, or "last" for the newest recording. Defaults to "last". Replay traces are ' +
-      'skipped when resolving "last", so it means the newest run you actually recorded.',
+      'Run id, or "last" for the newest recording. Defaults to "last".',
   },
 } as const;
 
@@ -49,8 +48,8 @@ export const MCP_TOOLS: McpTool[] = [
   {
     name: 'agenticreplay_list_runs',
     description:
-      'List every agent run recorded in this project, newest first, with the run it was forked ' +
-      'from where there is one. Start here when you do not already know which run to look at.',
+      'List every agent run recorded in this project, newest first. Start here when you do not ' +
+      'already know which run to inspect.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -60,13 +59,6 @@ export const MCP_TOOLS: McpTool[] = [
       'every tool call with its arguments and result, every shell command with its exit code, ' +
       'and every file the run changed. This is what tells you why an agent did something, ' +
       'rather than what it cost.',
-    inputSchema: { type: 'object', properties: { ...RUN_ARG } },
-  },
-  {
-    name: 'agenticreplay_checkpoints',
-    description:
-      'The points in a run a fork can start from — where the conversation prefix is complete and ' +
-      'the workspace was snapshotted. Use before agenticreplay_compare to pick a fork point.',
     inputSchema: { type: 'object', properties: { ...RUN_ARG } },
   },
   {
@@ -86,54 +78,6 @@ export const MCP_TOOLS: McpTool[] = [
           description: 'Narrow to the chain that produced this event seq. Omit for the whole run.',
         },
       },
-    },
-  },
-  {
-    name: 'agenticreplay_replay',
-    description:
-      'Re-run a recording exactly, with the network blocked and no tokens spent, and report what ' +
-      'could not be reproduced: divergences, and requests the recording could not serve. Free ' +
-      'and repeatable. It shows the recorded decisions still reproduce; it cannot show a fresh ' +
-      'run would fail the same way, because the model is not asked again — its recorded ' +
-      'responses are served back.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ...RUN_ARG,
-        worktree: {
-          type: 'boolean',
-          description:
-            'Replay in a scratch copy instead of over the working tree. Slower, and leaves the ' +
-            'files you are looking at untouched.',
-        },
-      },
-    },
-  },
-  {
-    name: 'agenticreplay_compare',
-    description:
-      'Fork one recorded run onto several models from the same checkpoint — same files, same ' +
-      'conversation prefix — and grade each with a command you choose. SPENDS REAL TOKENS and ' +
-      'reaches the network: every model named is actually called. Ask before using it.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ...RUN_ARG,
-        models: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Model ids to compare. Required.',
-        },
-        from: {
-          type: 'number',
-          description: 'Checkpoint seq to fork at, from agenticreplay_checkpoints.',
-        },
-        verify: {
-          type: 'string',
-          description: 'Shell command whose exit code is the verdict, e.g. "npm test".',
-        },
-      },
-      required: ['models'],
     },
   },
 ];
@@ -240,44 +184,12 @@ async function callTool(
         return ok(await agenticreplay.list());
       case 'agenticreplay_show_run':
         return ok(await agenticreplay.show(run));
-      case 'agenticreplay_checkpoints':
-        return ok(await agenticreplay.checkpoints(run));
       case 'agenticreplay_graph': {
         const to = args['to'];
         if (to !== undefined && typeof to !== 'number') {
           return content('to must be a number', true);
         }
         return ok(await agenticreplay.graph(run, to === undefined ? {} : { to }));
-      }
-      case 'agenticreplay_replay': {
-        const worktree = args['worktree'];
-        if (worktree !== undefined && typeof worktree !== 'boolean') {
-          return content('worktree must be a boolean', true);
-        }
-        return ok(await agenticreplay.replay(run, worktree === true ? { worktree: true } : {}));
-      }
-      case 'agenticreplay_compare': {
-        const models = Array.isArray(args['models'])
-          ? args['models'].filter((m): m is string => typeof m === 'string')
-          : [];
-        if (models.length === 0) return content('compare needs at least one model id', true);
-        const from = args['from'];
-        // Coercing a string here would silently fork from checkpoint 0 and produce a comparison
-        // whose one variable was not the model.
-        if (from !== undefined && typeof from !== 'number') {
-          return content(`from must be a number, got ${JSON.stringify(from)}`, true);
-        }
-        const verify = args['verify'];
-        if (verify !== undefined && typeof verify !== 'string') {
-          return content('verify must be a string', true);
-        }
-        return ok(
-          await agenticreplay.compare(run, {
-            models,
-            ...(typeof from === 'number' ? { from } : {}),
-            ...(typeof verify === 'string' ? { verify } : {}),
-          }),
-        );
       }
       default:
         return content(`no such tool '${name}'`, true);

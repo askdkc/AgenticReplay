@@ -13,9 +13,8 @@ export interface RunRef {
   /** RFC3339, from the manifest when it is readable, else the directory's mtime. */
   createdAt: string;
   dir: string;
-  /** Set when this run was forked from another (spec §1). Absent on a plain recording. */
+  /** Historical parent link, retained when reading older run manifests. */
   parentRun?: string;
-  forkPoint?: number;
 }
 
 export function agenticreplayDir(cwd: string): string {
@@ -105,14 +104,12 @@ async function factsOf(dir: string): Promise<Omit<RunRef, 'runId' | 'dir'>> {
     const raw = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as {
       created_at?: unknown;
       parent_run?: unknown;
-      fork_point?: unknown;
     };
     const at = raw.created_at;
     if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) {
       return {
         createdAt: at,
         ...(typeof raw.parent_run === 'string' ? { parentRun: raw.parent_run } : {}),
-        ...(typeof raw.fork_point === 'number' ? { forkPoint: raw.fork_point } : {}),
       };
     }
   } catch {
@@ -140,33 +137,12 @@ export async function listRuns(cwd: string): Promise<RunRef[]> {
 }
 
 /**
- * A run that describes another run rather than being one: an exact replay's own trace.
- *
- * It holds divergences and nothing else — no exchanges, no blobs, no filesystem store. A fork is
- * not one of these: it has a `fork_point`, real exchanges and a worktree, and is a thing you act
- * on.
- */
-function isReplayTrace(run: RunRef): boolean {
-  return run.parentRun !== undefined && run.forkPoint === undefined;
-}
-
-/**
  * Resolves the CLI's run argument: `last` for the newest run, anything else as a run id.
- *
- * `last` skips replay traces. Since exact replay started writing one, the newest run in a
- * directory is usually a report about the run before it, and every command defaults to `last` — so
- * that quietly redirected all of them. The sharpest case is the line in the README:
- * `agenticreplay scrub last --match my-hostname` scrubbed the empty trace, found nothing, and said "nothing
- * matched — the trace is unchanged", while the secret sat in the recording beside it. A security
- * tool reporting clean because it searched the wrong thing is worse than one that fails.
- *
- * Naming a replay trace explicitly still resolves it, and when a directory holds nothing else it
- * is still returned — a selector that refuses to resolve is not an improvement.
  */
 export async function resolveRunSelector(cwd: string, selector: string): Promise<RunRef> {
   if (selector === 'last') {
     const runs = await listRuns(cwd);
-    const newest = runs.find((r) => !isReplayTrace(r)) ?? runs[0];
+    const newest = runs[0];
     if (!newest) {
       throw new Error(
         `no runs recorded in ${runsDir(cwd)} — record one first: agenticreplay record -- <your agent>`,

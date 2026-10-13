@@ -89,18 +89,13 @@ describe('the MCP server', () => {
   });
 
   describe('tools/list', () => {
-    it('advertises the read tools and the two that do something', async () => {
-      const res = (await call('tools/list')) as { result?: { tools: { name: string }[] } };
-      const names = res.result?.tools.map((t) => t.name) ?? [];
-      expect(names).toEqual(
-        expect.arrayContaining([
-          'agenticreplay_list_runs',
-          'agenticreplay_show_run',
-          'agenticreplay_checkpoints',
-          'agenticreplay_replay',
-          'agenticreplay_compare',
-        ]),
-      );
+    it('advertises only run readers', async () => {
+      const res = (await call('tools/list')) as { result: { tools: { name: string }[] } };
+      expect(res.result.tools.map((tool) => tool.name)).toEqual([
+        'agenticreplay_list_runs',
+        'agenticreplay_show_run',
+        'agenticreplay_graph',
+      ]);
     });
 
     it('gives every tool a description and a typed input schema', async () => {
@@ -134,23 +129,9 @@ describe('the MCP server', () => {
       expect((await tool('agenticreplay_show_run')).json().runId).toBe(recorded.runId);
     });
 
-    it('replays and reports what diverged', async () => {
-      const recorded = await seed();
-      const before = model.calls.length;
+    
 
-      const res = await tool('agenticreplay_replay', { run: recorded.runId });
-
-      expect(res.isError).toBe(false);
-      expect(res.json()).toMatchObject({ canonicalExact: 2, divergences: 0, unmatched: 0 });
-      // Still offline. An agent calling this must not spend tokens without saying so.
-      expect(model.calls.length).toBe(before);
-    });
-
-    it('returns the checkpoints a fork could start from', async () => {
-      await seed();
-      const res = await tool('agenticreplay_checkpoints');
-      expect(res.json().length).toBeGreaterThan(0);
-    });
+    
 
     it('reports a failed call as an error result, not a transport error', async () => {
       // MCP says a tool that fails answers with isError, so the model can read the reason and
@@ -167,7 +148,7 @@ describe('the MCP server', () => {
     });
 
     it('rejects arguments of the wrong shape rather than coercing them', async () => {
-      const res = await tool('agenticreplay_replay', { run: 'last', from: 'not-a-number' });
+      const res = await tool('agenticreplay_show_run', { run: 42 });
       expect(res.isError).toBe(true);
     });
   });
@@ -243,53 +224,7 @@ describe('agenticreplay mcp', () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  it('keeps stdout pure JSON-RPC while a tool runs a live agent', async () => {
-    // The failure this guards: `agenticreplay_replay` spawns the recorded agent, and the agent was given
-    // agenticreplay's own stdout — which here *is* the transport. One line of its output and the client
-    // drops the session. Only a real subprocess can see it: `stdio: 'inherit'` passes the file
-    // descriptor, not anything an in-process test can substitute.
-    const model = await startResponsesModel();
-    try {
-      await run('git', ['init', '-q'], { cwd: workspace });
-      await run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
-      await run('git', ['config', 'user.name', 'Test'], { cwd: workspace });
-      await writeFile(join(workspace, 'auth.ts'), 'export const fixed = false;\n');
-      await new AgenticReplay({ cwd: workspace }).record({
-        adapter: 'generic-openai',
-        command: [process.execPath, AGENT],
-        upstream: { openai: model.url },
-      });
-
-      const cli = join(here, '..', 'dist', 'cli.js');
-      const child = execFile(process.execPath, [cli, 'mcp'], { cwd: workspace });
-      const out: string[] = [];
-      child.stdout?.on('data', (c: Buffer) => out.push(c.toString('utf8')));
-      child.stdin?.write(
-        `${JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'tools/call',
-          params: { name: 'agenticreplay_replay', arguments: { run: 'last' } },
-        })}\n`,
-      );
-      child.stdin?.end();
-      await new Promise((resolve) => child.on('exit', resolve));
-
-      const lines = out
-        .join('')
-        .split('\n')
-        .filter((l) => l.trim() !== '');
-      // Every line parses as JSON-RPC. The agent really printed during this — to stderr.
-      for (const line of lines) {
-        expect(() => JSON.parse(line), line.slice(0, 80)).not.toThrow();
-      }
-      expect(lines).toHaveLength(1);
-      const reply = JSON.parse(lines[0]!) as { result?: { content: { text: string }[] } };
-      expect(JSON.parse(reply.result!.content[0]!.text)).toMatchObject({ unmatched: 0 });
-    } finally {
-      await model.close();
-    }
-  });
+  
 
   it('speaks MCP on stdio when launched as a subprocess', async () => {
     const cli = join(here, '..', 'dist', 'cli.js');

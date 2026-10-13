@@ -88,30 +88,9 @@ describe('agenticreplay --json', () => {
     expect(runs.map((r: { runId: string }) => r.runId)).toContain(recorded.runId);
   });
 
-  it('prints the checkpoints a fork can start from', async () => {
-    const recorded = await seed();
-    await cli(['checkpoints', recorded.runId, '--json']);
-    const doc = JSON.parse(out());
-    expect(Array.isArray(doc)).toBe(true);
-    expect(doc[0]).toMatchObject({ seq: expect.any(Number), turn: expect.any(Number) });
-  });
+  
 
-  it('prints the replay result, so nothing has to be scraped from a log line', async () => {
-    const recorded = await seed();
-    stdout.length = 0;
-    stderr.length = 0;
-
-    await cli(['replay', recorded.runId, '--json']);
-
-    expect(JSON.parse(out())).toMatchObject({
-      runId: recorded.runId,
-      mode: 'exact',
-      canonicalExact: 2,
-      divergences: 0,
-      unmatched: 0,
-      exitCode: 0,
-    });
-  });
+  
 
   it('keeps stdout parseable when the run warns, by putting diagnostics on stderr', async () => {
     // The case that decides the design: a warning interleaved into stdout breaks every consumer.
@@ -200,22 +179,5 @@ describe('agenticreplay --json', () => {
     expect(doc).toMatchObject({ exitCode: 0, modelExchanges: 2 });
   });
 
-  it('keeps replay stdout parseable too, since a replay launches the agent again', async () => {
-    // Same hazard, second code path: an exact replay really re-runs the harness, so its output
-    // reaches the same inherited descriptor.
-    const cliPath = join(here, '..', 'dist', 'cli.js');
-    const recorded = await seed();
-    const { stdout: piped, stderr: diagnostics } = await run(
-      process.execPath,
-      [cliPath, 'replay', recorded.runId, '--json'],
-      { cwd: workspace, env: { ...process.env, NO_COLOR: '1' } },
-    );
-
-    expect(diagnostics).toContain('responses-agent: completed');
-    expect(JSON.parse(piped)).toMatchObject({
-      runId: recorded.runId,
-      canonicalExact: 2,
-      unmatched: 0,
-    });
-  });
+  
 });

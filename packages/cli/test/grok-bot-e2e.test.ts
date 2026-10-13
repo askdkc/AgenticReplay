@@ -12,7 +12,6 @@ import { RunCa } from '@agenticreplay/proxy';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -211,18 +210,7 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
     expect((xai.calls[0] as { url: string }).url).toBe('/v1/chat/completions');
   });
 
-  it('replays the bot offline, with the origin taken away', async () => {
-    const result = await record();
-    const before = xai.calls.length;
-    await xai.close();
-
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    expect(replay.canonicalExact).toBe(1);
-    expect(replay.unmatched).toBe(0);
-    expect(xai.calls.length).toBe(before);
-  });
+  
 
   /**
    * Replaying an intercepted run without having to remember how it was recorded.
@@ -233,33 +221,9 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
    * run writes a `tls_intercept` note naming the hosts it decrypted. Reading it back is what makes
    * `agenticreplay replay last` work on an intercepted run, which is the only thing anyone types.
    */
-  it('re-establishes interception from the recording, with no flags repeated', async () => {
-    const result = await record();
-    await xai.close();
-    lines.length = 0;
+  
 
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    // Minting a CA is never silent, even when agenticreplay decided on it rather than the operator.
-    expect(lines.join('')).toContain('tls.intercepting');
-    expect(lines.join('')).toContain(`127.0.0.1:${xai.port}`);
-  });
-
-  it('still lets the operator refuse, and says why the replay then cannot match', async () => {
-    const result = await record();
-    await xai.close();
-    lines.length = 0;
-
-    const replay = await replayCommand(
-      parseArgs(['replay', result.runId, '--no-tls-intercept']),
-      out,
-      workspace,
-    );
-
-    expect(lines.join('')).not.toContain('tls.intercepting');
-    expect(replay.canonicalExact).toBe(0);
-  });
+  
 
   /**
    * Codex-in-the-IDE, and the reason it is not above the ceiling.
@@ -291,59 +255,12 @@ if (process.env.AGENTICREPLAY_TEST_RESULT_OUT) {
     expect(xai.calls).toHaveLength(1);
   });
 
-  it('replays the IDE-spawned agent offline too', async () => {
-    const result = await recordCommand(
-      parseArgs([
-        'record',
-        'exec',
-        '--tls-intercept',
-        '--tls-hosts',
-        `127.0.0.1:${xai.port}`,
-        '--',
-        process.execPath,
-        IDE_PARENT,
-        botPath,
-      ]),
-      out,
-      workspace,
-    );
-    await xai.close();
-
-    const replay = await replayCommand(parseArgs(['replay', result.runId]), out, workspace);
-
-    expect(replay.exitCode).toBe(0);
-    expect(replay.canonicalExact).toBe(1);
-    expect(replay.unmatched).toBe(0);
-  });
+  
 
   /**
    * Issue #49: `agenticreplay replay --from 1 --model <other>` on a TLS-intercepted recording accepted
    * the flag, echoed it, and called the recorded model. `replayed=0 live=0` meant substitution
    * never ran. Forking from before the only exchange is a legitimate thing to ask for.
    */
-  it('honours --model on a fork of a TLS-intercepted recording', async () => {
-    const recorded = await record();
-    expect(recorded.modelExchanges).toBe(1);
-    const before = xai.calls.length;
-    lines.length = 0;
-
-    const fork = await replayCommand(
-      parseArgs(['replay', recorded.runId, '--from', '1', '--model', 'grok-4-fast']),
-      out,
-      workspace,
-    );
-
-    expect(fork.exitCode).toBe(0);
-    expect(fork.liveCalls).toBeGreaterThan(0);
-    expect(xai.calls.length).toBeGreaterThan(before);
-    const live = xai.calls[xai.calls.length - 1] as { body: { model?: string } };
-    expect(live.body.model).toBe('grok-4-fast');
-
-    const forkDir = (await listRuns(workspace)).find((r) => r.runId === fork.forkRunId)?.dir;
-    expect(forkDir, 'the fork wrote a run of its own').toBeDefined();
-    const events = await (await TraceReader.open(forkDir!)).events();
-    const request = events.find((e) => e.type === 'model.request');
-    expect(request?.attrs?.model).toBe('grok-4-fast');
-    expect(lines.join('')).toMatch(/live=1/);
-  });
+  
 });

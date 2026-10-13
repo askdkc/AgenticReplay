@@ -227,55 +227,7 @@ describe('main', () => {
     expect(await done).toBe(3);
   });
 
-  it('answers from a recording that has a line which is not a frame', async () => {
-    // There was no `--replay` test at all, which is how this reader escaped the rule the other
-    // readers of this same file got. Several shims share one capture, so an interleaved write can
-    // leave a line that parses to `null` — and this reader cast straight through and read
-    // `record.name`, so the shim died with `Cannot read properties of null (reading 'name')`
-    // *before serving a single recorded answer*. A torn line at record time then made the whole
-    // recording unreplayable, which is the asymmetry worth closing.
-    const recorded = join(scratch, 'recorded.jsonl');
-    const base = { ts: '2026-09-12T00:00:00.000Z', name: 'fs', id: 1, method: 'tools/list' };
-    const request = {
-      ...base,
-      dir: 'in',
-      kind: 'request',
-      raw: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-    };
-    const response = {
-      ...base,
-      dir: 'out',
-      kind: 'response',
-      raw: '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}',
-    };
-    // The three bad lines are interleaved with the good pair, not merely appended, because a reader
-    // that stopped at the first one would otherwise still look correct.
-    writeFileSync(
-      recorded,
-      ['null', JSON.stringify(request), '7', JSON.stringify(response), '[1,2]', ''].join('\n'),
-      'utf8',
-    );
-
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const seen: Buffer[] = [];
-    const errors: Buffer[] = [];
-    stdout.on('data', (c: Buffer) => seen.push(Buffer.from(c)));
-    stderr.on('data', (c: Buffer) => errors.push(Buffer.from(c)));
-
-    const done = main(
-      ['--name', 'fs', '--out', join(scratch, 'mcp.jsonl'), '--replay', recorded, '--', 'unused'],
-      { stdin, stdout, stderr },
-    );
-    stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    stdin.end();
-
-    expect(await done, Buffer.concat(errors).toString()).toBe(0);
-    expect(Buffer.concat(seen).toString(), 'the recorded answer must still be served').toContain(
-      '"ok":true',
-    );
-  });
+  
 
   /**
    * The same tear one level in: a record whose `raw` is not an object.
@@ -304,186 +256,16 @@ describe('main', () => {
    * And the other way round here too: the record that matters is complete, and what follows it is
    * too short to be recognised as a boundary by anything but the end of the record itself.
    */
-  it('answers from a recording whose request lost only its newline', async () => {
-    const recorded = join(scratch, 'recorded.jsonl');
-    const base = { ts: '2026-09-12T00:00:00.000Z', name: 'fs', id: 1, method: 'tools/list' };
-    const request = JSON.stringify({
-      ...base,
-      dir: 'in',
-      kind: 'request',
-      raw: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-    });
-    const response = JSON.stringify({
-      ...base,
-      dir: 'out',
-      kind: 'response',
-      raw: '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}',
-    });
-    // Three bytes of the next record, which is fewer than its opening is long.
-    writeFileSync(recorded, [`${request}{"t`, response, ''].join('\n'), 'utf8');
+  
 
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const seen: Buffer[] = [];
-    const errors: Buffer[] = [];
-    stdout.on('data', (c: Buffer) => seen.push(Buffer.from(c)));
-    stderr.on('data', (c: Buffer) => errors.push(Buffer.from(c)));
+  
 
-    const done = main(
-      ['--name', 'fs', '--out', join(scratch, 'mcp.jsonl'), '--replay', recorded, '--', 'unused'],
-      { stdin, stdout, stderr },
-    );
-    stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    stdin.end();
-
-    expect(await done, Buffer.concat(errors).toString()).toBe(0);
-    expect(
-      Buffer.concat(seen).toString(),
-      'a complete request was lost to the bytes written after it, so the replay had no answer',
-    ).toContain('"ok":true');
-  });
-
-  it('answers from a recording whose first record was glued onto a fragment', async () => {
-    const recorded = join(scratch, 'recorded.jsonl');
-    const base = { ts: '2026-09-12T00:00:00.000Z', name: 'fs', id: 1, method: 'tools/list' };
-    const fragment = '{"ts":"2026-09-12T00:00:00.000Z","name":"fs","dir":"out","kind":"unknown"';
-    const request = JSON.stringify({
-      ...base,
-      dir: 'in',
-      kind: 'request',
-      raw: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-    });
-    const response = JSON.stringify({
-      ...base,
-      dir: 'out',
-      kind: 'response',
-      raw: '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}',
-    });
-    writeFileSync(recorded, [`${fragment}${request}`, response, ''].join('\n'), 'utf8');
-
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const seen: Buffer[] = [];
-    const errors: Buffer[] = [];
-    stdout.on('data', (c: Buffer) => seen.push(Buffer.from(c)));
-    stderr.on('data', (c: Buffer) => errors.push(Buffer.from(c)));
-
-    const done = main(
-      ['--name', 'fs', '--out', join(scratch, 'mcp.jsonl'), '--replay', recorded, '--', 'unused'],
-      { stdin, stdout, stderr },
-    );
-    stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    stdin.end();
-
-    expect(await done, Buffer.concat(errors).toString()).toBe(0);
-    expect(
-      Buffer.concat(seen).toString(),
-      'the record glued to a fragment was dropped with it, so the replay had no answer',
-    ).toContain('"ok":true');
-  });
-
-  it('answers from a recording whose frames include one that is not a message', async () => {
-    const recorded = join(scratch, 'recorded.jsonl');
-    const base = { ts: '2026-09-12T00:00:00.000Z', name: 'fs' };
-    const record = (over: Record<string, unknown>) => JSON.stringify({ ...base, ...over });
-    // Each of the three is what a different non-object line looks like once recorded, and they are
-    // interleaved so that stopping at the first still fails.
-    writeFileSync(
-      recorded,
-      [
-        record({ dir: 'out', kind: 'unknown', raw: 'null' }),
-        record({
-          dir: 'in',
-          kind: 'request',
-          id: 1,
-          method: 'tools/list',
-          raw: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-        }),
-        record({ dir: 'out', kind: 'unknown', raw: '"a log line"' }),
-        record({
-          dir: 'out',
-          kind: 'response',
-          id: 1,
-          raw: '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}',
-        }),
-        record({ dir: 'in', kind: 'unknown', raw: '[1,2]' }),
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const seen: Buffer[] = [];
-    const errors: Buffer[] = [];
-    stdout.on('data', (c: Buffer) => seen.push(Buffer.from(c)));
-    stderr.on('data', (c: Buffer) => errors.push(Buffer.from(c)));
-
-    const done = main(
-      ['--name', 'fs', '--out', join(scratch, 'mcp.jsonl'), '--replay', recorded, '--', 'unused'],
-      { stdin, stdout, stderr },
-    );
-    stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    stdin.end();
-
-    expect(await done, Buffer.concat(errors).toString()).toBe(0);
-    expect(Buffer.concat(seen).toString(), 'the recorded answer must still be served').toContain(
-      '"ok":true',
-    );
-  });
+  
 
   /**
    * And the same line arriving from the client rather than out of the recording. `runMock` parsed
    * it, cast it, and read `message.id` — inside a `'line'` handler, where a throw takes the process
    * down rather than costing one frame.
    */
-  it('ignores a client line that is not a message, and keeps answering', async () => {
-    const recorded = join(scratch, 'recorded.jsonl');
-    const base = { ts: '2026-09-12T00:00:00.000Z', name: 'fs', id: 1, method: 'tools/list' };
-    writeFileSync(
-      recorded,
-      [
-        JSON.stringify({
-          ...base,
-          dir: 'in',
-          kind: 'request',
-          raw: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-        }),
-        JSON.stringify({
-          ...base,
-          dir: 'out',
-          kind: 'response',
-          raw: '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}',
-        }),
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const seen: Buffer[] = [];
-    const errors: Buffer[] = [];
-    stdout.on('data', (c: Buffer) => seen.push(Buffer.from(c)));
-    stderr.on('data', (c: Buffer) => errors.push(Buffer.from(c)));
-
-    const done = main(
-      ['--name', 'fs', '--out', join(scratch, 'mcp.jsonl'), '--replay', recorded, '--', 'unused'],
-      { stdin, stdout, stderr },
-    );
-    // Before the real question, so a crash here costs the answer that follows it.
-    stdin.write('null\n');
-    stdin.write('42\n');
-    stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    stdin.end();
-
-    expect(await done, Buffer.concat(errors).toString()).toBe(0);
-    expect(Buffer.concat(seen).toString(), 'the recorded answer must still be served').toContain(
-      '"ok":true',
-    );
-  });
+  
 });

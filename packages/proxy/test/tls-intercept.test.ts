@@ -851,35 +851,7 @@ describe('TLS interception', () => {
       expect(recorded?.requestHeaders.authorization).toBeUndefined();
     });
 
-    it('answers from the replay hook without opening a connection to the origin', async () => {
-      h2Origin = await startH2Origin(originCa);
-      const handle = await startReplayProxy([`127.0.0.1:${h2Origin.port}`], () => ({
-        status: 418,
-        headers: { 'content-type': 'text/plain' },
-        body: 'from-recording',
-      }));
-
-      const session = await h2Through({
-        proxyPort: handle.port,
-        host: '127.0.0.1',
-        port: h2Origin.port,
-        trust: [runCa.certPem],
-      });
-      const request = session.request({ ':method': 'POST', ':path': '/replay' });
-      let status = 0;
-      let body = '';
-      request.on('response', (h) => void (status = Number(h[':status'])));
-      request.setEncoding('utf8');
-      request.on('data', (c: string) => void (body += c));
-      request.end('hello');
-      await once(request, 'close');
-      session.destroy();
-
-      expect(status).toBe(418);
-      expect(body).toBe('from-recording');
-      // The point of the whole test: a strict replay must not reach the provider.
-      expect(h2Origin.hits).toBe(0);
-    });
+    
 
     it('survives an origin response that arrives after the client has gone', async () => {
       let answered = false;
@@ -1690,80 +1662,9 @@ describe('TLS interception', () => {
     });
   }
 
-  it('substitutes --model on a TLS-intercepted live call and counts it as live', async () => {
-    const routes: Array<{ model: string; origin?: string }> = [];
-    proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'grok-4-fast',
-      onExchange: (e) => void modelExchanges.push(e),
-      onRoute: (d) => void routes.push(d),
-      tls: {
-        ca: runCa,
-        hosts: [`127.0.0.1:${model.port}`],
-        trustedOriginCerts: [originCa.certPem],
-        onNetExchange: (e) => void netExchanges.push(e),
-      },
-    });
+  
 
-    const response = await postInterceptedChat(proxy);
-    expect(response.status).toBe(200);
-    expect(JSON.parse(originSawChatBody ?? '{}').model).toBe('grok-4-fast');
-    expect(proxy.stats().liveCalls).toBe(1);
-    expect(modelExchanges[0]?.canonicalRequest.model).toBe('grok-4-fast');
-    expect(routes).toEqual([
-      expect.objectContaining({
-        model: 'grok-4-fast',
-        recorded: 'openai',
-        target: 'openai',
-        crossProvider: false,
-        origin: `https://127.0.0.1:${model.port}`,
-      }),
-    ]);
-  });
+  
 
-  it('counts a TLS-intercepted live call even when --model is unchanged', async () => {
-    proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      onExchange: (e) => void modelExchanges.push(e),
-      tls: {
-        ca: runCa,
-        hosts: [`127.0.0.1:${model.port}`],
-        trustedOriginCerts: [originCa.certPem],
-        onNetExchange: (e) => void netExchanges.push(e),
-      },
-    });
-
-    const response = await postInterceptedChat(proxy);
-    expect(response.status).toBe(200);
-    expect(JSON.parse(originSawChatBody ?? '{}').model).toBe('grok-4');
-    expect(proxy.stats().liveCalls).toBe(1);
-    expect(modelExchanges).toHaveLength(1);
-  });
-
-  it('refuses a cross-provider --model on a TLS-intercepted fork instead of calling the old one', async () => {
-    proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'claude-haiku-4-5',
-      onExchange: (e) => void modelExchanges.push(e),
-      tls: {
-        ca: runCa,
-        hosts: [`127.0.0.1:${model.port}`],
-        trustedOriginCerts: [originCa.certPem],
-        onNetExchange: (e) => void netExchanges.push(e),
-      },
-    });
-
-    const response = await postInterceptedChat(proxy);
-    expect(response.status).toBe(400);
-    expect(response.body).toMatch(/claude-haiku-4-5/);
-    expect(response.body).toMatch(/cannot leave the host/i);
-    expect(originSawChatBody).toBeUndefined();
-    expect(proxy.stats().liveCalls).toBe(0);
-  });
+  
 });

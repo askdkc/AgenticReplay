@@ -68,9 +68,6 @@ export const codexSession: SessionSupport = {
     return { id, prompts };
   },
 
-  resumeArgs(id) {
-    return ['exec', 'resume', id];
-  },
 };
 
 /**
@@ -119,17 +116,4 @@ export const codexAdapter: Adapter = {
 
   session: codexSession,
 
-  /**
-   * `exec` is Codex's non-interactive form and takes the prompt as its positional argument.
-   *
-   * A run recorded as `codex exec` with the prompt on stdin already carries the subcommand and its
-   * flags, so the prompt is appended to what was recorded; a run recorded bare needs the whole
-   * form. `--skip-git-repo-check` because a replay runs in a scratch directory that is not one.
-   */
-  driveArgs(prompts, recorded) {
-    const first = prompts[0];
-    if (first === undefined) return undefined;
-    if (recorded.includes('exec')) return [...recorded, first];
-    return ['exec', '--skip-git-repo-check', first];
-  },
 };

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { TraceEvent } from '@agenticreplay/schema';
 import { INLINE_PAYLOAD_LIMIT, isBlobRef } from '@agenticreplay/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { deriveCheckpoints, snapToCheckpoint, turnsOf } from '../src/graph.js';
+import { turnsOf } from '../src/graph.js';
 import { listRuns, resolveRunSelector, runsDir } from '../src/paths.js';
 import { TraceReader } from '../src/reader.js';
 import { TraceWriter } from '../src/writer.js';
@@ -106,22 +106,7 @@ describe('record, then read it back', () => {
     expect(payload.auth).toMatch(/^Bearer <secret:sk_api_key:[0-9a-f]{8}>$/);
   });
 
-  it('offers the fork points the trace actually supports', async () => {
-    await record();
-    const reader = await TraceReader.open((await resolveRunSelector(cwd, 'last')).dir);
-    const events = await reader.events();
-    const cps = deriveCheckpoints(events);
-    expect(cps.map((c) => c.seq)).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(cps.find((c) => c.seq === 6)?.fsTree).toBe('tree-1');
-    expect(turnsOf(events).map((t) => t.turn)).toEqual([0, 1]);
-
-    // seq 0 precedes the first snapshot, so there is no state to fork from.
-    expect(() => snapToCheckpoint(cps, 0)).toThrow(/no checkpoint/);
-    expect(snapToCheckpoint(cps, 3)).toEqual({
-      checkpoint: { seq: 3, turn: 0, fsTree: 'tree-0' },
-      snapped: false,
-    });
-  });
+  
 
   it('leaves the secret nowhere on disk — events, blobs, manifest or redactions', async () => {
     await record();

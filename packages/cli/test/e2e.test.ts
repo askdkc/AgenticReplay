@@ -7,7 +7,6 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   TraceReader,
-  deriveCheckpoints,
   listRuns,
   resolveRunSelector,
   runGraph,
@@ -17,7 +16,6 @@ import { isBlobRef, validateEvent, validateManifest } from '@agenticreplay/schem
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { recordCommand } from '../src/commands/record.js';
-import { replayCommand } from '../src/commands/replay.js';
 import { startFakeModel } from './fixtures/fake-model.mjs';
 import { existsSync, mkdirSync, symlinkSync, unlinkSync } from 'node:fs';
 
@@ -63,7 +61,7 @@ async function withIsolatedTmp<T>(
  * If these three work against a real child process, a real proxy and a real trace on disk, the
  * mechanism is proven. Everything else is refinement.
  */
-describe('end to end: record → replay → fork', () => {
+describe('end to end: record and inspect', () => {
   let workspace: string;
   let model: Awaited<ReturnType<typeof startFakeModel>>;
   let out: Output;
@@ -143,121 +141,17 @@ describe('end to end: record → replay → fork', () => {
     expect((await (await TraceReader.open(result.runDir)).verifyIntegrity()).ok).toBe(true);
   });
 
-  it('replays exactly, with the model server never contacted again', async () => {
-    await record();
-    const callsAfterRecording = model.calls.length;
-    expect(callsAfterRecording).toBeGreaterThan(0);
+  
 
-    const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
+  
 
-    expect(result.mode).toBe('exact');
-    expect(result.canonicalExact).toBeGreaterThan(0);
-    expect(result.divergences).toBe(0);
-    expect(result.liveCalls).toBe(0);
-    expect(model.calls.length, 'exact replay must not reach the network at all').toBe(
-      callsAfterRecording,
-    );
-  });
+  
 
-  it('replays exactly when the recorded bodies are large enough to spill to blobs', async () => {
-    // The size is the test. Under the inline limit a body is stored as itself; over it, the writer
-    // spills `JSON.stringify(payload)` and the body becomes a quoted, escaped JSON string literal.
-    // Replay read those bytes back without undoing the encoding, so it canonicalized an escaped
-    // copy — `model: ''`, `messages: []` — and matched nothing against any real harness, which all
-    // send a system prompt big enough to spill on turn one. Every other test here stayed under the
-    // limit, so all of them passed while replay was completely broken in practice.
-    process.env.FAKE_AGENT_PAD = '400';
-    try {
-      const recorded = await record();
-      const events = await (await TraceReader.open(recorded.runDir)).events();
-      const request = events.find((e) => e.type === 'model.request');
-      expect(isBlobRef(request?.payload), 'fixture must cross the spill boundary').toBe(true);
+  
 
-      const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
+  
 
-      expect(result.canonicalExact).toBeGreaterThan(0);
-      expect(result.divergences).toBe(0);
-      expect(result.liveCalls).toBe(0);
-    } finally {
-      delete process.env.FAKE_AGENT_PAD;
-    }
-  });
-
-  it('halts with a reason, not a hang, when the agent asks something else', async () => {
-    await record();
-
-    // Same recording, different question: nothing can match, and the operator has to be told why.
-    process.env.FAKE_AGENT_PROMPT = 'do something completely different';
-    try {
-      const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      expect(result.canonicalExact).toBe(0);
-      expect(result.exitCode, 'a halted replay must not look like a clean run').not.toBe(0);
-      const halt = lines.find((l) => l.includes('replay.unmatched'));
-      expect(halt, `no halt reason in output:\n${lines.join('\n')}`).toBeDefined();
-      expect(halt).toContain('does not match the recording');
-    } finally {
-      delete process.env.FAKE_AGENT_PROMPT;
-    }
-  });
-
-  it('replays a run that changed the files it depends on', async () => {
-    // The one that made exact replay useless on a real agent. The recording reads auth.ts into the
-    // conversation and then edits it, so by the time you replay, the working tree no longer holds
-    // what the recorded request contains. Replaying in place re-reads the mutated file, the
-    // trailing message differs, and the run halts at rung 4 — correctly, but uselessly: nothing
-    // about the recording changed, only the directory it ran in.
-    //
-    // Replay therefore restores the filesystem the run started from, the same way a fork does.
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      const mutated = await readFile(join(workspace, 'auth.ts'), 'utf8');
-      expect(
-        mutated,
-        'the recording must have changed the file for this test to mean anything',
-      ).not.toBe('export const fixed = false;\n');
-
-      const result = await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      expect(result.canonicalExact).toBeGreaterThan(0);
-      expect(result.exitCode).toBe(0);
-      expect(lines.join('\n')).not.toContain('replay.unmatched');
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
-
-  it('leaves the working tree exactly as it found it', async () => {
-    // Replay restores the recorded state over the working tree, because a harness bakes absolute
-    // paths into its tool calls and a copy somewhere else gets a permission refusal where the
-    // recording has file contents. That is only acceptable because it is reversible: the current
-    // state is snapshotted first and put back afterwards, so a replay is observationally a no-op
-    // on your checkout.
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      const before = await readFile(join(workspace, 'auth.ts'), 'utf8');
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe(before);
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
-
-  it('replays in the directory the run was recorded in, not a copy of it', async () => {
-    // The property the whole restore exists for. Harnesses record absolute paths, so the replay
-    // has to happen at the same path or the agent is reading somewhere it was never given.
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      const replaying = lines.find((l) => l.includes('info replaying')) ?? '';
-      expect(replaying).toContain(`cwd=${workspace}`);
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
+  
 
   /**
    * A refusal must not cost you your working tree.
@@ -270,25 +164,7 @@ describe('end to end: record → replay → fork', () => {
    *
    * Asserted on the file rather than on the error, because the error was never the problem.
    */
-  it('leaves the working tree alone when it refuses the upstream', async () => {
-    await record();
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-
-    await expect(
-      replayCommand(
-        parseArgs(['replay', 'last', '--upstream-openai', 'myuser:PASSWORD@gw.example/v1']),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/is not an origin agenticreplay can use/);
-
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a refused replay must not have touched the checkout',
-    ).toBe('MY UNCOMMITTED WORK\n');
-    // And it never claimed to have: the restore line belongs to a replay that got that far.
-    expect(lines.join('\n')).not.toContain('replay.restored');
-  });
+  
 
   /**
    * Nor may a refusal leave a run behind.
@@ -301,45 +177,7 @@ describe('end to end: record → replay → fork', () => {
    * why it went unnoticed; it is the same rule, and the rule is that an invocation which cannot
    * work decides so before it touches anything.
    */
-  it('leaves no run behind when it refuses the upstream', async () => {
-    const BAD = 'myuser:PASSWORD@gw.example/v1';
-
-    const before = (await listRuns(workspace)).length;
-    await expect(
-      recordCommand(
-        parseArgs(['record', 'generic-openai', '--upstream-openai', BAD, '--', 'node', FAKE_AGENT]),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/is not an origin agenticreplay can use/);
-    expect((await listRuns(workspace)).length, 'a refused record must not have created a run').toBe(
-      before,
-    );
-
-    // The fork path gets there by a different route: a checkpoint restored into a temp worktree and
-    // a second run directory, both made before the upstream was ever looked at.
-    await record();
-    const afterGood = (await listRuns(workspace)).length;
-    await expect(
-      replayCommand(
-        parseArgs([
-          'replay',
-          'last',
-          '--from',
-          '1',
-          '--model',
-          'gpt-5.2',
-          '--upstream-openai',
-          BAD,
-        ]),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/is not an origin agenticreplay can use/);
-    expect((await listRuns(workspace)).length, 'a refused fork must not have created a run').toBe(
-      afterGood,
-    );
-  });
+  
 
   /**
    * The same rule, for the other refusal in the same window.
@@ -354,27 +192,7 @@ describe('end to end: record → replay → fork', () => {
    * `planTlsCapture` is the refusing half on its own and mints nothing; `attach` already calls it
    * before its run directory for exactly this reason.
    */
-  it('leaves the working tree alone when it refuses the tls host list', async () => {
-    await record();
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-    const before = (await listRuns(workspace)).length;
-
-    await expect(
-      replayCommand(
-        parseArgs(['replay', 'last', '--tls-intercept', '--tls-hosts', '*']),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/would intercept every host/);
-
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a refused replay must not have touched the checkout',
-    ).toBe('MY UNCOMMITTED WORK\n');
-    // And it never claimed to have: the restore line belongs to a replay that got that far.
-    expect(lines.join('\n')).not.toContain('replay.restored');
-    expect((await listRuns(workspace)).length, 'nor created a run for it').toBe(before);
-  });
+  
 
   /**
    * The refusal that hoisting alone would still have missed.
@@ -388,29 +206,7 @@ describe('end to end: record → replay → fork', () => {
    * Worth its own test because it is the one that proves the rule generalises. `createProxy`,
    * `RunCa.create` and `adapter.prepare` all sit in the same window and are not on any list.
    */
-  it('leaves the working tree alone when the upstream CA cannot be read', async () => {
-    await record();
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-
-    process.env.AGENTICREPLAY_TLS_UPSTREAM_CA = join(workspace, 'no-such-root.pem');
-    try {
-      await expect(
-        replayCommand(
-          parseArgs(['replay', 'last', '--tls-intercept', '--tls-hosts', 'api.openai.com']),
-          out,
-          workspace,
-        ),
-      ).rejects.toThrow(/ENOENT|no such file/);
-    } finally {
-      delete process.env.AGENTICREPLAY_TLS_UPSTREAM_CA;
-    }
-
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a refused replay must not have touched the checkout',
-    ).toBe('MY UNCOMMITTED WORK\n');
-    expect(lines.join('\n')).not.toContain('replay.restored');
-  });
+  
 
   /**
    * And the same on the two paths where only scratch is at stake.
@@ -420,51 +216,7 @@ describe('end to end: record → replay → fork', () => {
    * run for `agenticreplay list` to show, plus a worktree in `$TMPDIR` that `agenticreplay gc` will not reclaim
    * because no manifest points at it. Cheaper than the checkout, the same rule.
    */
-  it('leaves no run behind when it refuses the tls host list', async () => {
-    const before = (await listRuns(workspace)).length;
-    await expect(
-      recordCommand(
-        parseArgs([
-          'record',
-          'generic-openai',
-          '--tls-intercept',
-          '--tls-hosts',
-          '*',
-          '--',
-          'node',
-          FAKE_AGENT,
-        ]),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/would intercept every host/);
-    expect((await listRuns(workspace)).length, 'a refused record must not have created a run').toBe(
-      before,
-    );
-
-    await record();
-    const afterGood = (await listRuns(workspace)).length;
-    await expect(
-      replayCommand(
-        parseArgs([
-          'replay',
-          'last',
-          '--from',
-          '1',
-          '--model',
-          'gpt-5.2',
-          '--tls-intercept',
-          '--tls-hosts',
-          '*',
-        ]),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/would intercept every host/);
-    expect((await listRuns(workspace)).length, 'a refused fork must not have created a run').toBe(
-      afterGood,
-    );
-  });
+  
 
   /**
    * The restore is inside the thing that undoes it, so the caller cannot guard it.
@@ -478,30 +230,7 @@ describe('end to end: record → replay → fork', () => {
    * and the failure lands where it matters: on `read-tree`, inside the restore. `agenticreplay gc` on a
    * half-copied trace gets there the same way.
    */
-  it('puts the working tree back when the restore itself fails', async () => {
-    const recorded = await record();
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-
-    // A shadow store that opens and holds nothing: every loose-object directory removed.
-    const objects = join(recorded.runDir, 'fs', 'objects');
-    for (const entry of await readdir(objects)) {
-      if (/^[0-9a-f]{2}$/.test(entry)) await rm(join(objects, entry), { recursive: true });
-    }
-
-    const { leftBehind } = await withIsolatedTmp(async () => {
-      await expect(replayCommand(parseArgs(['replay', 'last']), out, workspace)).rejects.toThrow();
-    });
-
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a replay whose restore failed must not have kept the operator out of their own tree',
-    ).toBe('MY UNCOMMITTED WORK\n');
-    // The release ran, which is the whole assertion: it is the only thing that removes the
-    // scratch, and it removes it only once the tree is back.
-    expect(leftBehind, 'nor left the only copy of it in a temp directory nothing names').toEqual(
-      [],
-    );
-  });
+  
 
   /**
    * A replay that dies after minting a certificate authority must take the key with it.
@@ -517,31 +246,7 @@ describe('end to end: record → replay → fork', () => {
    * then, and a proxy that is not closed keeps Node's event loop alive — so a regression shows up
    * as this test timing out rather than as a hang nobody notices until a user reports it.
    */
-  it('takes the run CA with it when the replay dies after minting one', async () => {
-    const recorded = await record();
-    const manifestPath = join(recorded.runDir, 'manifest.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
-      adapter: { id: string };
-    };
-    manifest.adapter.id = 'agent-from-the-future';
-    await writeFile(manifestPath, JSON.stringify(manifest));
-
-    await expect(
-      replayCommand(
-        parseArgs(['replay', 'last', '--tls-intercept', '--tls-hosts', 'api.openai.com']),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/unknown adapter/);
-
-    const withKey: string[] = [];
-    const runsRoot = join(workspace, '.agenticreplay', 'runs');
-    for (const run of await readdir(runsRoot)) {
-      const entries = await readdir(join(runsRoot, run)).catch(() => [] as string[]);
-      if (entries.includes('tls')) withKey.push(run);
-    }
-    expect(withKey, 'a replay that refused after minting must not leave the key').toEqual([]);
-  });
+  
 
   /**
    * The one line a reader checks to know whether a run can spend money.
@@ -551,38 +256,9 @@ describe('end to end: record → replay → fork', () => {
    * bug was that one value was printed for two behaviours; a test that only pins `--loose` would
    * pass again the moment someone hardcoded the other way round.
    */
-  it('says egress is blocked only when it is, and says so differently under --loose', async () => {
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
+  
 
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      const strict = lines.find((l) => l.includes('info replaying')) ?? '';
-      expect(strict).toContain('egress=blocked');
-
-      lines.length = 0;
-      await replayCommand(parseArgs(['replay', 'last', '--loose']), out, workspace);
-      const loose = lines.find((l) => l.includes('info replaying')) ?? '';
-      expect(loose, `no replaying line in:\n${lines.join('\n')}`).not.toContain('egress=blocked');
-      expect(loose).toContain('egress=live-on-unmatched');
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
-
-  it('names the snapshot it can restore from if a replay dies halfway', async () => {
-    // The safety net has to be visible before it is needed. If the process is killed between the
-    // restore and the put-back, this id is the only way back to the tree you had.
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      const line = lines.find((l) => l.includes('replay.restored')) ?? '';
-      expect(line, `no restore line in:\n${lines.join('\n')}`).toMatch(/[0-9a-f]{40}/);
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
+  
 
   /**
    * "Your files are restored when the replay ends" has two halves, and the put-back kept neither
@@ -592,76 +268,21 @@ describe('end to end: record → replay → fork', () => {
    * writes files without removing any, so a file the recording had and the operator has deleted
    * since came back, and stayed.
    */
-  it('puts back exactly the tree it found: nothing lost, nothing added', async () => {
-    await writeFile(join(workspace, 'settings.json'), '{"endpoint":"recorded"}\n');
-    mkdirSync(join(workspace, 'legacy'));
-    await writeFile(join(workspace, 'legacy', 'old-config.env'), 'OLD CONFIG\n');
-    const recorded = await record(2);
-
-    // Since the recording: the legacy directory is gone, and settings.json became a local file.
-    await rm(join(workspace, 'legacy'), { recursive: true, force: true });
-    await writeFile(join(workspace, '.gitignore'), 'settings.json\n');
-    await writeFile(join(workspace, 'settings.json'), '{"endpoint":"MY LOCAL SETTINGS"}\n');
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-
-    const { leftBehind } = await withIsolatedTmp(async () => {
-      await expect(
-        replayCommand(parseArgs(['replay', recorded.runId]), out, workspace),
-      ).rejects.toThrow(/would overwrite settings\.json/);
-    });
-    expect(
-      await readFile(join(workspace, 'settings.json'), 'utf8'),
-      'an ignored file the copy does not hold must not be overwritten',
-    ).toBe('{"endpoint":"MY LOCAL SETTINGS"}\n');
-    expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe('MY UNCOMMITTED WORK\n');
-    expect(leftBehind, 'a refused replay must not leave its copy behind').toEqual([]);
-
-    // Moved aside, the replay runs, and hands back the tree it found — without the files the
-    // recording had and this tree does not, and without the directory it made for them.
-    await rm(join(workspace, 'settings.json'));
-    await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-    expect(existsSync(join(workspace, 'legacy')), 'a deleted directory came back').toBe(false);
-    expect(existsSync(join(workspace, 'settings.json')), 'a removed file came back').toBe(false);
-    expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe('MY UNCOMMITTED WORK\n');
-    expect(await readFile(join(workspace, '.gitignore'), 'utf8')).toBe('settings.json\n');
-  });
+  
 
   /**
    * The same promise, for what the replayed agent writes rather than what the restore does. An exact
    * replay makes the recorded agent do what it did, so a file it created during the recording is
    * created again — and the put-back, whose copy never had it, left it in the operator's tree.
    */
-  it('takes away what the replayed agent created, as well as what the restore wrote', async () => {
-    await rm(join(workspace, 'auth.ts'));
-    const recorded = await record(2);
-    expect(existsSync(join(workspace, 'auth.ts')), 'fixture: the agent creates auth.ts').toBe(true);
-    await rm(join(workspace, 'auth.ts'));
-    await writeFile(join(workspace, 'notes.txt'), 'MY NOTES\n');
-
-    const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-    expect(replayed.canonicalExact, 'the agent must actually have run').toBe(2);
-    expect(existsSync(join(workspace, 'auth.ts')), 'the replayed agent left its file').toBe(false);
-    expect(await readFile(join(workspace, 'notes.txt'), 'utf8')).toBe('MY NOTES\n');
-  });
+  
 
   /**
    * A file standing where the recording had a directory is in the way of every path under it, and
    * the restore deletes it to make the directory. `lstat` answers ENOTDIR for those paths, which
    * read as "nothing there" — so an ignored file at such a path was destroyed without a copy.
    */
-  it('counts a file where the recording had a directory as something it would overwrite', async () => {
-    mkdirSync(join(workspace, 'cfg'));
-    await writeFile(join(workspace, 'cfg', 'app.json'), '{"recorded":true}\n');
-    const recorded = await record(2);
-    await rm(join(workspace, 'cfg'), { recursive: true, force: true });
-    await writeFile(join(workspace, '.gitignore'), 'cfg\n');
-    await writeFile(join(workspace, 'cfg'), 'MY LOCAL CFG FILE\n');
-
-    await expect(
-      replayCommand(parseArgs(['replay', recorded.runId]), out, workspace),
-    ).rejects.toThrow(/would overwrite cfg:/);
-    expect(await readFile(join(workspace, 'cfg'), 'utf8')).toBe('MY LOCAL CFG FILE\n');
-  });
+  
 
   /**
    * A junction is a directory as far as git is concerned: the copy holds what is inside it as
@@ -670,27 +291,7 @@ describe('end to end: record → replay → fork', () => {
    * restore would only have written that file back and the put-back taken it away again. On POSIX
    * git records a symlink as itself, so there this holds trivially; on Windows it is the case.
    */
-  it('treats a directory link git walks into as the directory it is', async () => {
-    const outside = await mkdtemp(join(tmpdir(), 'agenticreplay-outside-'));
-    const link = join(workspace, 'data');
-    symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
-    try {
-      await writeFile(join(outside, 'a.csv'), 'A\n');
-      await writeFile(join(outside, 'b.csv'), 'B\n');
-      const recorded = await record(2);
-      await rm(join(outside, 'b.csv'));
-      await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-
-      const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-      expect(replayed.canonicalExact).toBe(2);
-      expect(await readdir(outside), 'the deleted file must stay deleted').toEqual(['a.csv']);
-      expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe('MY UNCOMMITTED WORK\n');
-    } finally {
-      // The link first and on its own, so nothing recursive ever walks through it.
-      unlinkSync(link);
-      await rm(outside, { recursive: true, force: true });
-    }
-  });
+  
 
   /**
    * The other half of the case above: a file where the recording had a directory, and one the copy
@@ -700,51 +301,9 @@ describe('end to end: record → replay → fork', () => {
    * claim was that the put-back skips a file over a non-empty directory, which git 2.43 (Linux) and
    * 2.55 (Windows) both do not.
    */
-  it('puts back a held file where the recording had a directory', async () => {
-    mkdirSync(join(workspace, 'cfg'));
-    await writeFile(join(workspace, 'cfg', 'app.json'), '{"recorded":true}\n');
-    const recorded = await record(2);
-    await rm(join(workspace, 'cfg'), { recursive: true, force: true });
-    await writeFile(join(workspace, 'cfg'), 'MY UNCOMMITTED EDIT\n');
+  
 
-    const replayed = await replayCommand(parseArgs(['replay', recorded.runId]), out, workspace);
-    expect(replayed.canonicalExact).toBe(2);
-    expect(await readFile(join(workspace, 'cfg'), 'utf8')).toBe('MY UNCOMMITTED EDIT\n');
-  });
-
-  it('does not leave a copy of the working tree in the temp directory', async () => {
-    // The safety snapshot is a shadow git store holding the whole workspace, and it was never
-    // removed — one per `agenticreplay replay`, growing with the size of your checkout, in a directory
-    // `agenticreplay gc` deliberately will not sweep because it only reclaims fork worktrees. Replay owns
-    // it, so replay has to clean it up.
-    //
-    // Watched in a temp directory of this test's own, not in the machine's. Diffing a listing of
-    // the whole OS temp dir before and after cannot tell a directory *this* replay created from
-    // one another test's replay created in the same window, so under the parallel suite it failed
-    // with nothing wrong. `replay.ts` calls `tmpdir()` at the moment it mkdtemps, so redirecting
-    // it here is enough, and leaves the product's own output alone.
-    const isolatedTmp = await mkdtemp(join(tmpdir(), 'agenticreplay-e2e-tmp-'));
-    const outerTmp = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
-    process.env.TEMP = isolatedTmp;
-    process.env.TMP = isolatedTmp;
-    process.env.TMPDIR = isolatedTmp;
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-      const leaked = (await readdir(isolatedTmp)).filter((e) =>
-        e.startsWith('agenticreplay-safety-'),
-      );
-      expect(leaked, 'the pre-replay snapshot store must not outlive the replay').toEqual([]);
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-      for (const [key, value] of Object.entries(outerTmp)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      await rm(isolatedTmp, { recursive: true, force: true });
-    }
-  });
+  
 
   /**
    * `--worktree` promises never to touch your files, and two branches ahead of the one that reads
@@ -752,65 +311,9 @@ describe('end to end: record → replay → fork', () => {
    * --no-fs fell through to the in-place warning and ran the agent over the working tree anyway —
    * the recorded edit landed on uncommitted work.
    */
-  it('never replays in your directory once asked for a scratch copy', async () => {
-    const withFs = await record(2);
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-    await expect(
-      replayCommand(
-        parseArgs(['replay', withFs.runId, '--worktree', '--in-place']),
-        out,
-        workspace,
-      ),
-    ).rejects.toThrow(/cannot both apply/);
-    expect(await readFile(join(workspace, 'auth.ts'), 'utf8')).toBe('MY UNCOMMITTED WORK\n');
+  
 
-    const noFs = await recordCommand(
-      parseArgs([
-        'record',
-        'generic-openai',
-        '--no-fs',
-        '--upstream-anthropic',
-        model.url,
-        '--',
-        'node',
-        FAKE_AGENT,
-      ]),
-      out,
-      workspace,
-    );
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-    const { leftBehind } = await withIsolatedTmp(async () => {
-      await expect(
-        replayCommand(parseArgs(['replay', noFs.runId, '--worktree']), out, workspace),
-      ).rejects.toThrow(/no workspace snapshot to copy/);
-    });
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a replay asked for a scratch copy must not have written into the checkout',
-    ).toBe('MY UNCOMMITTED WORK\n');
-    expect(leftBehind).toEqual([]);
-    const warned = lines.find((l) => l.includes('replay.no_snapshot')) ?? '';
-    expect(warned, `no diagnosis in:\n${lines.join('\n')}`).toContain('--in-place');
-    expect(lines.join('\n')).not.toContain('replay.in-place');
-
-    // Unchanged without the flag: a run with no snapshot still replays where it is, and says so.
-    const inPlace = await replayCommand(parseArgs(['replay', noFs.runId]), out, workspace);
-    expect(inPlace.canonicalExact).toBe(2);
-    expect(lines.join('\n')).toContain('replay.in-place');
-  });
-
-  it('does not touch the working tree when asked to replay in a scratch copy', async () => {
-    process.env.FAKE_AGENT_READ = 'auth.ts';
-    try {
-      await record();
-      await replayCommand(parseArgs(['replay', 'last', '--worktree']), out, workspace);
-      const replaying = lines.find((l) => l.includes('info replaying')) ?? '';
-      expect(replaying).not.toContain(`cwd=${workspace}`);
-      expect(lines.join('\n')).not.toContain('replay.restored');
-    } finally {
-      delete process.env.FAKE_AGENT_READ;
-    }
-  });
+  
 
   /**
    * A RUN CAN BE WITHOUT THE STORE ITS OWN EVENTS POINT AT: pulled from a gateway it was pushed to
@@ -820,102 +323,11 @@ describe('end to end: record → replay → fork', () => {
    * path said what had happened. Each refusal also left an empty directory in `$TMPDIR` that
    * nothing named and `agenticreplay gc` never reclaims.
    */
-  it('says why it cannot restore a run whose snapshots are gone, and leaves nothing behind', async () => {
-    const recorded = await record(2);
-    const from = deriveCheckpoints(await (await TraceReader.open(recorded.runDir)).events())[0]!
-      .seq;
-    await rm(join(recorded.runDir, 'fs'), { recursive: true, force: true });
-    await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
+  
 
-    const { leftBehind } = await withIsolatedTmp(async () => {
-      for (const extra of [[], ['--worktree']]) {
-        await expect(
-          replayCommand(parseArgs(['replay', recorded.runId, ...extra]), out, workspace),
-        ).rejects.toThrow(/no workspace snapshot to restore/);
-      }
-      await expect(
-        replayCommand(
-          parseArgs([
-            'replay',
-            recorded.runId,
-            '--from',
-            String(from),
-            '--model',
-            'claude-sonnet-5',
-            '--upstream-anthropic',
-            model.url,
-          ]),
-          out,
-          workspace,
-        ),
-      ).rejects.toThrow(/no workspace snapshot for the checkpoint/);
-    });
+  
 
-    // Both causes named, because nothing on disk says which it was — and the first one has a way
-    // back that the old wording ("never the filesystem snapshots") said did not exist.
-    const warned = lines.filter((l) => /(replay|fork)\.no_snapshot/.test(l));
-    expect(warned, `expected three diagnoses in:\n${lines.join('\n')}`).toHaveLength(3);
-    for (const line of warned) {
-      expect(line).toContain('pushed with --fs');
-      expect(line).toContain('--drop-fs');
-    }
-    expect(warned.slice(0, 2).every((l) => l.includes('--in-place'))).toBe(true);
-    expect(warned[2]).toContain('--no-fs');
-
-    expect(leftBehind, 'a refusal must not leave a worktree in the temp directory').toEqual([]);
-    expect(
-      await readFile(join(workspace, 'auth.ts'), 'utf8'),
-      'a refused replay must not have touched the checkout',
-    ).toBe('MY UNCOMMITTED WORK\n');
-
-    // And the way out it names has to work, or the diagnosis is just a nicer dead end.
-    const inPlace = await replayCommand(
-      parseArgs(['replay', recorded.runId, '--in-place']),
-      out,
-      workspace,
-    );
-    expect(inPlace.unmatched).toBe(0);
-    expect(inPlace.canonicalExact).toBe(2);
-  });
-
-  it('says where the recording ran and where the replay ran when it halts', async () => {
-    // A halt reason like "distance 205343" is true and useless. The most common cause by far is
-    // that the recorded conversation contains absolute paths from the directory the run was made
-    // in and the replay is somewhere else, so the harness refuses the read and the tool result
-    // comes back as a permission error instead of the file. Both directories on the line is what
-    // turns the number into something an operator can act on — including confirming they match.
-    await record();
-    // Set *after* recording: the replay has to ask something the recording cannot answer.
-    process.env.FAKE_AGENT_PROMPT = 'ask something else entirely';
-    try {
-      await replayCommand(parseArgs(['replay', 'last']), out, workspace);
-
-      const halt = lines.find((l) => l.includes('replay.unmatched')) ?? '';
-      expect(halt).toContain(`recorded_in=${workspace}`);
-      expect(halt).toContain(`replayed_in=${workspace}`);
-      expect(halt).toContain('--loose');
-    } finally {
-      delete process.env.FAKE_AGENT_PROMPT;
-    }
-  });
-
-  it('points at the recording directory when the replay is somewhere else', async () => {
-    await record();
-    const elsewhere = await mkdtemp(join(tmpdir(), 'agenticreplay-elsewhere-'));
-    process.env.FAKE_AGENT_PROMPT = 'ask something else entirely';
-    try {
-      // Copy the trace, not the files: this is someone replaying a colleague's run.
-      await run('cp', ['-r', join(workspace, '.agenticreplay'), elsewhere]);
-      await replayCommand(parseArgs(['replay', 'last']), out, elsewhere);
-
-      const warned = lines.find((l) => l.includes('replay.elsewhere')) ?? '';
-      expect(warned, `no elsewhere warning in:\n${lines.join('\n')}`).toContain(workspace);
-      expect(warned).toContain('--worktree');
-    } finally {
-      delete process.env.FAKE_AGENT_PROMPT;
-      await rm(elsewhere, { recursive: true, force: true });
-    }
-  });
+  
 
   /**
    * The directory a run was recorded in is that directory however the path to it is spelled.
@@ -925,32 +337,7 @@ describe('end to end: record → replay → fork', () => {
    * the replay called it "elsewhere", skipped the safety copy, and the recorded edit replaced
    * uncommitted work in the very directory the run was made in.
    */
-  it('restores and puts back where it was recorded, however that path is spelled', async () => {
-    await record(2);
-    const aliasRoot = await mkdtemp(join(tmpdir(), 'agenticreplay-alias-'));
-    const alias = join(aliasRoot, 'same');
-    await symlink(workspace, alias, process.platform === 'win32' ? 'junction' : 'dir');
-    const spellings = [alias];
-    if (process.platform === 'win32') {
-      spellings.push(workspace.replace(/^[A-Z]:/, (drive) => drive.toLowerCase()));
-    }
-    try {
-      for (const cwd of spellings) {
-        await writeFile(join(workspace, 'auth.ts'), 'MY UNCOMMITTED WORK\n');
-        await replayCommand(parseArgs(['replay', 'last']), out, cwd);
-        expect(
-          await readFile(join(workspace, 'auth.ts'), 'utf8'),
-          `replayed from ${cwd}: the checkout must come back as it was`,
-        ).toBe('MY UNCOMMITTED WORK\n');
-      }
-      expect(lines.join('\n')).not.toContain('replay.elsewhere');
-      expect(lines.filter((l) => l.includes('replay.restored'))).toHaveLength(spellings.length);
-    } finally {
-      // The link first and on its own, so nothing recursive ever walks into the workspace.
-      await unlink(alias);
-      await rm(aliasRoot, { recursive: true, force: true });
-    }
-  });
+  
 
   it('records the commit the run started from', async () => {
     // `manifest.git` is in the schema, the Python reader parses it, and nothing ever wrote it — so
@@ -1002,146 +389,15 @@ describe('end to end: record → replay → fork', () => {
     expect(manifest.integrity?.events_sha256).toBeDefined();
   });
 
-  it('derives checkpoints you can fork from', async () => {
-    const result = await record();
-    const events = await (await TraceReader.open(result.runDir)).events();
-    const checkpoints = deriveCheckpoints(events);
-    expect(checkpoints.length).toBeGreaterThan(0);
-    expect(checkpoints[0]!.fsTree).toBeTruthy();
-  });
+  
 
-  it('forks from a checkpoint and continues live on a different model', async () => {
-    const first = await record();
-    const events = await (await TraceReader.open(first.runDir)).events();
-    const checkpoint = deriveCheckpoints(events)[0]!;
-    const callsBefore = model.calls.length;
+  
 
-    const result = await replayCommand(
-      parseArgs([
-        'replay',
-        'last',
-        '--from',
-        String(checkpoint.seq),
-        '--model',
-        'glm-5.3-flash',
-        '--upstream-anthropic',
-        model.url,
-      ]),
-      out,
-      workspace,
-    );
+  
 
-    expect(result.mode).toBe('fork');
-    expect(result.forkRunId).toBeTruthy();
-    expect(result.forkRunId).not.toBe(first.runId);
-    // Live calls happened past the fork point — that is what makes it a fork rather than a replay.
-    expect(result.liveCalls).toBeGreaterThan(0);
-    expect(model.calls.length).toBeGreaterThan(callsBefore);
+  
 
-    // And the substituted model actually reached the upstream.
-    const forkedCalls = model.calls.slice(callsBefore);
-    expect(forkedCalls.some((c) => c.body?.model === 'glm-5.3-flash')).toBe(true);
-  });
-
-  it('records the fork with provenance pointing back at its parent', async () => {
-    const first = await record();
-    const events = await (await TraceReader.open(first.runDir)).events();
-    const checkpoint = deriveCheckpoints(events)[0]!;
-
-    const result = await replayCommand(
-      parseArgs([
-        'replay',
-        'last',
-        '--from',
-        String(checkpoint.seq),
-        '--model',
-        'glm-5.3-flash',
-        '--upstream-anthropic',
-        model.url,
-      ]),
-      out,
-      workspace,
-    );
-
-    const forkDir = (await resolveRunSelector(workspace, result.forkRunId!)).dir;
-    const forkEvents = await (await TraceReader.open(forkDir)).events();
-    const forkEvent = forkEvents.find((e) => e.type === 'fork');
-    expect(forkEvent?.attrs?.parent_run).toBe(first.runId);
-    expect(forkEvent?.attrs?.fork_point).toBe(checkpoint.seq);
-  });
-
-  it('records the filesystem as a fork runs, so a fork can be forked again', async () => {
-    // A fork used to record only the conversation. A checkpoint is derived from a snapshot
-    // (spec §3), so a fork had no checkpoints and could not be forked — and `agenticreplay compare last`
-    // straight after a fork failed with "this run has no checkpoints", because `last` resolves to
-    // the fork. A branch you cannot branch again is a dead end one step in.
-    const recorded = await record();
-    const checkpoints = deriveCheckpoints(await (await TraceReader.open(recorded.runDir)).events());
-    const first = await replayCommand(
-      parseArgs([
-        'replay',
-        'last',
-        '--from',
-        String(checkpoints[0]!.seq),
-        '--model',
-        'glm-5.3-flash',
-        '--upstream-anthropic',
-        model.url,
-      ]),
-      out,
-      workspace,
-    );
-
-    const forkDir = (await resolveRunSelector(workspace, first.forkRunId!)).dir;
-    const forkEvents = await (await TraceReader.open(forkDir)).events();
-    expect(
-      forkEvents.filter((e) => e.type === 'fs.snapshot').length,
-      'the fork recorded no filesystem snapshot',
-    ).toBeGreaterThan(0);
-
-    const forkCheckpoints = deriveCheckpoints(forkEvents);
-    expect(forkCheckpoints.length, 'a fork with no checkpoints cannot be forked').toBeGreaterThan(
-      0,
-    );
-
-    // And the property that actually matters: forking it works.
-    const second = await replayCommand(
-      parseArgs([
-        'replay',
-        first.forkRunId!,
-        '--from',
-        String(forkCheckpoints[0]!.seq),
-        '--model',
-        'claude-haiku-4-5',
-        '--upstream-anthropic',
-        model.url,
-      ]),
-      out,
-      workspace,
-    );
-    expect(second.forkRunId).toBeDefined();
-    expect(second.forkRunId).not.toBe(first.forkRunId);
-    expect(second.exitCode, 'the twice-forked agent must actually run').toBe(0);
-  });
-
-  it('lists both runs afterwards, newest first', async () => {
-    await record();
-    const before = (await listRuns(workspace)).length;
-    const events = await (await TraceReader.open((await listRuns(workspace))[0]!.dir)).events();
-    await replayCommand(
-      parseArgs([
-        'replay',
-        'last',
-        '--from',
-        String(deriveCheckpoints(events)[0]!.seq),
-        '--upstream-anthropic',
-        model.url,
-      ]),
-      out,
-      workspace,
-    );
-    expect((await listRuns(workspace)).length).toBe(before + 1);
-  });
+  
 
   it('never writes the agent api key into the trace', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-e2e-secret-key-should-never-appear-anywhere';

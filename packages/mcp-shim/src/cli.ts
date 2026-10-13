@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 import { createWriteStream, realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { runMock, type JsonRpcMessage, type RecordedFrame } from './mock.js';
 import { fileURLToPath } from 'node:url';
-import { isJsonRpcMessage, type JsonRpcFrame } from './framing.js';
+import type { JsonRpcFrame } from './framing.js';
 import { runShim } from './shim.js';
 import type { FrameDirection } from './shim.js';
 
 export interface ShimCliArgs {
   name: string;
   out?: string;
-  /** Recording to answer from, instead of starting the server. */
-  replay?: string;
   command: string;
   args: string[];
 }
@@ -36,18 +32,16 @@ function fail(problem: string): never {
 export function parseArgs(argv: string[]): ShimCliArgs {
   let name: string | undefined;
   let out: string | undefined;
-  let replay: string | undefined;
   let i = 0;
 
   for (; i < argv.length; i += 1) {
     const arg = argv[i] as string;
     if (arg === '--') break;
-    if (arg === '--name' || arg === '--out' || arg === '--replay') {
+    if (arg === '--name' || arg === '--out') {
       const value = argv[i + 1];
       if (value === undefined || value === '--') fail(`${arg} needs a value`);
       if (arg === '--name') name = value;
       else if (arg === '--out') out = value;
-      else replay = value;
       i += 1;
       continue;
     }
@@ -59,7 +53,7 @@ export function parseArgs(argv: string[]): ShimCliArgs {
   const command = argv[i + 1];
   if (command === undefined) fail("no command after '--': give the MCP server to launch");
 
-  return { name, out, replay, command, args: argv.slice(i + 2) };
+  return { name, out, command, args: argv.slice(i + 2) };
 }
 
 /**
@@ -223,67 +217,6 @@ function toRecord(name: string, dir: FrameDirection, frame: JsonRpcFrame): strin
   return `${JSON.stringify(record)}\n`;
 }
 
-/** A mock's answer in the same capture format the pass-through shim writes. */
-function toMockRecord(name: string, dir: FrameDirection, message: JsonRpcMessage): string {
-  const raw = JSON.stringify(message);
-  const record: McpFrameRecord = {
-    ts: new Date().toISOString(),
-    name,
-    dir,
-    kind:
-      message.method === undefined
-        ? 'response'
-        : message.id === undefined
-          ? 'notification'
-          : 'request',
-    raw,
-  };
-  if (message.id !== undefined) record.id = message.id;
-  if (message.method !== undefined) record.method = message.method;
-  return `${JSON.stringify(record)}
-`;
-}
-
-/** The frames this server produced, read back out of a capture several servers may share. */
-async function readFrames(path: string, name: string): Promise<RecordedFrame[]> {
-  const text = await readFile(path, 'utf8').catch(() => '');
-  const frames: RecordedFrame[] = [];
-  for (const value of text
-    .split(/\r?\n/)
-    .flatMap((line) => objectsOnLine(line, MCP_RECORD_START))) {
-    // The `--replay` reader, so a torn line in a *recording* used to kill the replay of it rather
-    // than cost one frame: the shim died before serving a single recorded answer, every MCP server
-    // in the run with it.
-    if (!isMcpFrameRecord(value)) continue;
-    const record = value;
-    if (record.name !== name) continue;
-    let message: unknown;
-    try {
-      message = JSON.parse(record.raw);
-    } catch {
-      // A line the shim saw but could not parse is still in the capture; it just cannot answer.
-      continue;
-    }
-    // Neither can one that parsed to something that is not a message, and `JSON.parse` is happy
-    // with those: a bare `null` line from a server is recorded as `raw: "null"` — a perfectly
-    // well-formed record — so it went straight past the guard above and was cast to a message.
-    // `indexFrames` then read `.id` off `null`, and `runMock` indexes before it answers anything,
-    // so one such line anywhere in a recording killed the whole replay at startup and every MCP
-    // server in the run with it. Recording tolerated it and replay did not, which is the asymmetry
-    // this reader exists to close.
-    if (!isJsonRpcMessage(message)) continue;
-    frames.push({
-      server: record.name,
-      direction: record.dir === 'in' ? 'in' : 'out',
-      at: record.ts,
-      ...(record.id === undefined ? {} : { id: record.id }),
-      ...(record.method === undefined ? {} : { method: record.method }),
-      message: message as JsonRpcMessage,
-    });
-  }
-  return frames;
-}
-
 export async function main(argv: string[], io: ShimCliIo = {}): Promise<number> {
   const parsed = parseArgs(argv);
 
@@ -301,31 +234,6 @@ export async function main(argv: string[], io: ShimCliIo = {}): Promise<number> 
   }
 
   try {
-    // Replay: answer from the recording and never start the server. The command is still parsed,
-    // because the config the agent reads is the same file either way — what changes is whether
-    // agenticreplay runs what it names. Frames are still written, so the replay is a readable run of its
-    // own rather than one whose MCP layer left no trace at all.
-    if (parsed.replay !== undefined) {
-      const frames = await readFrames(parsed.replay, parsed.name);
-      return await runMock({
-        name: parsed.name,
-        frames,
-        onMiss: (method: string) =>
-          (io.stderr ?? process.stderr).write(
-            `agenticreplay-mcp-shim: no recorded response for ${method} on ${parsed.name}
-`,
-          ),
-        ...(sink
-          ? {
-              onFrame: (dir: 'in' | 'out', message: JsonRpcMessage) =>
-                void sink.write(toMockRecord(parsed.name, dir, message)),
-            }
-          : {}),
-        ...(io.stdin ? { stdin: io.stdin } : {}),
-        ...(io.stdout ? { stdout: io.stdout } : {}),
-      });
-    }
-
     return await runShim({
       name: parsed.name,
       command: parsed.command,

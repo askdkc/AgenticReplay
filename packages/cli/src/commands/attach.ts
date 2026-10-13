@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { TraceReader, TraceWriter, ensureRunsDir, resolveRunSelector } from '@agenticreplay/core';
+import { TraceWriter, ensureRunsDir } from '@agenticreplay/core';
 import {
   createProxy,
   type RecordedExchange,
@@ -15,12 +15,10 @@ import { ExchangeEventDeriver, appendDerivedEvents } from '../exchange-events.js
 import { SerialQueue } from '../serial.js';
 import {
   planTlsCapture,
-  recordedTlsHosts,
   setupTlsCapture,
   persistNetRequestStart,
   persistNetExchange,
 } from '../tls-capture.js';
-import { loadExchanges } from './replay.js';
 import { upstreamPlan } from '../upstream.js';
 import { AGENTICREPLAY_VERSION } from '../version.js';
 
@@ -35,7 +33,7 @@ import { AGENTICREPLAY_VERSION } from '../version.js';
  *
  * So this inverts it. AgenticReplay holds the proxy open, prints exactly what to export on the far side,
  * and records whatever arrives until it is stopped. The recording that comes out is not a lesser
- * one: same matcher, same events, same `agenticreplay replay`.
+ * one: the same request and action events as a locally launched recording.
  *
  * The adapters are still what produce the variables — `--for claude` prints what the Claude Code
  * adapter would have set, pointed at the advertised address instead of a loopback one. That keeps
@@ -49,9 +47,6 @@ export interface AttachResult {
   modelExchanges: number;
   events: number;
   proxyUrl: string;
-  /** Replay sessions only: recorded exchanges served back, and requests nothing matched. */
-  reused: number;
-  unmatched: number;
   /**
    * Non-zero when replay cannot answer a request or recording coverage is incomplete.
    * An operator stopping the session is normal; missing transport evidence still returns exit 2.
@@ -105,44 +100,8 @@ async function runAttached(
     ...(advertise === undefined ? {} : { advertise }),
   });
 
-  /**
-   * Serving a recording back instead of recording a new one.
-   *
-   * `agenticreplay replay` launches the agent, which is right for a run agenticreplay recorded by launching it and
-   * impossible for one that came from a sandbox — the agent may not exist on this machine at all.
-   * So replay attaches too: same proxy, same matcher, same blocked egress, and the operator points
-   * the same remote agent at it.
-   */
-  // The parser turns a flag with no value into `true`, so a bare `--replay` — or `--replay
-  // --tls-intercept`, where the next token is itself a flag — would read as absent and start a
-  // *recording* session against the live provider. That is the worst direction to fail in.
-  if (args.has('replay') && args.str('replay') === undefined) {
-    throw new Error(
-      '--replay needs the run to serve: agenticreplay attach --replay <run>, or --replay last',
-    );
-  }
-  const replaySelector = args.str('replay');
-  const replaying = replaySelector
-    ? await (async () => {
-        const runDir = (await resolveRunSelector(cwd, replaySelector)).dir;
-        const reader = await TraceReader.open(runDir);
-        return {
-          exchanges: await loadExchanges(reader),
-          hosts: recordedTlsHosts(await reader.events()),
-          // Which harness made the recording. It will be the one connecting again, so it is the
-          // right default for the block the operator pastes.
-          adapter: reader.manifest().adapter?.id,
-        };
-      })()
-    : undefined;
-
-  /**
-   * `exec` is the honest default for a fresh session: agenticreplay does not know what will connect, and
-   * detecting an agent from this directory would be a guess about a machine it cannot see. For a
-   * replay it is the wrong default and a useless one — `exec` sets no variables, so the block the
-   * operator is meant to paste comes out empty. The recording names the harness, so use it.
-   */
-  const adapterName = args.str('for') ?? replaying?.adapter ?? 'exec';
+  // The remote process is not visible locally, so the operator names its harness or uses exec.
+  const adapterName = args.str('for') ?? 'exec';
   const adapter = registry.get(adapterName);
 
   // The last thing that can refuse the run, and it runs before the trace exists: a writer created
@@ -150,7 +109,7 @@ async function runAttached(
   // — so the next command someone types operates on the session that never happened. Awaited
   // since it grew the one refusal that needs the disk, an `AGENTICREPLAY_TLS_UPSTREAM_CA` that cannot be
   // read; the guarantee here is unchanged, it just covers one more way to fail.
-  await planTlsCapture(args, replaying?.hosts);
+  await planTlsCapture(args);
 
   // Before the run directory exists, because this refuses an upstream that is not an origin: resolved after it, a
   // typo in `--upstream-*` left an empty run behind for `agenticreplay list` to show. It depends on nothing
@@ -171,7 +130,6 @@ async function runAttached(
 
   let modelExchanges = 0;
   let turn = 0;
-  let unmatched = 0;
 
   const writes = new SerialQueue();
   const attempts = new Map<string, number>();
@@ -189,7 +147,6 @@ async function runAttached(
   const tls = await setupTlsCapture({
     args,
     out,
-    ...(replaying ? { recordedHosts: replaying.hosts } : {}),
     writer,
     writes,
     // Out-of-band traffic belongs to whichever turn was in progress when it happened, exactly as in
@@ -199,13 +156,6 @@ async function runAttached(
     onNetExchange: finish,
   });
   if (tls.ca) minted.push(tls.ca);
-  // Read before the proxy closes: `stats()` is a snapshot of a live object, and the teardown in
-  // `finally` is the last moment it is still meaningful.
-  let stats = {
-    matchedExact: 0,
-    matchedInexact: 0,
-    unmatched: 0,
-  } as ReturnType<Awaited<ReturnType<typeof createProxy>>['stats']>;
   const deriver = new ExchangeEventDeriver();
 
   // BEFORE THE PROXY, NOT AFTER: `createProxy` is listening by the time it returns, and the first
@@ -221,10 +171,6 @@ async function runAttached(
   });
 
   const proxy = await createProxy({
-    // A replay session serves the recording and blocks egress, exactly as `agenticreplay replay` does. The
-    // only difference is which side starts the agent, and that is not a difference the proxy has.
-    mode: replaying ? 'replay' : 'record',
-    ...(replaying ? { exchanges: replaying.exchanges, loose: args.bool('loose') } : {}),
     host: bind,
     port: requestedPort,
     upstream: plan.upstream,
@@ -233,9 +179,6 @@ async function runAttached(
     ...tls.proxyOptions,
     onRequestStart: start,
     onNetExchange: finish,
-    onUnmatched: () => {
-      unmatched += 1;
-    },
     onExchange: (exchange: RecordedExchange) => {
       modelExchanges += 1;
       const at = exchange.requestId ? (attempts.get(exchange.requestId) ?? 0) : 0;
@@ -281,15 +224,6 @@ async function runAttached(
       run: writer.runId,
       proxy: proxyUrl,
       for: adapter.id,
-      ...(replaying
-        ? {
-            serving: replaySelector,
-            exchanges: replaying.exchanges.length,
-            // Same flag, same reason as `agenticreplay replay`: attach takes `--loose` too and passes it
-            // to the same proxy, so the label has to come from it rather than be assumed.
-            egress: args.bool('loose') ? 'live-on-unmatched' : 'blocked',
-          }
-        : {}),
     });
     if (proxy.tls) {
       out.warn('tls.intercepting', {
@@ -346,16 +280,11 @@ async function runAttached(
     out.plain('');
     for (const line of instructions) out.plain(`  ${line}`);
     out.plain('');
-    out.plain(
-      replaying
-        ? '  Serving the recording. Press ctrl-C when the agent is done.'
-        : '  Recording. Press ctrl-C when the agent is done.',
-    );
+    out.plain('  Recording. Press ctrl-C when the agent is done.');
 
     options.onReady?.({ proxyUrl, runId: writer.runId });
     await (options.until ?? firstInterrupt());
   } finally {
-    stats = proxy.stats();
     await proxy.close();
     await writes.drain().catch(() => writer.markCaptureIncomplete('storage_failure'));
     await tls.ca?.dispose();
@@ -366,7 +295,7 @@ async function runAttached(
    * given the block — or was given it in a shell that had already started the agent — produces a
    * session that ends cleanly and records nothing, and there is no exit code to hint at it.
    */
-  if (modelExchanges === 0 && !replaying) {
+  if (modelExchanges === 0) {
     out.warn('capture.empty', {
       exchanges: 0,
       cause: 'nothing connected to the proxy while the session was open',
@@ -374,19 +303,18 @@ async function runAttached(
     });
   }
 
-  if (!replaying)
-    writer.setCaptureSummary({
-      status:
-        terminalAttempts > 0 && terminalAttempts === attempts.size ? 'complete' : 'incomplete',
-      issues:
-        terminalAttempts === 0
-          ? ['no_requests_observed']
-          : terminalAttempts !== attempts.size
-            ? ['unfinalized_request']
-            : [],
-      requests: attempts.size,
-      responses: terminalAttempts,
-    });
+  writer.setCaptureSummary({
+    status:
+      terminalAttempts > 0 && terminalAttempts === attempts.size ? 'complete' : 'incomplete',
+    issues:
+      terminalAttempts === 0
+        ? ['no_requests_observed']
+        : terminalAttempts !== attempts.size
+          ? ['unfinalized_request']
+          : [],
+    requests: attempts.size,
+    responses: terminalAttempts,
+  });
   // The other half of the bracket. `close` seals the manifest; it does not write the event.
   await writer.append({
     type: 'run.end',
@@ -395,23 +323,12 @@ async function runAttached(
     attrs: { exchanges: modelExchanges },
   });
   const manifest = await writer.close(0);
-  // A replay session did not record a run, and saying it did would send someone looking for turns
-  // in a trace that holds none. It reports what it actually did: how much of the recording the
-  // agent asked for, and what it asked for that the recording could not answer.
-  if (replaying) {
-    out.info('served', {
-      serving: replaySelector,
-      reused: `${stats.matchedExact + stats.matchedInexact}/${replaying.exchanges.length}`,
-      unmatched: stats.unmatched,
-    });
-  } else {
-    out.info('recorded', {
-      run: writer.runId,
-      events: manifest.counts?.events ?? 0,
-      exchanges: modelExchanges,
-      dir: writer.runDir,
-    });
-  }
+  out.info('recorded', {
+    run: writer.runId,
+    events: manifest.counts?.events ?? 0,
+    exchanges: modelExchanges,
+    dir: writer.runDir,
+  });
 
   return {
     runId: writer.runId,
@@ -421,17 +338,7 @@ async function runAttached(
     // The address the agent should use, not the one agenticreplay bound — a caller reading this from
     // `--json` needs something it can connect to, which a wildcard bind is not.
     proxyUrl: advertised,
-    // Exact plus inexact: both were served from the recording, which is what "reused" means here.
-    // The distinction between them is a divergence, and divergences are reported on their own.
-    reused: replaying ? stats.matchedExact + stats.matchedInexact : 0,
-    unmatched: replaying ? stats.unmatched : unmatched,
-    exitCode: replaying
-      ? stats.unmatched > 0
-        ? 1
-        : 0
-      : manifest.capture?.status === 'incomplete'
-        ? 2
-        : 0,
+    exitCode: manifest.capture?.status === 'incomplete' ? 2 : 0,
   };
 }
 

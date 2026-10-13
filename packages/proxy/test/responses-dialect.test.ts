@@ -79,11 +79,7 @@ describe('the responses dialect is wired into the default set', () => {
     expect(selectDialect(dialects, '/v1/chat/completions')?.id).toBe('openai');
   });
 
-  it('posts to /v1/responses when a fork translates a turn into it', () => {
-    const dialect = selectDialect(defaultDialects(), '/v1/responses')!;
-    expect(dialect.requestPath).toBe('/v1/responses');
-    expect(dialect.defaultUpstream).toBe('https://api.openai.com');
-  });
+  
 });
 
 describe('recording a responses run', () => {
@@ -125,115 +121,6 @@ describe('recording a responses run', () => {
   });
 });
 
-describe('replaying a responses run', () => {
-  it('serves a recorded exchange from disk with the network blocked', async () => {
-    const up = stubUpstream(RESPONSES_REPLY);
-    const record = await createProxy({ mode: 'record', fetchImpl: up.fetchImpl });
-    closers.push(record.close);
-    await post(`${record.url}/v1/responses`, RESPONSES_BODY);
-    const exchanges = record.exchanges();
 
-    const dead = (async () => {
-      throw new Error('replay must not reach the network');
-    }) as unknown as typeof fetch;
-    const replay = await createProxy({ mode: 'replay', exchanges, fetchImpl: dead });
-    closers.push(replay.close);
 
-    const res = await post(`${replay.url}/v1/responses`, RESPONSES_BODY);
-    expect(res.status).toBe(200);
-    expect(res.json).toEqual(RESPONSES_REPLY);
-    expect(replay.stats().matchedExact).toBe(1);
-    expect(replay.stats().liveCalls).toBe(0);
-  });
-});
 
-describe('forking a responses run', () => {
-  it('keeps the wire format the agent speaks when the new model can be served by it', async () => {
-    // Without this the fork would be routed to whichever dialect first claims an OpenAI model —
-    // chat completions — and post a chat body to /v1/chat/completions for an agent that asked
-    // the Responses API. The reply shape would still be corrected on the way back, so the bug
-    // is invisible except as a needless translation and the loss of Responses-only fields.
-    const up = stubUpstream(RESPONSES_REPLY);
-    const routes: RouteDecision[] = [];
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'gpt-5.2-mini',
-      fetchImpl: up.fetchImpl,
-      onRoute: (d) => void routes.push(d),
-    });
-    closers.push(proxy.close);
-
-    await post(`${proxy.url}/v1/responses`, RESPONSES_BODY);
-
-    expect(routes[0]).toMatchObject({
-      model: 'gpt-5.2-mini',
-      target: 'openai-responses',
-      recorded: 'openai-responses',
-      crossProvider: false,
-    });
-    expect(up.calls[0]!.url).toBe('https://api.openai.com/v1/responses');
-    expect(JSON.parse(up.calls[0]!.body)['model']).toBe('gpt-5.2-mini');
-  });
-
-  it('still crosses to anthropic when the fork names a Claude model', async () => {
-    const up = stubUpstream({
-      id: 'msg_1',
-      type: 'message',
-      role: 'assistant',
-      model: 'claude-opus-5',
-      content: [{ type: 'text', text: 'from claude' }],
-      stop_reason: 'end_turn',
-      usage: { input_tokens: 3, output_tokens: 2 },
-    });
-    const routes: RouteDecision[] = [];
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'claude-opus-5',
-      fetchImpl: up.fetchImpl,
-      onRoute: (d) => void routes.push(d),
-    });
-    closers.push(proxy.close);
-
-    const res = await post(`${proxy.url}/v1/responses`, RESPONSES_BODY);
-
-    expect(routes[0]).toMatchObject({ target: 'anthropic', crossProvider: true });
-    expect(up.calls[0]!.url).toBe('https://api.anthropic.com/v1/messages');
-    // The agent asked the Responses API and must be answered in its shape, whatever served it.
-    expect(res.json?.['object']).toBe('response');
-    expect(res.json?.['output']).toBeDefined();
-  });
-
-  it('leaves a chat-completions recording on chat completions', async () => {
-    // The regression guard for the rule above: preferring the recorded dialect must not change
-    // where an ordinary OpenAI run forks to.
-    const up = stubUpstream({
-      id: 'chat_1',
-      object: 'chat.completion',
-      model: 'gpt-5.2-mini',
-      choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 3, completion_tokens: 1 },
-    });
-    const routes: RouteDecision[] = [];
-    const proxy = await createProxy({
-      mode: 'hybrid',
-      exchanges: [],
-      forkAt: 0,
-      forkModel: 'gpt-5.2-mini',
-      fetchImpl: up.fetchImpl,
-      onRoute: (d) => void routes.push(d),
-    });
-    closers.push(proxy.close);
-
-    await post(`${proxy.url}/v1/chat/completions`, {
-      model: 'gpt-5.2',
-      messages: [{ role: 'user', content: 'hi' }],
-    });
-
-    expect(routes[0]).toMatchObject({ target: 'openai', crossProvider: false });
-    expect(up.calls[0]!.url).toContain('/v1/chat/completions');
-  });
-});
