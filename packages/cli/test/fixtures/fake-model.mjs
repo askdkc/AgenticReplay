@@ -94,7 +94,13 @@ export async function startFakeModel(options = {}) {
     });
   });
 
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.removeListener('error', reject);
+      resolve();
+    });
+  });
   const { port } = server.address();
 
   return {

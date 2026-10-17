@@ -11,6 +11,7 @@ import { detectAgent } from './detect.js';
 import { openCodeConfiguredBaseURLs, stripJsonc } from './opencode-config.js';
 import { writeOpenCodeCapturePlugin, writeOpenCodeV2CapturePlugin } from './opencode-capture.js';
 import { passKey, passThrough, proxyBase, readEnv } from './env.js';
+import { openCodeProbeEnvironment } from './opencode-probe.js';
 
 /**
  * Where OpenCode keeps the credentials `opencode auth login` writes.
@@ -54,17 +55,11 @@ async function supportsStandalone(ctx: RecordContext): Promise<boolean> {
   await mkdir(ctx.runDir, { recursive: true });
   const probe = await mkdtemp(join(ctx.runDir, '.opencode-capabilities-'));
   try {
+    const environment = openCodeProbeEnvironment(probe, readEnv(ctx.env, 'PATH'));
+    await mkdir(environment.TMPDIR, { recursive: true });
     const result = await execFile('opencode', ['--help'], {
       cwd: probe,
-      env: {
-        PATH: readEnv(ctx.env, 'PATH'),
-        HOME: probe,
-        USERPROFILE: probe,
-        XDG_CONFIG_HOME: join(probe, 'config'),
-        XDG_DATA_HOME: join(probe, 'data'),
-        XDG_CACHE_HOME: join(probe, 'cache'),
-        XDG_STATE_HOME: join(probe, 'state'),
-      },
+      env: environment,
       timeout: 5000,
       maxBuffer: 64 * 1024,
     });

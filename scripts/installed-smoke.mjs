@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -71,13 +72,9 @@ await writeFile(
   join(consumerDir, 'package.json'),
   JSON.stringify({ name: 'agenticreplay-installed-smoke', private: true, type: 'module' }, null, 2),
 );
-await exec(
-  'npm',
-  ['install', '--offline', '--no-audit', '--no-fund', '--ignore-scripts', ...tarballs],
-  {
-    ...commandOptions(consumerDir, { npm_config_cache: npmCache }),
-  },
-);
+await exec('npm', ['install', '--offline', '--no-audit', '--no-fund', ...tarballs], {
+  ...commandOptions(consumerDir, { npm_config_cache: npmCache }),
+});
 
 const bin = join(consumerDir, 'node_modules', '.bin', 'agenticreplay');
 const smokeEnv = {
@@ -203,10 +200,29 @@ try {
   if (!runName || !/^\d{14}-generic-openai-tool-sentinel-[0-9a-f]+$/.test(runName))
     throw new Error(`installed record did not create a readable session directory: ${runName}`);
   const runDir = join(runStore, runName);
-  const eventLines = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
+  const manifest = JSON.parse(await readFile(join(runDir, 'manifest.json'), 'utf8'));
+  const eventBytes = await readFile(join(runDir, 'events.jsonl'));
+  const eventLines = eventBytes
+    .toString('utf8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));
+  if (
+    manifest.run_id !== runId ||
+    manifest.exit_code !== 0 ||
+    !manifest.ended_at ||
+    manifest.capture?.status !== 'complete' ||
+    manifest.capture?.issues?.length !== 0 ||
+    manifest.capture?.requests !== endpointRequests.length ||
+    manifest.capture?.responses !== endpointRequests.length ||
+    manifest.counts?.events !== eventLines.length ||
+    eventLines[0]?.type !== 'run.start' ||
+    eventLines.at(-1)?.type !== 'run.end' ||
+    !eventLines.every((event, index) => event.seq === index)
+  )
+    throw new Error('installed record did not seal a complete run');
+  if (manifest.integrity?.events_sha256 !== createHash('sha256').update(eventBytes).digest('hex'))
+    throw new Error('installed record event integrity mismatch');
   const requestEvent = eventLines.find(
     (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
   );
@@ -286,8 +302,11 @@ try {
         runId,
         checks: [
           'installed CLI help',
+          'normal packed CLI installation',
           'packed metadata identity',
           'record endpoint body',
+          'sealed complete run',
+          'event file integrity',
           'show',
           'list',
           'events',

@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/providers",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,8 +17,8 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/plugin-api": "0.1.6",
-    "@agenticreplay/schema": "0.1.6"
+    "@agenticreplay/plugin-api": "0.1.7",
+    "@agenticreplay/schema": "0.1.7"
   },
   "engines": {
     "node": ">=24.0.0"
