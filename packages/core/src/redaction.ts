@@ -758,8 +758,7 @@ export class Redactor {
       const to = sourceOffset(view, f.b - 1) + 1;
       // Nothing invisible inside it: the raw pass saw exactly this and judged it. Not ours.
       if (to - from === f.b - f.a) continue;
-      const prefix =
-        f.kind === 'high_entropy' ? escapePrefixLength(view.text, f.a, f.secret) : 0;
+      const prefix = f.kind === 'high_entropy' ? escapePrefixLength(view.text, f.a, f.secret) : 0;
       const replacementFrom = prefix === 0 ? from : sourceOffset(view, f.a + prefix);
       out +=
         value.slice(cut, replacementFrom) +
