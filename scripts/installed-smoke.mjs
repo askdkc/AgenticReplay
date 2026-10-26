@@ -9,6 +9,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -75,6 +76,17 @@ await writeFile(
 await exec('npm', ['install', '--offline', '--no-audit', '--no-fund', ...tarballs], {
   ...commandOptions(consumerDir, { npm_config_cache: npmCache }),
 });
+
+// Check the physical bundled dependency, not just the source lockfile.
+const packedRequire = createRequire(
+  join(consumerDir, 'node_modules', 'agenticreplay', 'package.json'),
+);
+const ajvRequire = createRequire(packedRequire.resolve('ajv'));
+const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
+if (ajvRequire('fast-uri/package.json').version !== lock.packages['node_modules/fast-uri'].version)
+  throw new Error('packed Ajv URI resolver differs from the tested lockfile');
+if (ajvRequire('fast-uri').normalize('%6Aavascript:alert(1)').startsWith('javascript:'))
+  throw new Error('packed URI resolver still decodes executable schemes');
 
 const bin = join(consumerDir, 'node_modules', '.bin', 'agenticreplay');
 const smokeEnv = {
