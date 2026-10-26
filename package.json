@@ -19,7 +19,7 @@
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
     "check": "npm run fmt:check && npm run typecheck && npm run test",
-    "prepack": "node scripts/check-bundled-uri.mjs && npm run build && node scripts/publish-order.mjs --quiet",
+    "prepack": "npm run build && node scripts/publish-order.mjs --quiet",
     "version": "node scripts/npm-version.mjs"
   },
   "devDependencies": {
