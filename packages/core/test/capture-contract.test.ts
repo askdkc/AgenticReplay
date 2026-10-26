@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { isBlobRef, validateManifest } from '@agenticreplay/schema';
+import { INLINE_PAYLOAD_LIMIT, isBlobRef, validateManifest } from '@agenticreplay/schema';
 import { TraceWriter } from '../src/writer.js';
 import { TraceReader } from '../src/reader.js';
 
@@ -86,6 +86,36 @@ it('retains full serialized input and explains every body redaction', async () =
   );
   expect(event.attrs?.body_bytes).toBe(Buffer.byteLength(body as string));
 });
+
+for (const type of ['net.request', 'net.response'] as const) {
+  for (const padding of [0, INLINE_PAYLOAD_LIMIT]) {
+    it(`keeps redacted ${type} JSON parseable with ${padding} padding bytes`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'agenticreplay-json-'));
+      dirs.push(dir);
+      const writer = await TraceWriter.create(dir, {
+        adapter: { id: 'test' },
+        argv: [],
+        cwd: dir,
+        agenticreplayVersion: '0.5.0',
+        envAllowlist: [],
+      });
+      const secret = 'Zx81Qp0vR7mT2sL9wK4yH6nB3cF5jD';
+      const input = JSON.stringify({ content: '\n' + secret, pad: 'x'.repeat(padding) });
+      const event = await writer.append({ type, actor: 'agent', payload: input });
+      await writer.close(0);
+      expect(isBlobRef(event.payload)).toBe(padding !== 0);
+      const reader = await TraceReader.open(writer.runDir);
+      const body = (await reader.resolvePayload(event)) as string;
+      expect(typeof body).toBe('string');
+      expect(() => JSON.parse(body)).not.toThrow();
+      expect(body).not.toContain(secret);
+      expect(body.replace(/<secret:high_entropy:[0-9a-f]{8}>/, secret)).toBe(input);
+      expect(event.attrs?.body_bytes).toBe(Buffer.byteLength(body));
+      expect(event.attrs?.body_sha256).toBe(createHash('sha256').update(body).digest('hex'));
+      expect((await reader.verifyIntegrity()).ok).toBe(true);
+    });
+  }
+}
 
 it('rejects pre-AgenticReplay manifests rather than treating them as current traces', () => {
   expect(

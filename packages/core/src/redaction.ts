@@ -450,6 +450,12 @@ const PLACEHOLDER = /<secret:[a-z_]+:[0-9a-f]{8}>/g;
 const MIN_ENTROPY_LENGTH = 20;
 const ENTROPY_BITS_PER_CHAR = 4.0;
 
+/** Keep a serialized escape intact without excluding its token from the entropy judgement. */
+function escapePrefixLength(value: string, start: number, token: string): number {
+  if (value[start - 1] !== '\\') return 0;
+  return /^(?:[bfnrt]|u[0-9a-fA-F]{4})/.exec(token)?.[0].length ?? 0;
+}
+
 /** Shannon entropy of the token's own character distribution, in bits per character. */
 function entropy(token: string): number {
   const freq = new Map<string, number>();
@@ -752,7 +758,12 @@ export class Redactor {
       const to = sourceOffset(view, f.b - 1) + 1;
       // Nothing invisible inside it: the raw pass saw exactly this and judged it. Not ours.
       if (to - from === f.b - f.a) continue;
-      out += value.slice(cut, from) + this.#hit(f.kind, f.secret, context, hits);
+      const prefix =
+        f.kind === 'high_entropy' ? escapePrefixLength(view.text, f.a, f.secret) : 0;
+      const replacementFrom = prefix === 0 ? from : sourceOffset(view, f.a + prefix);
+      out +=
+        value.slice(cut, replacementFrom) +
+        this.#hit(f.kind, f.secret.slice(prefix), context, hits);
       cut = to;
       end = f.b;
       changed = true;
@@ -791,7 +802,14 @@ export class Redactor {
       if (start + token.length <= reach) continue;
       if (token.length < MIN_ENTROPY_LENGTH || !looksRandom(token)) continue;
       if (entropy(token) <= ENTROPY_BITS_PER_CHAR) continue;
-      out += value.slice(cut, start) + this.#hit('high_entropy', token, context, hits);
+      // A serialized newline followed by a token matches as `nTOKEN`. Replacing the `n`
+      // leaves an invalid `\<secret:...>` escape, including inside a JSON-string body wrapper.
+      // Judge the full match first so a real token beginning with `n` at the length threshold
+      // after a literal backslash still gets redacted.
+      const prefix = escapePrefixLength(value, start, token);
+      out +=
+        value.slice(cut, start + prefix) +
+        this.#hit('high_entropy', token.slice(prefix), context, hits);
       cut = start + token.length;
     }
     return out + value.slice(cut);
