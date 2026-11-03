@@ -555,9 +555,10 @@ describe('TLS interception', () => {
     await rm(originDir, { recursive: true, force: true });
   });
 
-  async function startProxy(hosts: string[]): Promise<ProxyHandle> {
+  async function startProxy(hosts: string[], retainExchanges = true): Promise<ProxyHandle> {
     proxy = await createProxy({
       mode: 'record',
+      retainExchanges,
       onExchange: (e) => void modelExchanges.push(e),
       tls: {
         ca: runCa,
@@ -571,6 +572,31 @@ describe('TLS interception', () => {
     });
     return proxy;
   }
+
+  it('delivers intercepted exchanges without retaining their completed bodies', async () => {
+    const handle = await startProxy([`127.0.0.1:${model.port}`], false);
+    for (let turn = 0; turn < 3; turn++) {
+      const body = JSON.stringify({
+        model: 'gpt-5.2',
+        messages: [{ role: 'user', content: 'hello'.repeat(1000 * (turn + 1)) }],
+      });
+      const response = await through({
+        proxyPort: handle.port,
+        host: '127.0.0.1',
+        port: model.port,
+        trust: [runCa.certPem],
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body,
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(response.status).toBe(200);
+      expect(modelExchanges.at(-1)).toMatchObject({ seq: turn, rawRequest: body });
+    }
+    expect(modelExchanges).toHaveLength(3);
+    expect(netExchanges).toHaveLength(3);
+    expect(handle.exchanges().length).toBe(0);
+  });
 
   it.each([
     {

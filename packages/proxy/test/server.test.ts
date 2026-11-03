@@ -79,6 +79,90 @@ async function post(url: string, body: unknown, headers: Record<string, string> 
 }
 
 describe('proxy — record mode', () => {
+  it.each(['plain', 'gzip'] as const)(
+    'forwards a %s request beyond the capture limit without rejecting the agent',
+    async (encoding) => {
+      const body = JSON.stringify({
+        ...ANTHROPIC_BODY,
+        messages: [{ role: 'user', content: 'あ'.repeat(4096) }],
+      });
+      const wire = encoding === 'gzip' ? zlib.gzipSync(body) : Buffer.from(body);
+      const seen: import('../src/server.js').NetExchange[] = [];
+      const upstream = createHttpServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const received = Buffer.concat(chunks);
+          const decoded =
+            req.headers['content-encoding'] === 'gzip' ? zlib.gunzipSync(received) : received;
+          res.writeHead(
+            decoded.toString() === body && req.headers['content-length'] === String(wire.length)
+              ? 200
+              : 422,
+            {
+              'content-type': 'application/json',
+            },
+          );
+          res.end('{"ok":true}');
+        });
+      });
+      await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+      closers.push(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+      const proxy = await createProxy({
+        maxCapturedBytes: 256,
+        maxBufferedBytes: 512,
+        upstream: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
+        onNetExchange: (e) => seen.push(e),
+      });
+      closers.push(proxy.close);
+      const response = await fetch(`${proxy.url}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(encoding === 'gzip' ? { 'content-encoding': 'gzip' } : {}),
+        },
+        body: wire,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({
+        requestTruncated: true,
+        requestBody: '',
+        requestBytes: wire.length,
+        responseComplete: true,
+      });
+      expect(proxy.exchanges()).toHaveLength(0);
+    },
+  );
+
+  it('delivers growing conversations without retaining completed bodies when streaming to a recorder', async () => {
+    const seen: Array<{ seq: number; bytes: number }> = [];
+    const proxy = await createProxy({
+      retainExchanges: false,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify(ANTHROPIC_REPLY), {
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch,
+      onExchange: (exchange) => {
+        seen.push({ seq: exchange.seq, bytes: Buffer.byteLength(exchange.rawRequest) });
+      },
+    });
+    closers.push(proxy.close);
+    for (let turn = 0; turn < 48; turn++) {
+      const body = {
+        ...ANTHROPIC_BODY,
+        messages: [{ role: 'user', content: 'あ'.repeat(2048 * (turn + 1)) }],
+      };
+      const response = await post(`${proxy.url}/v1/messages`, body);
+      expect(response.status).toBe(200);
+      expect(response.json).toEqual(ANTHROPIC_REPLY);
+      expect(seen.at(-1)).toEqual({ seq: turn, bytes: Buffer.byteLength(JSON.stringify(body)) });
+    }
+    expect(seen).toHaveLength(48);
+    expect(proxy.exchanges().length).toBe(0);
+  });
+
   it('forwards to upstream and returns the upstream response unchanged', async () => {
     const up = stubUpstream(ANTHROPIC_REPLY);
     const proxy = await createProxy({ mode: 'record', fetchImpl: up.fetchImpl });

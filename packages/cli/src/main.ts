@@ -287,6 +287,7 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
   const out = new Output({
     // Diagnostics only. Nothing here may reach stdout.
     write: (s) => void process.stderr.write(s),
+    isTTY: Boolean(process.stderr.isTTY),
     env: process.env,
     verbose: args.bool('verbose'),
     ci: true,

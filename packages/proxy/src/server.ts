@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
+import { readRequestBody } from './request-body.js';
 import {
   AUTH_REQUEST_HEADERS,
   AUTH_RESPONSE_HEADERS,
@@ -359,6 +361,8 @@ export interface ProxyOptions {
   upstream?: Record<string, string>;
   dialects?: Dialect[];
   onExchange?: (e: RecordedExchange) => void;
+  /** Keep completed bodies for exchanges(); default true. Disk recorders should disable this. */
+  retainExchanges?: boolean;
   onRequestStart?: (request: NetRequest) => void | Promise<void>;
   maxCapturedBytes?: number;
   maxBufferedBytes?: number;
@@ -393,6 +397,7 @@ export interface ProxyHandle {
   url: string;
   port: number;
   stats(): ProxyStats;
+  /** Empty when retainExchanges is false; onExchange still receives every completed exchange. */
   exchanges(): RecordedExchange[];
   /** Present only when TLS interception is on. */
   tls?: TlsInterceptInfo;
@@ -457,33 +462,6 @@ export function defaultDialects(): Dialect[] {
   ];
 }
 
-class BodyLimitError extends Error {
-  constructor(
-    readonly bytes: number,
-    readonly limit: number,
-  ) {
-    super(`request body exceeded capture limit of ${limit} bytes`);
-  }
-}
-
-async function readBody(
-  req: IncomingMessage,
-  limit: number,
-): Promise<{ body: Buffer; bytes: number }> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    bytes += buffer.length;
-    if (bytes > limit) {
-      req.resume();
-      throw new BodyLimitError(bytes, limit);
-    }
-    chunks.push(buffer);
-  }
-  return { body: Buffer.concat(chunks), bytes };
-}
-
 /** Is this something a dialect could parse at all? Cheap guard, run before anything is forwarded. */
 function isReadable(rawBody: string): boolean {
   try {
@@ -525,6 +503,12 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   // `fetchImpl` stays the seam the tests inject through; only the default moves.
   const doFetch = options.fetchImpl ?? fetchPinned;
   const captured: RecordedExchange[] = [];
+  let exchangeSequence = 0;
+  function deliverExchange(exchange: RecordedExchange): void {
+    exchangeSequence += 1;
+    if (options.retainExchanges !== false) captured.push(exchange);
+    options.onExchange?.(exchange);
+  }
   // Plain base-URL traffic needs the same aggregate bound as intercepted traffic. This counter
   // covers bodies retained by concurrent fetch responses while each response still streams to the
   // caller; it is released only after that response has been materialized into evidence.
@@ -590,7 +574,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           status: exchange.status,
           streamed,
           headers: scalarHeaders(exchange.requestHeaders),
-          seq: captured.length,
+          seq: exchangeSequence,
           requestId: exchange.requestId,
           requestStartedAt: exchange.requestStartedAt,
           durationMs: exchange.durationMs,
@@ -604,8 +588,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           // worth having in the trace. The port is kept only where https does not imply it.
           upstream: `https://${exchange.host}${exchange.port === 443 ? '' : `:${exchange.port}`}`,
         });
-        captured.push(built);
-        options.onExchange?.(built);
+        deliverExchange(built);
         // Keep the authoritative wire record even when the dialect projection succeeds. The
         // model event is a convenient replay view; the net event retains headers, framing and
         // transport completion details needed to audit capture fidelity.
@@ -881,7 +864,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         status,
         streamed: isStreamed,
         headers: scalarHeaders(recordableHeaders),
-        seq: captured.length,
+        seq: exchangeSequence,
         requestId,
         requestStartedAt: startedAt,
         durationMs: Date.now() - startedAt,
@@ -889,8 +872,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         // client announced, and a fork's substitution can send it somewhere else again.
         upstream: origin,
       });
-      captured.push(exchange);
-      options.onExchange?.(exchange);
+      deliverExchange(exchange);
     }
   }
 
@@ -983,12 +965,17 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     requestId: string,
     forwardBase?: string,
     requestEncoding?: string,
+    uncaptured?: {
+      body: ReadableStream<Uint8Array>;
+      bytes: () => number;
+      upstreamPath: string;
+    },
   ): Promise<void> {
     stats.passedThrough += 1;
     const origin = passthroughOrigin(headers, forwardBase);
     let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
     try {
-      upstreamRes = await doFetch(`${origin}${path}`, {
+      upstreamRes = await doFetch(`${origin}${uncaptured?.upstreamPath ?? path}`, {
         method: 'POST',
         // `upstreamHeaders` too, as `goLive` does. Omitting them sent a gateway the agent's own
         // credential — often the `agenticreplay-recorded` placeholder — and the call came back 401 for a
@@ -998,7 +985,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           ...headers,
           ...headersForOrigin(origin),
         },
-        body: rawBody,
+        body: uncaptured?.body ?? rawBody,
+        ...(uncaptured ? { duplex: 'half' } : {}),
       });
     } catch (err) {
       // An upstream that never answered is still something the agent asked for, and a trace
@@ -1024,8 +1012,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         path,
         requestHeaders: recordableHeaders,
         requestBody: rawBody,
-        requestBytes: Buffer.byteLength(rawBody),
-        requestTruncated: false,
+        requestBytes: uncaptured?.bytes() ?? Buffer.byteLength(rawBody),
+        requestTruncated: uncaptured !== undefined,
         status: 0,
         responseHeaders: {},
         responseBody: `agenticreplay did not forward this call: ${reasonFor(err, origin)}`,
@@ -1068,8 +1056,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         intercepted: false,
         requestHeaders: recordableHeaders,
         requestBody: rawBody,
-        requestBytes: Buffer.byteLength(rawBody),
-        requestTruncated: false,
+        requestBytes: uncaptured?.bytes() ?? Buffer.byteLength(rawBody),
+        requestTruncated: uncaptured !== undefined,
         status: upstreamRes.status,
         responseHeaders,
         responseBody: partial?.text ?? '',
@@ -1109,8 +1097,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       // must not now be written down. §7 says never write it, which is not the same as never relay it.
       requestHeaders: recordableHeaders,
       requestBody: rawBody,
-      requestBytes: Buffer.byteLength(rawBody),
-      requestTruncated: false,
+      requestBytes: uncaptured?.bytes() ?? Buffer.byteLength(rawBody),
+      requestTruncated: uncaptured !== undefined,
       status: upstreamRes.status,
       responseHeaders,
       responseBody: body,
@@ -1125,7 +1113,17 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       durationMs: Date.now() - startedAt,
       transformations: [
         ...captureHeaderTransformations(headers, recordableHeaders),
-        ...captureEncodingTransformation('request.body', requestEncoding),
+        ...(uncaptured
+          ? [
+              {
+                kind: 'omission' as const,
+                location: 'request.body',
+                rule: 'capture_buffer_limit',
+                count: 1,
+                reason: 'request forwarded without retaining its body',
+              },
+            ]
+          : captureEncodingTransformation('request.body', requestEncoding)),
         ...captureResponseHeaderTransformations(upstreamRes.headers),
         ...captureEncodingTransformation('response.body', responseEncoding),
         ...captureUrlTransformations(origin),
@@ -1522,99 +1520,113 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       return;
     }
 
-    let rawBody: string;
-    let requestBytes: number;
-    let requestReservedBytes = 0;
-    try {
-      const read = await readBody(req, options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES);
-      rawBody = decodeBody(
-        read.body,
-        Array.isArray(req.headers['content-encoding'])
-          ? req.headers['content-encoding'].join(', ')
-          : req.headers['content-encoding'],
-        options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
-      );
-      requestBytes = read.bytes;
-      requestReservedBytes = Buffer.byteLength(rawBody);
-      if (plainBufferedBytes + requestReservedBytes > plainBufferLimit) {
-        throw new BodyLimitError(requestReservedBytes, plainBufferLimit);
-      }
-      plainBufferedBytes += requestReservedBytes;
-    } catch (err) {
-      if (!(err instanceof BodyLimitError)) {
-        options.onNetExchange?.({
-          requestId,
-          requestStartedAt: startedAt,
-          host: req.headers.host ?? 'local',
-          port: 0,
-          intercepted: false,
-          method: req.method ?? 'POST',
-          path: requestedPath,
-          requestHeaders: {},
-          requestBody: '',
-          requestBytes: 0,
-          requestTruncated: true,
-          status: 0,
-          responseHeaders: {},
-          responseBody: '',
-          responseTruncated: false,
-          responseComplete: false,
-          responseError: String(err),
-          responseBytes: 0,
-          durationMs: Date.now() - startedAt,
-        });
-        json(res, 400, {
-          error: { message: `agenticreplay could not decode request body: ${String(err)}` },
-        });
-        return;
-      }
-      options.onNetExchange?.({
-        requestId,
-        requestStartedAt: startedAt,
-        host: req.headers.host ?? 'local',
-        port: 0,
-        intercepted: false,
-        method: req.method ?? 'POST',
-        path: requestedPath,
-        requestHeaders: {},
-        requestBody: '',
-        requestBytes: err.bytes,
-        requestTruncated: true,
-        status: 0,
-        responseHeaders: {},
-        responseBody: '',
-        responseTruncated: false,
-        responseComplete: false,
-        responseError: String(err),
-        responseBytes: 0,
-        durationMs: Date.now() - startedAt,
-      });
-      json(res, 413, { error: { message: String(err) } });
-      return;
+    const headers: Record<string, string> = {};
+    const recordableHeaders: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      const key = k.toLowerCase();
+      if (HOP_BY_HOP_HEADERS.has(key)) continue;
+      if (v === undefined) continue;
+      headers[k] = Array.isArray(v) ? v.join(', ') : v;
     }
-    const inboundRequestHeader = req.headers['content-encoding'] as string | string[] | undefined;
+    // Node's parsed headers combine repeated fields. Keep the raw field order and multiplicity
+    // for persisted evidence while retaining the scalar map above for fetch forwarding.
+    for (let index = 0; index + 1 < req.rawHeaders.length; index += 2) {
+      const key = req.rawHeaders[index]!.toLowerCase();
+      if (HOP_BY_HOP_HEADERS.has(key) || SECRET_REQUEST_HEADERS.has(key)) continue;
+      const value = req.rawHeaders[index + 1]!;
+      const prior = recordableHeaders[key];
+      recordableHeaders[key] =
+        prior === undefined ? value : Array.isArray(prior) ? [...prior, value] : [prior, value];
+    }
+    const inboundRequestHeader = req.headers['content-encoding'];
     const inboundRequestEncoding = Array.isArray(inboundRequestHeader)
       ? inboundRequestHeader.join(', ')
       : inboundRequestHeader;
+    let read: Awaited<ReturnType<typeof readRequestBody>> | undefined;
+    let decodedReservation = 0;
+    const reserve = (bytes: number): boolean => {
+      if (plainBufferedBytes + bytes > plainBufferLimit) return false;
+      plainBufferedBytes += bytes;
+      return true;
+    };
+    const release = (bytes: number): void => {
+      plainBufferedBytes = Math.max(0, plainBufferedBytes - bytes);
+    };
     try {
-      const headers: Record<string, string> = {};
-      const recordableHeaders: Record<string, string | string[]> = {};
-      for (const [k, v] of Object.entries(req.headers)) {
-        const key = k.toLowerCase();
-        if (HOP_BY_HOP_HEADERS.has(key)) continue;
-        if (v === undefined) continue;
-        headers[k] = Array.isArray(v) ? v.join(', ') : v;
+      let rawBody: string | undefined;
+      try {
+        read = await readRequestBody(
+          req,
+          options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+          reserve,
+          release,
+        );
+        if (read.buffer) {
+          rawBody = decodeBody(
+            read.buffer,
+            inboundRequestEncoding,
+            options.maxCapturedBytes ?? DEFAULT_MAX_CAPTURED_BYTES,
+          );
+          const extra = Math.max(0, Buffer.byteLength(rawBody) - read.buffer.length);
+          if (reserve(extra)) decodedReservation = extra;
+          else rawBody = undefined;
+        }
+      } catch (error) {
+        // A compressed conversation can be small on the wire but too large to capture decoded.
+        // Relay its original encoding instead of returning the recorder's size error to the agent.
+        if (!read?.buffer || (error as NodeJS.ErrnoException).code !== 'ERR_BUFFER_TOO_LARGE') {
+          options.onNetExchange?.({
+            ...startRequest,
+            requestBytes: read?.bytes() ?? 0,
+            requestBody: '',
+            requestTruncated: true,
+            status: 0,
+            responseHeaders: {},
+            responseBody: '',
+            responseBytes: 0,
+            responseTruncated: false,
+            responseComplete: false,
+            responseError: String(error),
+            intercepted: false,
+            durationMs: Date.now() - startedAt,
+          });
+          json(res, 400, {
+            error: { message: `agenticreplay could not decode request body: ${String(error)}` },
+          });
+          return;
+        }
       }
-      // Node's parsed headers combine repeated fields. Keep the raw field order and multiplicity
-      // for persisted evidence while retaining the scalar map above for fetch forwarding.
-      for (let index = 0; index + 1 < req.rawHeaders.length; index += 2) {
-        const key = req.rawHeaders[index]!.toLowerCase();
-        if (HOP_BY_HOP_HEADERS.has(key) || SECRET_REQUEST_HEADERS.has(key)) continue;
-        const value = req.rawHeaders[index + 1]!;
-        const prior = recordableHeaders[key];
-        recordableHeaders[key] =
-          prior === undefined ? value : Array.isArray(prior) ? [...prior, value] : [prior, value];
+      if (rawBody === undefined) {
+        const queryAt = requestedPath.indexOf('?');
+        const query = queryAt === -1 ? '' : requestedPath.slice(queryAt);
+        await passThrough(
+          requestedPath,
+          '',
+          // This path forwards the original wire bytes, including compression. Preserve its
+          // known length; providers that require Content-Length need not accept chunked uploads.
+          {
+            ...headers,
+            ...(req.headers['content-length'] === undefined
+              ? {}
+              : { 'content-length': req.headers['content-length'] }),
+          },
+          recordableHeaders,
+          res,
+          startedAt,
+          requestId,
+          startOrigin,
+          undefined,
+          {
+            body:
+              read!.stream ??
+              (Readable.toWeb(Readable.from([read!.buffer!])) as ReadableStream<Uint8Array>),
+            bytes: read!.bytes,
+            upstreamPath: dialect && !forward ? `${dialect.requestPath}${query}` : requestedPath,
+          },
+        );
+        return;
       }
+      const requestBytes = read!.bytes();
       // `decodeBody` above gives the origin the serialized JSON rather than the compressed wire
       // bytes. Remove the stale framing headers or the origin will try to decompress plaintext.
       if (headers['content-encoding'] !== undefined) {
@@ -1690,7 +1702,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         forward?.base,
       );
     } finally {
-      plainBufferedBytes = Math.max(0, plainBufferedBytes - requestReservedBytes);
+      read?.dispose();
+      release(decodedReservation);
     }
   }
 

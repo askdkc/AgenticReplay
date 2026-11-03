@@ -11,6 +11,7 @@ import { withoutInvisible } from '@agenticreplay/core';
 
 const ESC = String.fromCharCode(27);
 const CSI = `${ESC}[`;
+const MAX_DEFERRED_BYTES = 64 * 1024;
 
 const STYLE = {
   dim: `${CSI}2m`,
@@ -194,6 +195,10 @@ export class Output {
   readonly #verbose: boolean;
   readonly #ci: boolean;
   readonly #sink: ((entry: LogEntry) => void) | undefined;
+  #deferDepth = 0;
+  #deferred: string[] = [];
+  #deferredBytes = 0;
+  #omittedWrites = 0;
 
   constructor(opts: OutputOptions) {
     const env = opts.env ?? {};
@@ -210,6 +215,44 @@ export class Output {
 
   get isVerbose(): boolean {
     return this.#verbose;
+  }
+
+  /**
+   * Let an inherited-terminal child own its screen until it exits. Recorder warnings otherwise
+   * move the cursor underneath the child's input editor. Pipes and structured sinks stay live.
+   * Keep whole writes within a fixed budget; never retain an unbounded session's diagnostics.
+   */
+  deferTerminal(): () => void {
+    if (!this.#tty) return () => {};
+    this.#deferDepth += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--this.#deferDepth > 0) return;
+      const lines = this.#deferred;
+      const omitted = this.#omittedWrites;
+      this.#deferred = [];
+      this.#deferredBytes = 0;
+      this.#omittedWrites = 0;
+      for (const line of lines) this.#write(line);
+      if (omitted > 0)
+        this.warn('output.deferred_limit', { omitted, limit_bytes: MAX_DEFERRED_BYTES });
+    };
+  }
+
+  #emit(text: string): void {
+    if (this.#deferDepth === 0) {
+      this.#write(text);
+      return;
+    }
+    const bytes = Buffer.byteLength(text);
+    if (this.#deferredBytes + bytes > MAX_DEFERRED_BYTES) {
+      this.#omittedWrites += 1;
+      return;
+    }
+    this.#deferred.push(text);
+    this.#deferredBytes += bytes;
   }
 
   info(event: string, fields: Fields = {}): void {
@@ -240,12 +283,12 @@ export class Output {
    */
   progress(message: string): void {
     if (!this.#tty || this.#ci) return;
-    this.#write(`${this.#paint(STYLE.dim)}${message}${this.#paint(STYLE.reset)}\n`);
+    this.#emit(`${this.#paint(STYLE.dim)}${message}${this.#paint(STYLE.reset)}\n`);
   }
 
   /** Free-form text for help and reports, where key=value would be worse than prose. */
   plain(message = ''): void {
-    this.#write(`${message}\n`);
+    this.#emit(`${message}\n`);
   }
 
   failure(f: Failure): void {
@@ -288,8 +331,8 @@ export class Output {
         .map((c, i) => (i === row.length - 1 ? c : c.padEnd(widths[i] ?? 0)))
         .join('  ')
         .trimEnd();
-    this.#write(`${this.#paint(STYLE.dim)}${render(heads)}${this.#paint(STYLE.reset)}\n`);
-    for (const row of cells) this.#write(`${render(row)}\n`);
+    this.#emit(`${this.#paint(STYLE.dim)}${render(heads)}${this.#paint(STYLE.reset)}\n`);
+    for (const row of cells) this.#emit(`${render(row)}\n`);
   }
 
   #paint(code: string): string {
@@ -308,7 +351,7 @@ export class Output {
     }
     this.#sink?.({ level: level as LogEntry['level'], event, fields: structured });
     const body = parts.join(' ');
-    this.#write(
+    this.#emit(
       `${style ? this.#paint(style) : ''}${body}${style ? this.#paint(STYLE.reset) : ''}\n`,
     );
   }

@@ -215,6 +215,13 @@ export class ExchangeEventDeriver {
     const seq = this.#pending.get(toolUseId)?.seq;
     return seq === undefined || seq < 0 ? undefined : seq;
   }
+
+  /** Causal lookups are done once the batch is written; keep only IDs for deduplication. */
+  releaseCompleted(): void {
+    for (const id of this.#pending.keys()) {
+      if (this.#closed.has(id)) this.#pending.delete(id);
+    }
+  }
 }
 
 /**
@@ -342,28 +349,32 @@ export async function appendDerivedEvents(
 ): Promise<void> {
   /** `written[i]` is the seq of the i-th derived event, which is what `causesIndex` refers to. */
   const written: number[] = [];
-  for (const derived of deriver.derive(exchange, turn)) {
-    const causes: number[] = [];
-    if (derived.causesToolId) {
-      const seq = deriver.seqOf(derived.causesToolId);
-      if (seq !== undefined) causes.push(seq);
+  try {
+    for (const derived of deriver.derive(exchange, turn)) {
+      const causes: number[] = [];
+      if (derived.causesToolId) {
+        const seq = deriver.seqOf(derived.causesToolId);
+        if (seq !== undefined) causes.push(seq);
+      }
+      for (const index of derived.causesIndex ?? []) {
+        const seq = written[index];
+        if (seq !== undefined) causes.push(seq);
+      }
+      const event = await writer.append({
+        type: derived.type,
+        actor: derived.actor,
+        turn,
+        attrs: derived.attrs,
+        payload: derived.payload as never,
+        ...(causes.length > 0 ? { causes } : {}),
+      });
+      written.push(event.seq);
+      onDerived?.(derived);
+      if (derived.type === 'tool.call') {
+        deriver.markPending(String(derived.attrs['tool_use_id']), event.seq);
+      }
     }
-    for (const index of derived.causesIndex ?? []) {
-      const seq = written[index];
-      if (seq !== undefined) causes.push(seq);
-    }
-    const event = await writer.append({
-      type: derived.type,
-      actor: derived.actor,
-      turn,
-      attrs: derived.attrs,
-      payload: derived.payload as never,
-      ...(causes.length > 0 ? { causes } : {}),
-    });
-    written.push(event.seq);
-    onDerived?.(derived);
-    if (derived.type === 'tool.call') {
-      deriver.markPending(String(derived.attrs['tool_use_id']), event.seq);
-    }
+  } finally {
+    deriver.releaseCompleted();
   }
 }

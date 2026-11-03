@@ -1,4 +1,5 @@
 import { X509Certificate } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -281,6 +282,14 @@ describe('agenticreplay record --tls-intercept', () => {
   });
 
   it('blames the capture limit, not an unrecognised path, for a body it had to cut', async () => {
+    const duringChild: string[] = [];
+    out = new Output({
+      isTTY: true,
+      write: (line) => {
+        lines.push(line);
+        if (existsSync(envOut) && !existsSync(resultOut)) duringChild.push(line);
+      },
+    });
     // 1.2 MiB against a 1 MiB limit. The truncation itself is fine -- `truncated: true`, the
     // prefix kept -- but a body cut mid-JSON cannot be parsed by any dialect, so `add a dialect
     // for it` is advice that cannot help. Driving this through a real origin printed exactly that
@@ -308,6 +317,7 @@ describe('agenticreplay record --tls-intercept', () => {
     // The wrong one, specifically, must not appear.
     expect(printed).not.toContain('tls.unclaimed_path');
     expect(printed).not.toContain('plugins.md');
+    expect(duringChild).toEqual([]);
   });
 
   it('stays quiet about a call the agent abandoned before the origin answered', async () => {

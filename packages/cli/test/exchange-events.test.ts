@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecordedExchange } from '@agenticreplay/proxy';
-import { ExchangeEventDeriver } from '../src/exchange-events.js';
+import { appendDerivedEvents, ExchangeEventDeriver } from '../src/exchange-events.js';
 
 function exchange(over: Partial<RecordedExchange> = {}): RecordedExchange {
   return {
@@ -27,6 +27,58 @@ function exchange(over: Partial<RecordedExchange> = {}): RecordedExchange {
 }
 
 describe('ExchangeEventDeriver', () => {
+  it('releases completed tool payloads after writing their causal edges, without duplicating resent results', async () => {
+    const deriver = new ExchangeEventDeriver();
+    const written: Array<{ type: string; causes?: number[] }> = [];
+    const writer = {
+      append: async (event: { type: string; causes?: number[] }) => {
+        written.push({ type: event.type, causes: event.causes });
+        return { seq: written.length - 1 };
+      },
+    };
+    for (let turn = 0; turn < 64; turn++) {
+      const id = `tool-${turn}`;
+      await appendDerivedEvents(
+        writer as never,
+        deriver,
+        exchange({
+          canonicalResponse: {
+            model: 'fixture',
+            content: [
+              {
+                type: 'tool_use',
+                id,
+                name: 'write_file',
+                input: { content: 'x'.repeat(64 * 1024) },
+              },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+        turn * 2,
+      );
+      const callSeq = deriver.seqOf(id);
+      const reply = exchange({
+        canonicalRequest: {
+          model: 'fixture',
+          messages: [
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] },
+          ],
+        },
+      });
+      await appendDerivedEvents(writer as never, deriver, reply, turn * 2 + 1);
+      expect(written.findLast((event) => event.type === 'tool.result')?.causes).toEqual([callSeq]);
+      expect(
+        deriver.seqOf(id),
+        'completed calls must no longer retain their input payload',
+      ).toBeUndefined();
+      expect(deriver.unresolved()).toHaveLength(0);
+      expect(
+        deriver.derive(reply, turn * 2 + 2).some((event) => event.type === 'tool.result'),
+      ).toBe(false);
+    }
+  });
+
   it('derives a request and a response for a plain exchange', () => {
     const events = new ExchangeEventDeriver().derive(exchange(), 1);
     expect(events.map((e) => e.type)).toEqual(['model.request', 'model.response']);

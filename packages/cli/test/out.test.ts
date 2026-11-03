@@ -1,7 +1,94 @@
 import { describe, expect, it } from 'vitest';
 import { cdCommand, Output, removeDirCommand, shellArg, stripAnsi } from '../src/out.js';
+import type { LogEntry } from '../src/out.js';
 
 const ESC = String.fromCharCode(27);
+
+describe('terminal ownership', () => {
+  it('defers every renderer while structured diagnostics remain immediate and redacted', () => {
+    const lines: string[] = [];
+    const entries: LogEntry[] = [];
+    const out = new Output({
+      write: (line) => void lines.push(line),
+      sink: (entry) => void entries.push(entry),
+      isTTY: true,
+      color: false,
+      verbose: true,
+    });
+    out.phase('before');
+    const release = out.deferTerminal();
+    out.warn('capture.failed', { token: 'private-value' });
+    out.progress('waiting');
+    out.plain('report');
+    out.table(['STATE'], [['pending']]);
+    out.debug('debugging');
+    out.failure({ event: 'failed', what: 'failure detail' });
+    expect(lines).toEqual(['info before\n']);
+    expect(entries.find((entry) => entry.event === 'capture.failed')?.fields).toEqual({
+      token: '<redacted>',
+    });
+    release();
+    expect(lines.join('')).not.toContain('private-value');
+    expect(lines.slice(1)).toEqual([
+      'warn capture.failed token=<redacted>\n',
+      'waiting\n',
+      'report\n',
+      'STATE\n',
+      'pending\n',
+      'debug debugging\n',
+      'error failed\n',
+      '  failure detail\n',
+    ]);
+    const length = lines.length;
+    release();
+    expect(lines).toHaveLength(length);
+    out.info('after');
+    expect(lines.at(-1)).toBe('info after\n');
+  });
+
+  it('bounds queued UTF-8 bytes and reports omitted writes without truncating a line', () => {
+    const lines: string[] = [];
+    let delivered = 0;
+    const out = new Output({
+      write: (line) => void lines.push(line),
+      sink: () => {
+        delivered++;
+      },
+      isTTY: true,
+      color: false,
+    });
+    const release = out.deferTerminal();
+    for (let i = 0; i < 1000; i++) out.warn('repeated', { detail: 'あ'.repeat(1000) });
+    out.plain('x'.repeat(128 * 1024));
+    expect(lines).toEqual([]);
+    expect(delivered).toBe(1000);
+    release();
+    expect(lines.at(-1)).toMatch(/^warn output.deferred_limit omitted=\d+ limit_bytes=65536\n$/);
+    expect(Buffer.byteLength(lines.slice(0, -1).join(''))).toBeLessThanOrEqual(64 * 1024);
+    expect(lines.slice(0, -1).every((line) => line.endsWith('あ\n'))).toBe(true);
+    const retained = lines.length - 1;
+    expect(lines.at(-1)).toContain(`omitted=${1001 - retained} `);
+    const releaseAgain = out.deferTerminal();
+    out.warn('new.session');
+    releaseAgain();
+    expect(lines.at(-1)).toBe('warn new.session\n');
+  });
+
+  it('flushes only after all owners release, and leaves pipes live', () => {
+    for (const isTTY of [true, false]) {
+      const lines: string[] = [];
+      const out = new Output({ write: (line) => void lines.push(line), isTTY, color: false });
+      const outer = out.deferTerminal();
+      const inner = out.deferTerminal();
+      out.warn('pending');
+      outer();
+      outer();
+      expect(lines).toHaveLength(isTTY ? 0 : 1);
+      inner();
+      expect(lines).toEqual(['warn pending\n']);
+    }
+  });
+});
 
 /**
  * §14 of the design: the CLI is ~90% of the product surface. Most of these assertions exist

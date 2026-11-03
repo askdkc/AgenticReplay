@@ -406,6 +406,9 @@ async function runRecording(
   const errorStatuses = new Map<number, number>();
 
   const proxy = await createProxy({
+    // The writer owns persistence. Retaining every resent conversation here grows for the
+    // entire coding session, independently of the bounded pending-write budget above.
+    retainExchanges: false,
     upstream: plan.upstream,
     upstreamHeaders: plan.headers,
     upstreamHeadersOrigin: plan.headersOrigin,
@@ -581,6 +584,7 @@ async function runRecording(
   });
 
   let exitCode: number;
+  const restoreOutput = out.deferTerminal();
   try {
     exitCode = await runChild(
       launch.command,
@@ -592,6 +596,8 @@ async function runRecording(
     );
   } catch (err) {
     return abandon(err);
+  } finally {
+    restoreOutput();
   }
 
   await writes.drain().catch((err: unknown) => {

@@ -241,7 +241,10 @@ function warnUnclaimed(
   // harness that opens a call and leaves would otherwise print this on every turn.
   if (exchange.status === 0) return;
   const body = exchange.requestBody.trim();
-  if (!body.startsWith('{')) return;
+  const omittedAtLimit = exchange.transformations?.some(
+    (item) => item.location === 'request.body' && item.rule === 'capture_buffer_limit',
+  );
+  if (!body.startsWith('{') && !omittedAtLimit) return;
   // A truncated body cannot parse — it was cut mid-JSON at the capture limit. Requiring a parse
   // would suppress the warning for exactly the requests it exists for, since a long conversation
   // is the one most likely to exceed the limit and the most expensive to have to record again.
@@ -274,9 +277,10 @@ function warnUnclaimed(
       host: exchange.host,
       path: exchange.path,
       limit_bytes: bodyLimit,
-      detail: 'the request body was cut at the capture limit, so no dialect could read it',
+      detail:
+        'the request body exceeded the capture budget, so no model exchange could be recorded',
       consequence: 'capture is incomplete; the omitted body is not eligible for replay',
-      next: 'increase --max-body-bytes and record again',
+      next: 'increase --max-body-bytes or --max-buffered-bytes and record again for a complete trace',
     });
     return;
   }

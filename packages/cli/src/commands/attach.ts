@@ -171,6 +171,7 @@ async function runAttached(
   });
 
   const proxy = await createProxy({
+    retainExchanges: false,
     host: bind,
     port: requestedPort,
     upstream: plan.upstream,
