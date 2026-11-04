@@ -14,3 +14,4 @@ export * from './html.js';
 export * from './render.js';
 export * from './serve.js';
 export * from './trace-dir.js';
+export * from './review.js';

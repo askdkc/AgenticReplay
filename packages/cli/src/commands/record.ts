@@ -50,6 +50,8 @@ import {
 import { upstreamPlan } from '../upstream.js';
 import { AGENTICREPLAY_VERSION } from '../version.js';
 import { captureLimits } from '../capture-limits.js';
+import { readConfig } from '../config.js';
+import { RecordingReviewStore, reviewRepository } from '../review-store.js';
 
 export interface RecordResult {
   /**
@@ -176,6 +178,13 @@ async function runRecording(
   const plan = await upstreamPlan(args);
   await planTlsCapture(args);
 
+  const reviewEnabled = (await readConfig()).memory_review?.enabled === true;
+  const reviewScope = reviewEnabled
+    ? await reviewRepository(cwd).then(
+        (repository) => ({ repository }),
+        () => ({ repository: undefined }),
+      )
+    : undefined;
   const dir = await ensureRunsDir(cwd);
 
   const writer = await TraceWriter.create(dir, {
@@ -583,10 +592,10 @@ async function runRecording(
     shell: shell ? 'on' : 'off',
   });
 
-  let exitCode: number;
+  let childResult: ChildResult;
   const restoreOutput = out.deferTerminal();
   try {
-    exitCode = await runChild(
+    childResult = await runChild(
       launch.command,
       launch.args,
       { ...process.env, ...launch.env },
@@ -599,6 +608,7 @@ async function runRecording(
   } finally {
     restoreOutput();
   }
+  const { exitCode, interrupted } = childResult;
 
   await writes.drain().catch((err: unknown) => {
     writer.markCaptureIncomplete('storage_failure');
@@ -798,6 +808,24 @@ async function runRecording(
   });
   const manifest = await writer.close(exitCode);
 
+  if (reviewScope && !interrupted) {
+    try {
+      if (!reviewScope.repository || (await reviewRepository(cwd)) !== reviewScope.repository)
+        throw new Error('The recording has no stable Git repository scope.');
+      await RecordingReviewStore.enqueue(cwd, writer.runId, writer.runDir, reviewScope.repository);
+      out.info('memory_review.pending', {
+        run: writer.runId,
+        reason: 'Kiokuko review integration is unavailable',
+        next: `agenticreplay review ${writer.runId}`,
+      });
+    } catch {
+      out.warn('memory_review.queue_failed', {
+        run: writer.runId,
+        reason: 'Could not bind or write the local memory review queue.',
+      });
+    }
+  }
+
   out.phase('recorded', {
     run: writer.runId,
     events: manifest.counts?.events ?? writer.seq,
@@ -929,13 +957,18 @@ async function runRecording(
  * agent's own chatter is still shown — it moves to stderr, where a human reads it and a parser
  * does not. stdin and stderr stay inherited so the agent can still prompt and still colour.
  */
+interface ChildResult {
+  exitCode: number;
+  interrupted: boolean;
+}
+
 async function runChild(
   command: string,
   argv: string[],
   env: NodeJS.ProcessEnv,
   cwd: string,
   quietStdout = false,
-): Promise<number> {
+): Promise<ChildResult> {
   // Resolved the way detection resolves, so a launcher never reports ENOENT for an agent that
   // `agenticreplay doctor` just called present.
   const target = await resolveLaunch(command, argv);
@@ -948,7 +981,11 @@ async function runChild(
     });
     child.stdout?.pipe(process.stderr);
     // Forward interrupts so Ctrl-C reaches the agent rather than orphaning it behind the proxy.
-    const forward = (signal: NodeJS.Signals) => () => child.kill(signal);
+    let forwarded = false;
+    const forward = (signal: NodeJS.Signals) => () => {
+      forwarded = true;
+      child.kill(signal);
+    };
     const onInt = forward('SIGINT');
     const onTerm = forward('SIGTERM');
     process.on('SIGINT', onInt);
@@ -965,10 +1002,13 @@ async function runChild(
         ),
       );
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       process.off('SIGINT', onInt);
       process.off('SIGTERM', onTerm);
-      resolve(code ?? 0);
+      resolve({
+        exitCode: code ?? 0,
+        interrupted: forwarded || signal !== null || code === 130 || code === 143,
+      });
     });
   });
 }

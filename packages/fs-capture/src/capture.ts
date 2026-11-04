@@ -19,6 +19,14 @@ export interface FsCaptureOptions {
 export interface TurnSnapshot {
   changes: FileChange[];
   /**
+   * The turn whose sample already covers this turn's window, set only when this call sampled
+   * nothing because that later turn was sampled first: the harness can hold exchanges in flight
+   * at once, so they reach the recorder in completion order, not request order. Re-sampling
+   * would describe the tree as it is *after* that later turn and reattribute its changes to this
+   * turn. Absent from every ordinary snapshot, whose diff is complete for its own window.
+   */
+  coveredBy?: number;
+  /**
    * Nested repositories inside a declared artifact path that this snapshot could not hold, named
    * the first time each is seen. Absent from every ordinary snapshot; see
    * {@link ShadowIndex.skippedGitlinks} for why they are dropped rather than captured or refused.
@@ -85,7 +93,13 @@ export class FsCapture {
       throw new Error(`turn must be a non-negative integer, got ${turn}`);
     }
     if (turn < this.lastTurn) {
-      throw new Error(`turn ${turn} is before the last snapshotted turn ${this.lastTurn}`);
+      // Out of order, not corruption. A gone-backwards turn means the recorder sampled a later
+      // turn first — the harness had exchanges in flight at once, so completion order is not
+      // request order, and a turn can arrive after its own window was covered. The later
+      // sample is the one that saw that tree; sampling again now would describe the tree as it
+      // is after that later turn and reattribute its changes to this turn. So no sample, and
+      // the flag tells the caller to record, not warn.
+      return { changes: [], coveredBy: this.lastTurn };
     }
     const tree = await this.shadow.snapshot();
     const previous = this.previousTree;

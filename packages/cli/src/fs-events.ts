@@ -23,6 +23,23 @@ export async function appendSnapshot(
     return;
   }
 
+  // Not the failure above: a turn arriving behind the last sample is what happens whenever the
+  // harness keeps exchanges in flight at once, and a later one reached the recorder first. The
+  // later sample already holds this turn's window, so a sample taken now would reattribute its
+  // diff below the turns that produced it. Keep the reorder in the trace, but quiet — a warn per
+  // background exchange trains people to ignore warns.
+  const coveredBy = outcome.snapshot.coveredBy;
+  if (coveredBy !== undefined) {
+    out.debug('fs.capture_out_of_order', { turn, covered_by_turn: coveredBy });
+    await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      turn,
+      attrs: { rule: 'fs_capture_out_of_order', covered_by_turn: coveredBy },
+    });
+    return;
+  }
+
   for (const change of outcome.snapshot.changes) {
     await writer.append({
       type: 'fs.change',

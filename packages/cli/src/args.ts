@@ -46,6 +46,7 @@ export interface ParsedArgs {
  * work for these; they are handled before this point.
  */
 export const VALUELESS = new Set([
+  'status',
   'remote',
   'ui',
   'json',

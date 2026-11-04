@@ -34,7 +34,7 @@ So the scope is now every package's `src`, and an alias assignment of the global
 `fetch` is treated as a raw fetch in its own right. A fence that only looks where
 the last bug was is not a fence.
 
-THE ONE EXEMPTION IS BOUND TO THE CALL'S SHAPE, NOT TO ITS FILE NAME.
+EXEMPTIONS ARE BOUND TO THE CALL'S SHAPE AS WELL AS ITS FILE NAME.
 `refreshOpenCodeApiBases` cannot call `fetchPinned`: it is serialised with
 `.toString()` into the OpenCode plugin agenticreplay emits (see `opencode-capture.ts`),
 so an imported name would be a free variable in the generated module and throw
@@ -43,7 +43,9 @@ not where it lives — a hard-coded public URL, `credentials: 'omit'`, and
 `redirect: 'error'`, which refuses a redirect outright rather than following it.
 EXEMPT_FETCHES asserts all three on the lines that follow the call, so the day
 that file grows a second fetch, or this one starts carrying a credential or
-following redirects, the fence reports it. Each entry must also still MATCH:
+following redirects, the fence reports it. The loopback review script runs in
+the browser and must post only to its own pathname without ambient credentials
+or redirects. Each entry must also still MATCH:
 an exemption that has stopped covering anything is a hole waiting for the next
 line to fall into, so it fails rather than sitting there looking satisfied.
 */
@@ -79,6 +81,16 @@ describe('gateway requests', () => {
         why: 'serialised into the emitted OpenCode plugin, so it cannot import fetchPinned',
         requires: [
           /https:\/\/models\.opencode\.ai\//,
+          /credentials:\s*'omit'/,
+          /redirect:\s*'error'/,
+        ],
+      },
+      {
+        file: join('viewer', 'src', 'review.ts'),
+        why: 'runs in a browser, restricted to the current loopback page',
+        requires: [
+          /fetch\(location\.pathname,/,
+          /mode:\s*'same-origin'/,
           /credentials:\s*'omit'/,
           /redirect:\s*'error'/,
         ],

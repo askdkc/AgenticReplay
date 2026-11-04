@@ -46,6 +46,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   graph: ['to'],
   export: ['o', 'out', 'card', 'graph-card', 'to'],
   ui: ['port'],
+  review: ['status'],
   scrub: ['match', 'matches', 'dry-run', 'drop-fs'],
   // `--remote` asks the gateway instead of this directory. `--gateway` stays what it is for
   // push and pull — an optional override of which host — rather than doubling as the switch, so
@@ -153,6 +154,7 @@ const POSITIONALS: Record<string, number> = {
   push: 1,
   pull: 1,
   ui: 1,
+  review: 1,
   scrub: 1,
   // Configured entirely by `--dir`, like `attach` below it.
   quickstart: 0,

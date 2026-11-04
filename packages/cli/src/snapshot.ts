@@ -2,6 +2,8 @@ import type { FileChange } from '@agenticreplay/fs-capture';
 
 export interface SnapshotResult {
   changes: FileChange[];
+  /** See `TurnSnapshot.coveredBy`: this turn's window was already sampled by a later turn. */
+  coveredBy?: number;
   /** See `TurnSnapshot.skippedGitlinks`: declared paths this snapshot could not hold. */
   skippedGitlinks?: readonly string[];
   /** See `TurnSnapshot.uncommittedNested`: nested repositories with no commit to record them by. */

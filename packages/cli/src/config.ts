@@ -32,6 +32,7 @@ export interface GatewayConfig {
 
 export interface AgenticReplayConfig {
   gateway?: GatewayConfig;
+  memory_review?: { enabled: boolean };
 }
 
 /** XDG, with the documented fallback. Honours `XDG_CONFIG_HOME` so tests need no real home. */

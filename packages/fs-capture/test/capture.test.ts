@@ -81,11 +81,26 @@ describe('snapshotTurn', () => {
     ]);
   });
 
-  // events.jsonl is a total order, so a turn that moves backwards is a recorder bug, not data.
-  itGit('rejects a turn number that goes backwards', async () => {
+  // A turn can reach the recorder after its own window was covered: the harness keeps
+  // exchanges in flight at once, so completion order is not request order, and the sample per
+  // exchange runs in that order. The later sample already saw that tree, so re-sampling would
+  // call its changes this turn's.
+  itGit('answers a turn behind the last sample as covered, without resampling', async () => {
+    const { cwd, capture } = await fixture();
+    await write(cwd, 'a.txt', 'one\n');
+    await capture.snapshotTurn(3);
+    await expect(capture.snapshotTurn(2)).resolves.toEqual({ changes: [], coveredBy: 3 });
+    // Skipping is not sampling: the next real turn diffs against the last real sample, so the
+    // covered turn's changes are attributed once, to the turn that saw them.
+    await write(cwd, 'a.txt', 'one\ntwo\n');
+    await expect(capture.snapshotTurn(4)).resolves.toEqual({
+      changes: [{ path: 'a.txt', status: 'modified', insertions: 1, deletions: 0 }],
+    });
+  });
+
+  itGit('still rejects turn numbers that are not non-negative integers', async () => {
     const { capture } = await fixture();
     await capture.snapshotTurn(3);
-    await expect(capture.snapshotTurn(2)).rejects.toThrow(/turn/i);
     await expect(capture.snapshotTurn(-1)).rejects.toThrow(/turn/i);
     await expect(capture.snapshotTurn(1.5)).rejects.toThrow(/turn/i);
     await expect(capture.snapshotTurn(3)).resolves.toBeDefined();

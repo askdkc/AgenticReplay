@@ -60,6 +60,12 @@ contain sensitive data. Review them before sharing.
 See [integrations](docs/integrations.md) for other harnesses and
 [debugging a failing run](docs/how-to/debug-a-failing-agent-run.md) for an example.
 
+## Post-recording review
+
+The optional [memory review queue](docs/memory-review.md) tracks a finished CLI recording and lets
+you reopen its review by exact run ID. Candidate preparation and saving need a compatible
+Kiokuko host integration.
+
 ## License
 
 Apache-2.0. Trace specification: CC BY 4.0.

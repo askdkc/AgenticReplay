@@ -6,6 +6,7 @@ import { Output } from './out.js';
 import { attachCommand } from './commands/attach.js';
 import { quickstartCommand } from './commands/quickstart.js';
 import { recordCommand } from './commands/record.js';
+import { reviewCommand } from './commands/review.js';
 import {
   graphCommand,
   exportCommand,
@@ -45,6 +46,7 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI a
         --dry-run                say what would go, and write nothing
         --drop-fs                delete the filesystem snapshots, which cannot be scrubbed
   agenticreplay ui [run]                  serve the viewer locally
+  agenticreplay review <run>              reopen a queued memory review (--status for the terminal)
   agenticreplay push [run]                send a run to the gateway, for the rest of the team
         --gateway <url>          where to send it (a gateway you named; no default)
         --fs                     include the workspace snapshots (scrub cannot clean them)
@@ -193,6 +195,9 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         return 0;
       case 'ui':
         await uiCommand(args, out, cwd);
+        return 0;
+      case 'review':
+        await reviewCommand(args, out, cwd);
         return 0;
       case 'scrub':
         await scrubCommand(args, out, cwd);
