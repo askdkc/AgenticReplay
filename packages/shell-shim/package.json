@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/shell-shim",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,8 +17,8 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/schema": "0.1.12",
-    "@agenticreplay/core": "0.1.12"
+    "@agenticreplay/schema": "0.1.13",
+    "@agenticreplay/core": "0.1.13"
   },
   "engines": {
     "node": ">=24.0.0"
