@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,6 +88,7 @@ describe('recording diagnostics while a harness owns the terminal', () => {
       const model = await startFakeModel();
       cleanup.push(model.close);
       const active = join(cwd, 'harness-active');
+      const warningObserved = join(cwd, 'warning-observed');
       const lines: string[] = [];
       const duringChild: string[] = [];
       const diagnostics: string[] = [];
@@ -106,6 +107,10 @@ describe('recording diagnostics while a harness owns the terminal', () => {
         },
         sink: (entry) => {
           if (existsSync(active)) diagnostics.push(entry.event);
+          if (entry.event === 'proxy.unclaimed_path') {
+            // Acknowledge after Output has also handled the synchronous terminal or pipe write.
+            queueMicrotask(() => writeFileSync(warningObserved, ''));
+          }
         },
       });
       const script = `
@@ -119,8 +124,14 @@ describe('recording diagnostics while a harness owns the terminal', () => {
           });
           if (response.status !== 200 || !(await response.text()).includes('msg_0')) process.exit(3);
         }
+        // The proxy can finish forwarding the response before it reports the diagnostic.
+        const deadline = Date.now() + 5000;
+        while (!fs.existsSync('warning-observed')) {
+          if (Date.now() >= deadline) throw new Error('Recorder did not report the unclaimed path');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
         fs.unlinkSync('harness-active');
-      })().catch(() => process.exit(4));
+      })().catch(error => { console.error(error); process.exitCode = 4; });
     `;
       const result = await recordCommand(
         parseArgs([
