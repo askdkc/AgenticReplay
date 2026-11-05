@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/proxy",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,10 +17,10 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/core": "0.1.14",
-    "@agenticreplay/plugin-api": "0.1.14",
-    "@agenticreplay/providers": "0.1.14",
-    "@agenticreplay/schema": "0.1.14",
+    "@agenticreplay/core": "0.1.15",
+    "@agenticreplay/plugin-api": "0.1.15",
+    "@agenticreplay/providers": "0.1.15",
+    "@agenticreplay/schema": "0.1.15",
     "ws": "^8.22.1"
   },
   "engines": {
