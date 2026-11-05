@@ -59,6 +59,7 @@ export const VALUELESS = new Set([
   'dry-run',
   'drop-fs',
   'tls-intercept',
+  'desktop',
   'version',
   'help',
   // Added with the flags themselves and, the first time, not: `agenticreplay replay --quiet run_a1b2c3`

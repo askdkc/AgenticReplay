@@ -5,6 +5,7 @@ import { serveMcp } from './mcp-server.js';
 import { Output } from './out.js';
 import { attachCommand } from './commands/attach.js';
 import { quickstartCommand } from './commands/quickstart.js';
+import { recordDesktopCommand } from './commands/record-desktop.js';
 import { recordCommand } from './commands/record.js';
 import { reviewCommand } from './commands/review.js';
 import {
@@ -29,12 +30,14 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI a
         --dir <path>             where to put it (default: ./agenticreplay-quickstart)
         --full                   show the complete recorded timeline
   agenticreplay record <agent>            run an agent and capture supported API traffic
+  agenticreplay record codex --desktop   launch the installed macOS app and capture API turns
   agenticreplay attach                    record an agent agenticreplay does not launch — one in a sandbox,
                                  a container, or on another machine
         --for <agent>            print the variables that agent reads (default: exec)
         --bind <addr>            address to listen on (default: 127.0.0.1)
         --advertise <host>       how the sandbox reaches this machine, when they differ
         --remote-ca-path <p>     where the CA will live over there (default: /tmp/agenticreplay-ca.crt)
+        --codex-review-socket <p>  private local socket for sealing individual Codex API turns
   agenticreplay show [run]                the timeline, in the terminal
   agenticreplay graph [run]               what caused what — recorded edges and derived ones
         --to N                   just the chain that produced event N
@@ -134,6 +137,12 @@ Docs: https://github.com/askdkc/AgenticReplay
  */
 const JSON_ONLY = new Set(['events']);
 
+function runRecord(args: ParsedArgs, out: Output, cwd: string) {
+  return args.bool('desktop')
+    ? recordDesktopCommand(args, out, cwd)
+    : recordCommand(args, out, cwd);
+}
+
 export async function main(argv: string[], cwd = process.cwd()): Promise<number> {
   const args = parseArgs(argv);
   if (args.bool('json')) return jsonMain(args, cwd);
@@ -175,7 +184,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         await quickstartCommand(args, out, cwd);
         return 0;
       case 'record':
-        return (await recordCommand(args, out, cwd)).exitCode;
+        return (await runRecord(args, out, cwd)).exitCode;
       case 'attach':
         return (await attachCommand(args, out, cwd)).exitCode;
       case 'show':
@@ -339,7 +348,7 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
         return result.exitCode;
       }
       case 'record': {
-        const result = await recordCommand(args, out, cwd);
+        const result = await runRecord(args, out, cwd);
         emit(result);
         return result.exitCode;
       }

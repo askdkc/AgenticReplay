@@ -66,3 +66,32 @@ The loopback page protects its own operations with origin and Host checks, a pri
 and a form token. Processes running as the same OS user can still operate it. Save is disabled
 until a Kiokuko host integration supplies an approved user-consent boundary. Review actions
 in automated browser tests operate on disposable fixtures and establish UI behavior only.
+
+## Codex API turn recording
+
+On macOS, run this from the Git worktree you want to record after running `kiokuko setup`.
+
+```console
+agenticreplay record codex --desktop
+```
+
+Use that worktree in Codex. If the app is already open, quit it and run the same command
+again. The command launches the installed app with its usual profile and records until it
+exits. `agenticreplay record codex` launches the CLI.
+
+The recorder creates a loopback proxy, a temporary CA, and a private Unix socket. It passes
+`AGENTICREPLAY_CODEX_REVIEW_SOCKET` to the app before launch. The default TLS interception
+hosts are `chatgpt.com:443` and `api.openai.com:443`. Other destinations are tunnelled, and
+upstream certificates are verified. The temporary CA and socket are removed when the command
+exits.
+
+The recorder reads the chat, turn, and worktree from each Responses WebSocket
+`response.create`. Kiokuko requests a trace by its canonical worktree, chat, and turn. An
+in-progress or unknown turn returns `pending`. An invalid request or a turn whose capture is
+unusable returns `unavailable`. A complete turn returns `sealed` with the same absolute trace
+directory on repeat requests during the session. Kiokuko owns the approval and memory
+operations.
+
+For externally launched clients, `agenticreplay attach --codex-review-socket /absolute/private/review.sock`
+also serves turn traces. Use the normal attach instructions to route the client's API
+traffic through the recorder. The attachment additionally saves a whole-session recording.

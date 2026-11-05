@@ -553,7 +553,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // traffic instead, which is what it is.
     if (
       dialect &&
-      exchange.method === 'POST' &&
+      (exchange.method === 'POST' || exchange.transport === 'websocket') &&
       !exchange.requestTruncated &&
       exchange.responseComplete &&
       !exchange.responseTruncated &&
@@ -571,7 +571,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           path: exchange.path,
           rawRequest: exchange.requestBody,
           rawResponse: exchange.responseBody,
-          status: exchange.status,
+          status: exchange.transport === 'websocket' ? 200 : exchange.status,
           streamed,
           headers: scalarHeaders(exchange.requestHeaders),
           seq: exchangeSequence,
@@ -1708,7 +1708,16 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   const host = options.host ?? '127.0.0.1';
-  await new Promise<void>((resolve) => server.listen(options.port ?? 0, host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(options.port ?? 0, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  }).catch((error) => {
+    interception?.close();
+    throw error;
+  });
   const port = (server.address() as AddressInfo).port;
 
   return {

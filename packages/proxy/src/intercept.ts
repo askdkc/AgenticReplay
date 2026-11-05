@@ -24,6 +24,7 @@ import {
 import type { CaptureTransformation } from '@agenticreplay/schema';
 import type { RunCa } from './ca.js';
 import { HostPolicy } from './tls-hosts.js';
+import { isCodexResponsesUpgrade, relayWebSocket } from './codex-websocket.js';
 
 /**
  * HTTP CONNECT: tunnel it, or terminate it and look inside.
@@ -79,6 +80,9 @@ export interface NetExchange {
   host: string;
   port: number;
   method: string;
+  transport?: 'websocket';
+  /** The completed Responses exchange ended with a client-side tool call. */
+  codexTurnContinues?: boolean;
   path: string;
   /** Auth headers removed; see `SECRET_REQUEST_HEADERS`. */
   requestHeaders: Record<string, HeaderValue>;
@@ -146,6 +150,8 @@ export interface NetRequest {
   host: string;
   port: number;
   method: string;
+  transport?: 'websocket';
+  codexWarmup?: boolean;
   path: string;
   requestHeaders: Record<string, HeaderValue>;
   /** The original bytes, needed for clients that use a binary content encoding such as zstd. */
@@ -349,6 +355,8 @@ export interface TlsInterceptOptions {
    * whose corporate root is not in Node's bundle, and for tests.
    */
   trustedOriginCerts?: readonly string[];
+  /** Relay other WebSocket upgrades on intercepted hosts without observing their frames. */
+  passThroughWebSockets?: boolean;
   maxCapturedBytes?: number;
   maxBufferedBytes?: number;
   onRequestStart?: (request: NetRequest) => void | Promise<void>;
@@ -473,16 +481,27 @@ export function attachTlsIntercept(
   };
   const open = new Set<Socket | TLSSocket>();
 
-  /**
-   * A protocol switch inside a session we decrypted — a WebSocket, usually.
-   *
-   * Not relayed: this proxy understands request/response exchanges and nothing else, and a
-   * half-implemented WebSocket relay would drop frames rather than fail. Refusing outright and
-   * saying so leaves the operator with a message instead of a hang, and the remedy is to take the
-   * host off the allowlist so the whole connection is tunnelled untouched instead.
-   */
-  const onUpgrade = (req: IncomingMessage, socket: Socket): void => {
+  const onUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer): void => {
     const target = targetOf(req.socket);
+    const capture = isCodexResponsesUpgrade(req);
+    if (
+      target &&
+      (capture ||
+        (options.passThroughWebSockets &&
+          req.method === 'GET' &&
+          req.headers.upgrade?.toLowerCase() === 'websocket'))
+    ) {
+      relayWebSocket(req, socket, head, {
+        target,
+        capture,
+        ca: originTrust,
+        maxCaptured,
+        budget,
+        callbacks: options,
+        secretHeaders: SECRET_REQUEST_HEADERS,
+      });
+      return;
+    }
     options.onFailure?.({
       host: target?.host ?? 'unknown',
       port: target?.port ?? 0,
@@ -507,6 +526,7 @@ export function attachTlsIntercept(
     if (existing && !existing.closed && !existing.destroyed) return existing;
     const session = http2Connect(`https://${target.host}:${target.port}`, {
       ALPNProtocols: ['h2'],
+      rejectUnauthorized: true,
       ...(originTrust ? { ca: originTrust } : {}),
     });
     session.on('error', (err) => {
@@ -984,6 +1004,7 @@ export function attachTlsIntercept(
       method: req.method ?? 'GET',
       path,
       headers: outboundHeaders,
+      rejectUnauthorized: true,
       agent,
       // SNI is a name, never an address.
       ...(isIP(target.host) === 0 ? { servername: target.host } : {}),

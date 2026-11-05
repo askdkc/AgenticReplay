@@ -20,6 +20,7 @@ import {
   persistNetExchange,
 } from '../tls-capture.js';
 import { upstreamPlan } from '../upstream.js';
+import { openCodexTurnCapture } from '../codex-turn-capture.js';
 import { AGENTICREPLAY_VERSION } from '../version.js';
 
 /**
@@ -89,6 +90,10 @@ async function runAttached(
   const registry = defaultAdapters();
   const bind = args.str('bind') ?? '127.0.0.1';
   const advertise = args.str('advertise');
+  const reviewSocket = args.str('codex-review-socket');
+  if (args.has('codex-review-socket') && (!reviewSocket || bind !== '127.0.0.1')) {
+    throw new Error('Codex review requires a socket path and a loopback recorder.');
+  }
   const requestedPort = args.num('port') ?? 0;
 
   // Resolved before the run directory is made, so an invocation that cannot work — a wildcard bind
@@ -144,6 +149,7 @@ async function runAttached(
     if (at === undefined) writer.markCaptureIncomplete('missing_request_correlation');
     writes.push(() => persistNetExchange(writer, at ?? 0, exchange));
   }
+  let desktopTurns: Awaited<ReturnType<typeof openCodexTurnCapture>> | undefined;
   const tls = await setupTlsCapture({
     args,
     out,
@@ -152,8 +158,14 @@ async function runAttached(
     // Out-of-band traffic belongs to whichever turn was in progress when it happened, exactly as in
     // a launched recording. A fixed 0 filed every net.* event against the start of the session.
     turn: () => turn,
-    onRequestStart: start,
-    onNetExchange: finish,
+    onRequestStart: async (request) => {
+      desktopTurns?.start(request);
+      await start(request);
+    },
+    onNetExchange: (exchange) => {
+      desktopTurns?.finish(exchange);
+      finish(exchange);
+    },
   });
   if (tls.ca) minted.push(tls.ca);
   const deriver = new ExchangeEventDeriver();
@@ -170,6 +182,7 @@ async function runAttached(
     attrs: { adapter: adapter.id, cwd, attached: true },
   });
 
+  desktopTurns = reviewSocket ? await openCodexTurnCapture(reviewSocket, cwd, dir) : undefined;
   const proxy = await createProxy({
     retainExchanges: false,
     host: bind,
@@ -178,13 +191,23 @@ async function runAttached(
     upstreamHeaders: plan.headers,
     upstreamHeadersOrigin: plan.headersOrigin,
     ...tls.proxyOptions,
-    onRequestStart: start,
-    onNetExchange: finish,
+    onRequestStart: async (request) => {
+      desktopTurns?.start(request);
+      await start(request);
+    },
+    onNetExchange: (exchange) => {
+      desktopTurns?.finish(exchange);
+      finish(exchange);
+    },
     onExchange: (exchange: RecordedExchange) => {
       modelExchanges += 1;
+      desktopTurns?.model(exchange);
       const at = exchange.requestId ? (attempts.get(exchange.requestId) ?? 0) : 0;
       writes.push(() => appendDerivedEvents(writer, deriver, exchange, at));
     },
+  }).catch(async (error) => {
+    await desktopTurns?.close();
+    throw error;
   });
 
   const advertised = advertisedUrl({
@@ -287,6 +310,7 @@ async function runAttached(
     await (options.until ?? firstInterrupt());
   } finally {
     await proxy.close();
+    await desktopTurns?.close();
     await writes.drain().catch(() => writer.markCaptureIncomplete('storage_failure'));
     await tls.ca?.dispose();
   }

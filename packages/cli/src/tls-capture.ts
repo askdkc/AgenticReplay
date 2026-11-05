@@ -37,6 +37,9 @@ export interface TlsCaptureRequest {
   writer?: TraceWriter;
   /** Used by an exact replay running with --no-trace, where there is no writer to own the CA. */
   runDir?: string;
+  /** A launching client may require interception with a narrower default host list. */
+  defaultHosts?: readonly string[];
+  passThroughWebSockets?: boolean;
   writes: SerialQueue;
   /**
    * Snapshot the current turn at request start. The request ID retains that assignment through
@@ -85,7 +88,7 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
   const { args, out, writer, writes } = req;
 
   const tlsHosts = args.list('tls-hosts');
-  const interceptTls = args.bool('tls-intercept');
+  const interceptTls = args.bool('tls-intercept', req.defaultHosts !== undefined);
 
   // Naming hosts without asking for interception captures nothing and says nothing, which reads
   // as "agenticreplay ignored my traffic" rather than as "agenticreplay ignored my flag".
@@ -97,7 +100,7 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
 
   // Resolved before anything is minted, so a contradictory list — one that both replaces the
   // defaults and adds to them — fails while the run directory still holds no private key.
-  const hosts = resolveTlsHosts(tlsHosts);
+  const hosts = resolveTlsHosts(tlsHosts, req.defaultHosts);
   HostPolicy.from([...hosts]);
   const trustedOriginCerts = await extraOriginRoots();
   const runDir = writer?.runDir ?? req.runDir;
@@ -118,6 +121,7 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
         ca,
         hosts: [...hosts],
         trustedOriginCerts,
+        passThroughWebSockets: req.passThroughWebSockets,
         onRequestStart: async (request: NetRequest) => {
           if (req.onRequestStart) return req.onRequestStart(request);
           const turn = req.turn();
@@ -169,6 +173,7 @@ export async function persistNetRequestStart(
       host: request.host,
       port: request.port,
       method: request.method,
+      ...(request.transport === undefined ? {} : { transport: request.transport }),
       path: request.path,
       headers: request.requestHeaders,
       bytes: request.requestBytes.byteLength,
@@ -411,6 +416,7 @@ export async function persistNetExchange(
       host: exchange.host,
       port: exchange.port,
       method: exchange.method,
+      ...(exchange.transport === undefined ? {} : { transport: exchange.transport }),
       path: exchange.path,
       ...(exchange.alpn === undefined ? {} : { alpn: exchange.alpn }),
       // Absent means intercepted — every exchange the interceptor produces. The proxy's plaintext
@@ -454,6 +460,7 @@ export async function persistNetExchange(
       host: exchange.host,
       port: exchange.port,
       status: exchange.status,
+      ...(exchange.transport === undefined ? {} : { transport: exchange.transport }),
       intercepted: exchange.intercepted ?? true,
       headers: exchange.responseHeaders,
       bytes: exchange.responseBytes,
