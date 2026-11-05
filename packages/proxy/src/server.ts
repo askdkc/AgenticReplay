@@ -492,6 +492,9 @@ function sameOrigin(a: string, b: string): boolean {
 }
 
 export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
+  const host = options.host ?? '127.0.0.1';
+  if (options.tls?.directCodexOrigin && host !== '127.0.0.1')
+    throw new Error('The direct Codex probe must listen on IPv4 loopback.');
   const dialects = options.dialects ?? defaultDialects();
   // PINNED BY DEFAULT (orcacode-review). This proxy is handed the stored gateway
   // key as `upstreamHeaders` and attaches it to both live call sites, so it is a
@@ -519,7 +522,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const redactor = new Redactor();
 
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
+    void (interception?.forwardDirect ?? handle)(req, res).catch((err: unknown) => {
       // Whatever failed, its message may name the origin it was given — and this body reaches
       // the agent, which prints it. See {@link withoutCredentials}.
       if (res.destroyed || res.writableEnded) return;
@@ -1707,7 +1710,6 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     }
   }
 
-  const host = options.host ?? '127.0.0.1';
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(options.port ?? 0, host, () => {

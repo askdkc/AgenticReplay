@@ -23,6 +23,7 @@ import { doctorCommand } from './commands/doctor.js';
 import { modelsCommand, setupCommand } from './commands/setup.js';
 import { withoutCredentials } from '@agenticreplay/proxy';
 import { AGENTICREPLAY_VERSION } from './version.js';
+import { codexServiceCommand } from './codex-service.js';
 
 const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI agent activity
 
@@ -31,6 +32,10 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI a
         --full                   show the complete recorded timeline
   agenticreplay record <agent>            run an agent and capture supported API traffic
   agenticreplay record codex --desktop   launch the installed macOS app and capture API turns
+  agenticreplay codex-service register   record Dock-launched Codex in this Git worktree (macOS)
+        --config <path>          Codex configuration (default: ~/.codex/config.toml)
+  agenticreplay codex-service status     show the relay status and private review socket
+  agenticreplay codex-service disable    restore Codex configuration and unload the relay
   agenticreplay attach                    record an agent agenticreplay does not launch — one in a sandbox,
                                  a container, or on another machine
         --for <agent>            print the variables that agent reads (default: exec)
@@ -185,6 +190,11 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         return 0;
       case 'record':
         return (await runRecord(args, out, cwd)).exitCode;
+      case 'codex-service': {
+        const result = await codexServiceCommand(args.positionals[0], cwd, args.str('config'));
+        if (result) out.plain(JSON.stringify(result));
+        return 0;
+      }
       case 'attach':
         return (await attachCommand(args, out, cwd)).exitCode;
       case 'show':
@@ -352,6 +362,9 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
         emit(result);
         return result.exitCode;
       }
+      case 'codex-service':
+        emit(await codexServiceCommand(args.positionals[0], cwd, args.str('config')));
+        return 0;
       case 'doctor': {
         const result = await doctorCommand(args, out, cwd);
         emit(result);

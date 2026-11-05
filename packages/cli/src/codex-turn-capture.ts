@@ -45,6 +45,7 @@ function turnIdentity(request: NetRequest) {
 }
 
 interface CapturedTurn {
+  root: string;
   open: Set<string>;
   writer: Promise<TraceWriter>;
   deriver: ExchangeEventDeriver;
@@ -61,6 +62,22 @@ export async function openCodexTurnCapture(
   runsDir: string,
   options: { requireWorkspace?: boolean; maxBufferedBytes?: number } = {},
 ) {
+  const root = await realpath(cwd);
+  return openCapture(socketPath, new Map([[root, runsDir]]), options);
+}
+
+export async function openCodexWorktreeCapture(
+  socketPath: string,
+  worktrees: ReadonlyMap<string, string>,
+) {
+  return openCapture(socketPath, worktrees, { requireWorkspace: true, maxSettledTurns: 2048 });
+}
+
+async function openCapture(
+  socketPath: string,
+  worktrees: ReadonlyMap<string, string>,
+  options: { requireWorkspace?: boolean; maxBufferedBytes?: number; maxSettledTurns?: number },
+) {
   if (
     process.platform === 'win32' ||
     !isAbsolute(socketPath) ||
@@ -76,15 +93,21 @@ export async function openCodexTurnCapture(
     (await realpath(parent)) !== parent
   )
     throw new Error('Codex review socket needs a private canonical directory.');
-  const root = await realpath(cwd);
   const turns = new Map<string, CapturedTurn>();
   const attempts = new Map<string, CapturedTurn>();
-  const settled = new Map<string, Promise<string | null>>();
+  const settled = new Map<string, { root?: string; result: Promise<string | null> }>();
+  const sealing = new Set<Promise<string | null>>();
   const sockets = new Set<Socket>();
   let modelExchanges = 0;
   let completeTurns = 0;
   let buffered = 0;
   let closing: Promise<{ modelExchanges: number; completeTurns: number }> | undefined;
+
+  function remember(key: string, root: string | undefined, result: Promise<string | null>) {
+    settled.set(key, { ...(root === undefined ? {} : { root }), result });
+    if (options.maxSettledTurns !== undefined && settled.size > options.maxSettledTurns)
+      settled.delete(settled.keys().next().value!);
+  }
 
   const enqueue = (
     turn: CapturedTurn,
@@ -121,7 +144,9 @@ export async function openCodexTurnCapture(
       if (complete) completeTurns++;
       return complete ? writer.runDir : null;
     })().catch(() => null));
-    settled.set(key, result);
+    sealing.add(result);
+    void result.then(() => sealing.delete(result));
+    remember(key, turn.root, result);
     turns.delete(key);
     return result;
   };
@@ -149,11 +174,19 @@ export async function openCodexTurnCapture(
       }
       void (async () => {
         const request = JSON.parse(input) as Record<string, unknown> | null;
-        if (request?.cwd !== root || !identifier(request.sessionId) || !identifier(request.turnId))
+        if (
+          typeof request?.cwd !== 'string' ||
+          !worktrees.has(request.cwd) ||
+          !identifier(request.sessionId) ||
+          !identifier(request.turnId)
+        )
           return { status: 'unavailable' };
         const key = JSON.stringify([request.sessionId, request.turnId]);
         const turn = turns.get(key);
-        let result = settled.get(key);
+        const previous = settled.get(key);
+        if ((turn && turn.root !== request.cwd) || (previous && previous.root !== request.cwd))
+          return { status: 'unavailable' };
+        let result = previous?.result;
         if (turn && turn.open.size === 0 && (turn.broken || !turn.needsContinuation)) {
           result = seal(key, turn);
         }
@@ -188,16 +221,22 @@ export async function openCodexTurnCapture(
       const key = JSON.stringify([sessionId, turnId]);
       if (settled.has(key)) return;
       let turn = turns.get(key);
-      if (options.requireWorkspace && (workspaces.length !== 1 || workspaces[0] !== root)) {
+      const root = options.requireWorkspace
+        ? workspaces.length === 1
+          ? workspaces[0]
+          : undefined
+        : worktrees.keys().next().value;
+      const runsDir = root === undefined ? undefined : worktrees.get(root);
+      if (root === undefined || runsDir === undefined || (turn && turn.root !== root)) {
         if (turn) turn.broken = true;
-        else settled.set(key, Promise.resolve(null));
+        else remember(key, undefined, Promise.resolve(null));
         return;
       }
       if (!turn) {
         if (turns.size >= 256) {
           const reusable = [...turns].find(([, previous]) => previous.open.size === 0);
           if (!reusable) {
-            settled.set(key, Promise.resolve(null));
+            remember(key, root, Promise.resolve(null));
             return;
           }
           const [previousKey, previous] = reusable;
@@ -211,6 +250,7 @@ export async function openCodexTurnCapture(
           agenticreplayVersion: AGENTICREPLAY_VERSION,
         });
         turn = {
+          root,
           writer,
           deriver: new ExchangeEventDeriver(),
           open: new Set(),
@@ -282,7 +322,7 @@ export async function openCodexTurnCapture(
         for (const connection of sockets) connection.destroy();
         await new Promise<void>((resolve) => server.close(() => resolve()));
         for (const [key, turn] of turns) seal(key, turn);
-        await Promise.all(settled.values());
+        await Promise.all(sealing);
         return { modelExchanges, completeTurns };
       })());
     },

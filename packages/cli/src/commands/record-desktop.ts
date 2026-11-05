@@ -1,11 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { join } from 'node:path';
-import { ensureRunsDir } from '@agenticreplay/core';
+import { setTimeout as delay } from 'node:timers/promises';
+import { ensureRunsDir, TraceReader } from '@agenticreplay/core';
 import { createProxy } from '@agenticreplay/proxy';
 import type { ParsedArgs } from '../args.js';
 import { captureLimits } from '../capture-limits.js';
+import { managedDesktopSocket } from '../codex-service.js';
 import { openCodexTurnCapture } from '../codex-turn-capture.js';
 import type { Output } from '../out.js';
 import { reviewRepository } from '../review-store.js';
@@ -74,6 +77,90 @@ async function runDesktop(executable: string, cwd: string, env: NodeJS.ProcessEn
   }
 }
 
+async function desktopRuns(runs: string) {
+  const readers = new Map<string, TraceReader>();
+  for (const entry of await readdir(runs, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const reader = await TraceReader.open(join(runs, entry.name)).catch(() => undefined);
+    if (reader?.manifest().adapter?.id === 'codex-desktop-api')
+      readers.set(reader.manifest().run_id, reader);
+  }
+  return readers;
+}
+
+async function sealServiceTurn(socket: string, cwd: string, reader: TraceReader) {
+  let identity: Record<string, unknown> | undefined;
+  for await (const event of reader.stream()) {
+    if (event.type === 'run.start') identity = event.attrs;
+    break;
+  }
+  const { sessionId, turnId } = identity ?? {};
+  if (typeof sessionId !== 'string' || typeof turnId !== 'string') return;
+  const connection = createConnection(socket);
+  connection.setTimeout(2500, () => connection.destroy(new Error('Codex review timed out.')));
+  connection.setEncoding('utf8');
+  connection.once('connect', () =>
+    connection.write(JSON.stringify({ cwd, sessionId, turnId }) + '\n'),
+  );
+  let reply = '';
+  for await (const part of connection) {
+    reply += part;
+    if (reply.length > 8192) {
+      connection.destroy();
+      return;
+    }
+  }
+  const result = JSON.parse(reply) as { status?: string; traceDirectory?: string };
+  if (result.status === 'sealed' && result.traceDirectory)
+    return TraceReader.open(result.traceDirectory);
+}
+
+async function recordUsingService(
+  executable: string,
+  root: string,
+  runs: string,
+  socket: string,
+  out: Output,
+) {
+  const previous = await desktopRuns(runs);
+  out.phase('recording', { adapter: 'codex-desktop', cwd: root });
+  const childExitCode = await runDesktop(executable, root, {
+    ...process.env,
+    AGENTICREPLAY_CODEX_REVIEW_SOCKET: socket,
+  });
+  let completeTurns = 0;
+  let modelExchanges = 0;
+  const seen = new Set(previous.keys());
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let pending = false;
+    for (const [id, reader] of await desktopRuns(runs)) {
+      if (seen.has(id)) continue;
+      const sealed =
+        reader.manifest().capture?.status === 'complete'
+          ? reader
+          : await sealServiceTurn(socket, root, reader);
+      if (!sealed) {
+        pending = true;
+        continue;
+      }
+      seen.add(id);
+      completeTurns++;
+      modelExchanges += (await sealed.events()).filter(
+        (event) => event.type === 'model.response',
+      ).length;
+    }
+    if (!pending) break;
+    await delay(100);
+  }
+  if (completeTurns === 0)
+    out.warn('capture.empty', {
+      cause: 'no complete Codex API turn was captured for this worktree',
+    });
+  const exitCode = childExitCode || (completeTurns > 0 ? 0 : 2);
+  out.phase('recorded', { turns: completeTurns, exchanges: modelExchanges, exit: exitCode });
+  return { exitCode, childExitCode, modelExchanges, completeTurns };
+}
+
 export async function recordDesktopCommand(args: ParsedArgs, out: Output, cwd: string) {
   if (args.positionals[0] !== 'codex')
     throw new Error('--desktop requires agenticreplay record codex --desktop.');
@@ -91,6 +178,14 @@ export async function recordDesktopCommand(args: ParsedArgs, out: Output, cwd: s
   const executable = codexDesktopExecutable();
   const root = await reviewRepository(cwd);
   const runs = await ensureRunsDir(root);
+  const service = await managedDesktopSocket(root);
+  if (service) {
+    if ([...desktopOptions].some((flag) => args.has(flag)))
+      throw new Error(
+        'The active Codex service owns capture settings. Disable it to use per-run TLS flags.',
+      );
+    return recordUsingService(executable, root, runs, service, out);
+  }
   // A Unix socket needs a short pathname, including on macOS with a long per-user TMPDIR.
   const scratch = await mkdtemp(join(await realpath('/tmp'), 'ar-codex-'));
   try {

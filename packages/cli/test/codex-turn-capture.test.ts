@@ -4,17 +4,18 @@ import { createServer as createHttpsServer } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { createServer, request } from 'node:http';
 import { createConnection, type AddressInfo } from 'node:net';
-import { lstat, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
-import { RunCa } from '@agenticreplay/proxy';
+import { createProxy, RunCa } from '@agenticreplay/proxy';
 import { TraceReader } from '@agenticreplay/core';
 import { parseArgs } from '../src/args.js';
 import { attachCommand } from '../src/commands/attach.js';
 import { Output } from '../src/out.js';
+import { openCodexWorktreeCapture } from '../src/codex-turn-capture.js';
 
 async function seal(socketPath: string, cwd: string, turnId: string, sessionId = 'chat-1') {
   return await requestTurn(socketPath, JSON.stringify({ cwd, sessionId, turnId }) + '\n');
@@ -34,6 +35,124 @@ async function requestTurn(socketPath: string, input: string) {
     socket.on('end', () => resolve(JSON.parse(text)));
   });
 }
+
+it('records a direct Dock WebSocket and forwards ordinary HTTP to the same origin', async () => {
+  const root = await realpath(await mkdtemp('/tmp/ar-dock-'));
+  const socketPath = join(root, 'review.sock');
+  const other = join(root, 'other-worktree');
+  await mkdir(other);
+  const originCa = await RunCa.create({ runDir: root });
+  const cert = originCa.issue('127.0.0.1');
+  const origin = createHttpsServer({ key: cert.keyPem, cert: cert.certPem }, (req, res) => {
+    res.end(JSON.stringify({ path: req.url, host: req.headers.host }));
+  });
+  const wsOrigin = new WebSocketServer({ server: origin });
+  let responseId = 0;
+  wsOrigin.on('connection', (socket, req) => {
+    socket.on('message', (bytes) => {
+      socket.send(
+        JSON.stringify({
+          type: 'response.completed',
+          response: {
+            id: `resp_direct_${++responseId}`,
+            object: 'response',
+            status: 'completed',
+            model: 'gpt-test',
+            output: [],
+          },
+        }),
+      );
+      expect(req.headers.authorization).toBe('Bearer fixture-only');
+      expect(JSON.parse(bytes.toString()).type).toBe('response.create');
+    });
+  });
+  origin.listen(0, '127.0.0.1');
+  await once(origin, 'listening');
+  const port = (origin.address() as AddressInfo).port;
+  const turns = await openCodexWorktreeCapture(
+    socketPath,
+    new Map([
+      [root, root],
+      [other, other],
+    ]),
+  );
+  const proxy = await createProxy({
+    retainExchanges: false,
+    tls: {
+      ca: originCa,
+      hosts: ['127.0.0.1'],
+      directCodexOrigin: { host: '127.0.0.1', port },
+      trustedOriginCerts: [await readFile(originCa.certPath, 'utf8')],
+      onNetExchange: turns.finish,
+    },
+    onRequestStart: turns.start,
+    onExchange: turns.model,
+  });
+  let client: WebSocket | undefined;
+  try {
+    const modelsPath = '/backend-api/codex/models?client_version=fixture';
+    const models = await fetch(proxy.url + modelsPath);
+    expect(models.status).toBe(200);
+    expect(await models.json()).toEqual({ path: modelsPath, host: `127.0.0.1:${port}` });
+    client = new WebSocket(proxy.url.replace(/^http:/u, 'ws:') + '/backend-api/codex/responses', {
+      headers: { authorization: 'Bearer fixture-only' },
+    });
+    await once(client, 'open');
+    const send = async (turnId: string, workspace: string) => {
+      const reply = once(client!, 'message');
+      client!.send(
+        JSON.stringify({
+          type: 'response.create',
+          model: 'gpt-test',
+          input: [{ role: 'user', content: 'dock probe' }],
+          client_metadata: {
+            'x-codex-turn-metadata': JSON.stringify({
+              thread_id: 'chat-1',
+              turn_id: turnId,
+              workspaces: { [workspace]: {} },
+            }),
+          },
+        }),
+      );
+      expect(JSON.parse((await reply)[0].toString()).type).toBe('response.completed');
+    };
+    await send('dock-turn', root);
+    const sealed = await vi.waitFor(async () => {
+      const result = await seal(socketPath, root, 'dock-turn');
+      expect(result.status).toBe('sealed');
+      return result;
+    });
+    const reader = await TraceReader.open(sealed.traceDirectory!);
+    const events = await reader.events();
+    const wireRequest = events.find((event) => event.type === 'net.request');
+    const wireResponse = events.find((event) => event.type === 'net.response');
+    expect(wireRequest?.attrs?.transport).toBe('websocket');
+    expect(wireRequest?.attrs?.request_id).toBeTruthy();
+    expect(wireResponse?.attrs?.request_id).toBe(wireRequest?.attrs?.request_id);
+    expect(events[0]?.attrs).toMatchObject({ sessionId: 'chat-1', turnId: 'dock-turn' });
+    expect(events.some((event) => event.type === 'model.response')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('fixture-only');
+    expect(await seal(socketPath, other, 'dock-turn')).toEqual({ status: 'unavailable' });
+    expect(await seal(socketPath, other, 'second-turn')).toEqual({ status: 'pending' });
+    await send('second-turn', other);
+    const second = await vi.waitFor(async () => {
+      const result = await seal(socketPath, other, 'second-turn');
+      expect(result.status).toBe('sealed');
+      return result;
+    });
+    expect(dirname(second.traceDirectory!)).toBe(other);
+    await send('foreign-turn', join(root, 'not-registered'));
+    expect(await seal(socketPath, root, 'foreign-turn')).toEqual({ status: 'unavailable' });
+  } finally {
+    client?.terminate();
+    await proxy.close();
+    await turns.close();
+    for (const socket of wsOrigin.clients) socket.terminate();
+    wsOrigin.close();
+    await new Promise<void>((resolve) => origin.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it('seals only the named Codex API turn while attach stays live', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'ar-codex-')));

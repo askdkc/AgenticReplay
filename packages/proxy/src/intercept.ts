@@ -357,6 +357,8 @@ export interface TlsInterceptOptions {
   trustedOriginCerts?: readonly string[];
   /** Relay other WebSocket upgrades on intercepted hosts without observing their frames. */
   passThroughWebSockets?: boolean;
+  /** Experimental loopback base URL. All requests go to this fixed HTTPS origin. */
+  directCodexOrigin?: { host: string; port: number };
   maxCapturedBytes?: number;
   maxBufferedBytes?: number;
   onRequestStart?: (request: NetRequest) => void | Promise<void>;
@@ -370,6 +372,7 @@ export interface TlsInterceptHandle {
   policy: HostPolicy;
   /** Destroys every tunnel and decrypted session. Without it a run hangs on an idle keep-alive. */
   close: () => void;
+  forwardDirect?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 }
 
 interface Target {
@@ -428,7 +431,7 @@ function parseTarget(authority: string): Target | undefined {
 export function attachTlsIntercept(
   server: {
     on(
-      event: 'connect',
+      event: 'connect' | 'upgrade',
       listener: (req: IncomingMessage, socket: Socket, head: Buffer) => void,
     ): unknown;
   },
@@ -480,9 +483,14 @@ export function attachTlsIntercept(
     return undefined;
   };
   const open = new Set<Socket | TLSSocket>();
+  const directOrigin = options.directCodexOrigin;
 
-  const onUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer): void => {
-    const target = targetOf(req.socket);
+  const upgrade = (
+    req: IncomingMessage,
+    socket: Socket,
+    head: Buffer,
+    target = targetOf(req.socket),
+  ): void => {
     const capture = isCodexResponsesUpgrade(req);
     if (
       target &&
@@ -509,6 +517,10 @@ export function attachTlsIntercept(
       kind: 'upgrade_refused',
     });
     socket.end('HTTP/1.1 501 Not Implemented\r\nconnection: close\r\n\r\n');
+  };
+
+  const onUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer): void => {
+    upgrade(req, socket, head);
   };
 
   /**
@@ -940,8 +952,12 @@ export function attachTlsIntercept(
     return context;
   }
 
-  async function forward(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const target = targetOf(req.socket);
+  async function forward(
+    req: IncomingMessage,
+    res: ServerResponse,
+    fixedTarget?: Target,
+  ): Promise<void> {
+    const target = fixedTarget ?? targetOf(req.socket);
     if (!target) throw new Error('decrypted request arrived on an unknown connection');
 
     const startedAt = Date.now();
@@ -961,7 +977,8 @@ export function attachTlsIntercept(
     // Node lower-cases every incoming header name, so this replaces the client's own `host`
     // rather than adding a second one. Forwarded as the client wrote it, because virtual hosting
     // depends on it; the CONNECT target is the fallback for an HTTP/1.0 client that sent none.
-    outboundHeaders.host = req.headers.host ?? target.host;
+    const targetAuthority = target.port === 443 ? target.host : `${target.host}:${target.port}`;
+    outboundHeaders.host = fixedTarget ? targetAuthority : (req.headers.host ?? target.host);
 
     const requestBody = new Capture(maxCaptured, budget);
     const requestStart: NetRequest = {
@@ -1307,27 +1324,43 @@ export function attachTlsIntercept(
     clientSocket.on('close', () => origin.destroy());
   }
 
-  server.on('connect', (req, clientSocket, head) => {
-    open.add(clientSocket);
-    clientSocket.on('close', () => open.delete(clientSocket));
-    clientSocket.on('error', () => clientSocket.destroy());
+  if (directOrigin) {
+    server.on('upgrade', (req, socket, head) => {
+      open.add(socket);
+      socket.once('close', () => open.delete(socket));
+      upgrade(req, socket, head, directOrigin);
+    });
+  } else
+    server.on('connect', (req, clientSocket, head) => {
+      open.add(clientSocket);
+      clientSocket.on('close', () => open.delete(clientSocket));
+      clientSocket.on('error', () => clientSocket.destroy());
 
-    const target = parseTarget(req.url ?? '');
-    if (!target) {
-      clientSocket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-      clientSocket.destroy();
-      return;
-    }
+      const target = parseTarget(req.url ?? '');
+      if (!target) {
+        clientSocket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        clientSocket.destroy();
+        return;
+      }
 
-    if (policy.allows(target.host, target.port)) {
-      intercept(clientSocket, head, target);
-    } else {
-      tunnel(clientSocket, head, target);
-    }
-  });
+      if (policy.allows(target.host, target.port)) {
+        intercept(clientSocket, head, target);
+      } else {
+        tunnel(clientSocket, head, target);
+      }
+    });
 
   return {
     policy,
+    ...(directOrigin && {
+      forwardDirect: async (req, res) => {
+        if (!req.url?.startsWith('/') || req.url.startsWith('//')) {
+          res.writeHead(400).end();
+          return;
+        }
+        await forward(req, res, directOrigin);
+      },
+    }),
     close: () => {
       agent.destroy();
       for (const session of h2Upstreams.values()) session.destroy();

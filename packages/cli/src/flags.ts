@@ -36,6 +36,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   push: ['gateway', 'force', 'fs'],
   pull: ['gateway', 'force'],
   record: ['desktop', 'fs', 'shell', 'agent-spans', 'mcp-config', ...TLS, ...UPSTREAM],
+  'codex-service': ['config'],
   attach: [
     'for',
     'bind',
@@ -154,6 +155,7 @@ export function assertKnownFlags(args: ParsedArgs): void {
  */
 const POSITIONALS: Record<string, number> = {
   record: 1,
+  'codex-service': 1,
   show: 1,
   events: 1,
   graph: 1,
