@@ -94,18 +94,21 @@ export function responsesToCanonicalRequest(body: unknown): CanonicalRequest {
       const item = asRecord(raw);
       const type = asString(item['type']);
 
-      if (type === 'function_call') {
+      if (type === 'function_call' || type === 'custom_tool_call') {
         push('assistant', {
           type: 'tool_use',
           // `call_id`, never the item `id`: it is what the matching output references.
           id: asString(item['call_id']) ?? asString(item['id']) ?? '',
           name: asString(item['name']) ?? '',
-          input: parseToolInput(asString(item['arguments']) ?? ''),
+          input:
+            type === 'custom_tool_call'
+              ? (asString(item['input']) ?? '')
+              : parseToolInput(asString(item['arguments']) ?? ''),
         });
         continue;
       }
 
-      if (type === 'function_call_output') {
+      if (type === 'function_call_output' || type === 'custom_tool_call_output') {
         push('user', {
           type: 'tool_result',
           tool_use_id: asString(item['call_id']) ?? '',
@@ -321,12 +324,16 @@ export function responsesToCanonicalResponse(body: unknown): CanonicalResponse {
         break;
       }
       case 'function_call':
+      case 'custom_tool_call':
         sawToolCall = true;
         content.push({
           type: 'tool_use',
           id: asString(item['call_id']) ?? asString(item['id']) ?? '',
           name: asString(item['name']) ?? '',
-          input: parseToolInput(asString(item['arguments']) ?? ''),
+          input:
+            item['type'] === 'custom_tool_call'
+              ? (asString(item['input']) ?? '')
+              : parseToolInput(asString(item['arguments']) ?? ''),
         });
         break;
       default:
@@ -356,6 +363,7 @@ export function responsesStopReason(
   if (status === 'incomplete') {
     const reason = asString(asRecord(incompleteDetails)['reason']);
     if (reason === 'max_output_tokens') return 'max_tokens';
+    return 'error';
   }
   return sawToolCall ? 'tool_use' : 'end_turn';
 }
@@ -458,7 +466,7 @@ const TERMINAL_EVENTS = new Set(['response.completed', 'response.incomplete', 'r
  */
 export function parseResponsesSse(chunks: string[] | string): CanonicalResponse {
   interface Item {
-    kind: 'message' | 'function_call' | 'reasoning';
+    kind: 'message' | 'function_call' | 'custom_tool_call' | 'reasoning';
     id: string;
     callId: string;
     name: string;
@@ -469,6 +477,9 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
   /** Deltas name their item by `item_id`; the index is how they are ordered. */
   const indexOfItem = new Map<string, number>();
   let head: { id: string; model: string } = { id: '', model: '' };
+
+  let terminal: Record<string, unknown> | undefined;
+  const seenSequences = new Set<number>();
 
   const at = (index: number, kind: Item['kind'] = 'message'): Item => {
     let item = items.get(index);
@@ -491,9 +502,25 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
     if (!data) continue;
     const type = asString(data['type']) ?? frame.event ?? '';
 
+    const sequence = asNumber(data['sequence_number']);
+    if (sequence !== undefined) {
+      if (seenSequences.has(sequence)) continue;
+      seenSequences.add(sequence);
+    }
+    if (type === 'error') {
+      terminal = { status: 'failed', error: data };
+      break;
+    }
     if (TERMINAL_EVENTS.has(type)) {
-      const response = data['response'];
-      if (response !== undefined) return responsesToCanonicalResponse(response);
+      const response = asRecord(data['response']);
+      terminal = {
+        ...response,
+        status:
+          type === 'response.failed'
+            ? 'failed'
+            : (response['status'] ?? type.slice('response.'.length)),
+      };
+      break;
     }
 
     switch (type) {
@@ -506,13 +533,17 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
         };
         break;
       }
-      case 'response.output_item.added': {
-        const index = asNumber(data['output_index']) ?? items.size;
+      case 'response.output_item.added':
+      case 'response.output_item.done': {
         const raw = asRecord(data['item']);
+        const index =
+          indexOfItem.get(asString(raw['id']) ?? '') ??
+          asNumber(data['output_index']) ??
+          items.size;
         const kindRaw = asString(raw['type']);
         const kind: Item['kind'] =
-          kindRaw === 'function_call'
-            ? 'function_call'
+          kindRaw === 'function_call' || kindRaw === 'custom_tool_call'
+            ? kindRaw
             : kindRaw === 'reasoning'
               ? 'reasoning'
               : 'message';
@@ -521,7 +552,13 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
         item.id = asString(raw['id']) ?? '';
         item.callId = asString(raw['call_id']) ?? '';
         item.name = asString(raw['name']) ?? '';
-        item.args = asString(raw['arguments']) ?? '';
+        item.args = asString(raw[kind === 'custom_tool_call' ? 'input' : 'arguments']) ?? item.args;
+        if (kind === 'message' && Array.isArray(raw['content'])) {
+          item.text = messageContent(raw['content'])
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text)
+            .join('');
+        }
         if (item.id !== '') indexOfItem.set(item.id, index);
         break;
       }
@@ -535,10 +572,21 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
         item.text += asString(data['delta']) ?? '';
         break;
       }
-      case 'response.function_call_arguments.delta': {
+      case 'response.function_call_arguments.delta':
+      case 'response.custom_tool_call_input.delta': {
         const item = resolve(data);
-        item.kind = 'function_call';
+        item.kind =
+          type === 'response.custom_tool_call_input.delta' ? 'custom_tool_call' : 'function_call';
         item.args += asString(data['delta']) ?? '';
+        break;
+      }
+      case 'response.function_call_arguments.done':
+      case 'response.custom_tool_call_input.done': {
+        const item = resolve(data);
+        item.kind =
+          type === 'response.custom_tool_call_input.done' ? 'custom_tool_call' : 'function_call';
+        item.args =
+          asString(data[item.kind === 'custom_tool_call' ? 'input' : 'arguments']) ?? item.args;
         break;
       }
       default:
@@ -546,30 +594,30 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
     }
   }
 
-  const content: CanonicalContent[] = [];
-  let sawToolCall = false;
+  const output: Record<string, unknown>[] = [];
   for (const index of [...items.keys()].sort((a, b) => a - b)) {
     const item = items.get(index)!;
-    if (item.kind === 'function_call') {
-      sawToolCall = true;
-      content.push({
-        type: 'tool_use',
-        id: item.callId !== '' ? item.callId : item.id,
+    if (item.kind === 'function_call' || item.kind === 'custom_tool_call') {
+      output.push({
+        type: item.kind,
+        id: item.id,
+        call_id: item.callId || item.id,
         name: item.name,
-        input: parseToolInput(item.args),
+        [item.kind === 'custom_tool_call' ? 'input' : 'arguments']: item.args,
       });
     } else if (item.text !== '') {
-      content.push({ type: item.kind === 'reasoning' ? 'thinking' : 'text', text: item.text });
+      output.push(
+        item.kind === 'reasoning'
+          ? { type: 'reasoning', summary: [{ text: item.text }] }
+          : { type: 'message', content: [{ type: 'output_text', text: item.text }] },
+      );
     }
   }
-
-  return {
-    id: head.id,
-    model: head.model,
-    stop_reason: sawToolCall ? 'tool_use' : 'end_turn',
-    content,
-    usage: { input_tokens: 0, output_tokens: 0 },
-  };
+  return responsesToCanonicalResponse({
+    ...head,
+    ...terminal,
+    output: Array.isArray(terminal?.['output']) ? terminal['output'] : output,
+  });
 }
 
 /**

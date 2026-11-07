@@ -1,10 +1,10 @@
+import { parseResponsesSse, responsesToCanonicalResponse } from '@agenticreplay/providers';
 import type {
   CanonicalContent,
   CanonicalMessage,
   CanonicalRequest,
   CanonicalResponse,
   CanonicalTool,
-  StopReason,
 } from '@agenticreplay/plugin-api';
 
 /**
@@ -92,28 +92,31 @@ function codexToCanonicalRequest(raw: unknown): CanonicalRequest {
   for (const item of items) {
     const value = asRecord(item);
     const type = asString(value['type']);
-    if (type === 'function_call_output') {
+    if (type === 'function_call_output' || type === 'custom_tool_call_output') {
       messages.push({
         role: 'user',
         content: [
           {
             type: 'tool_result',
-            tool_use_id: asString(value['call_id']) ?? '',
+            tool_use_id: asString(value['call_id']) ?? asString(value['id']) ?? '',
             content: stringifyText(value['output']),
           },
         ],
       });
       continue;
     }
-    if (type === 'function_call') {
+    if (type === 'function_call' || type === 'custom_tool_call') {
       messages.push({
         role: 'assistant',
         content: [
           {
             type: 'tool_use',
-            id: asString(value['call_id']) ?? '',
+            id: asString(value['call_id']) ?? asString(value['id']) ?? '',
             name: asString(value['name']) ?? '',
-            input: parseJson(asString(value['arguments']) ?? '{}'),
+            input:
+              type === 'custom_tool_call'
+                ? (asString(value['input']) ?? '')
+                : parseJson(asString(value['arguments']) ?? '{}'),
           },
         ],
       });
@@ -151,79 +154,11 @@ function codexToCanonicalRequest(raw: unknown): CanonicalRequest {
 }
 
 function codexToCanonicalResponse(raw: unknown): CanonicalResponse {
-  return codexResponse(asRecord(asRecord(raw)['response'] ?? raw), []);
+  return responsesToCanonicalResponse(asRecord(raw)['response'] ?? raw);
 }
 
-function parseCodexSse(body: string): CanonicalResponse {
-  let response: Record<string, unknown> = {};
-  const deltas: string[] = [];
-  const output: unknown[] = [];
-  for (const frame of body.split(/\r?\n\r?\n/)) {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-    if (!data || data === '[DONE]') continue;
-    const event = asRecord(parseJson(data));
-    const type = asString(event['type']);
-    if (
-      type === 'response.created' ||
-      type === 'response.completed' ||
-      type === 'response.in_progress'
-    ) {
-      response = asRecord(event['response']);
-    } else if (type === 'response.output_text.delta') {
-      const delta = asString(event['delta']);
-      if (delta) deltas.push(delta);
-    } else if (type === 'response.output_item.done') {
-      output.push(asRecord(event['item']));
-    }
-  }
-  return codexResponse(response, deltas, output);
-}
-
-function codexResponse(
-  response: Record<string, unknown>,
-  deltas: string[],
-  streamedOutput: unknown[] = [],
-): CanonicalResponse {
-  const content: CanonicalContent[] = [];
-  const output = streamedOutput.length
-    ? streamedOutput
-    : Array.isArray(response['output'])
-      ? response['output']
-      : [];
-  for (const raw of output) {
-    const item = asRecord(raw);
-    const type = asString(item['type']);
-    if (type === 'function_call') {
-      content.push({
-        type: 'tool_use',
-        id: asString(item['call_id']) ?? '',
-        name: asString(item['name']) ?? '',
-        input: parseJson(asString(item['arguments']) ?? '{}'),
-      });
-    } else if (type === 'message') {
-      content.push(...codexContent(item['content']));
-    }
-  }
-  if (deltas.length) content.unshift({ type: 'text', text: deltas.join('') });
-  const usage = asRecord(response['usage']);
-  const status = asString(response['status']);
-  const stop_reason: StopReason =
-    status === 'incomplete' ? 'max_tokens' : status === 'failed' ? 'error' : 'end_turn';
-  return {
-    id: asString(response['id']) ?? 'codex-response',
-    model: asString(response['model']) ?? '',
-    stop_reason,
-    content,
-    usage: {
-      input_tokens: asNumber(usage['input_tokens']) ?? 0,
-      output_tokens: asNumber(usage['output_tokens']) ?? 0,
-    },
-  };
-}
+// Subscription and public Responses use the same output items and SSE lifecycle.
+const parseCodexSse = parseResponsesSse;
 
 function codexContent(raw: unknown): CanonicalContent[] {
   if (typeof raw === 'string') return raw ? [{ type: 'text', text: raw }] : [];

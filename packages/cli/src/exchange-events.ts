@@ -211,6 +211,26 @@ export class ExchangeEventDeriver {
     if (p) p.seq = seq;
   }
 
+  /** Restore only persisted tool identities; raw prompts and credentials are never needed. */
+  restore(event: {
+    type: string;
+    seq: number;
+    turn?: number;
+    attrs?: Record<string, unknown>;
+  }): void {
+    const id = event.attrs?.tool_use_id;
+    if (typeof id !== 'string') return;
+    if (event.type === 'tool.call')
+      this.#pending.set(id, {
+        id,
+        name: String(event.attrs?.name ?? 'unknown'),
+        input: event.attrs?.input,
+        turn: event.turn ?? 0,
+        seq: event.seq,
+      });
+    if (event.type === 'tool.result') this.#closed.add(id);
+  }
+
   seqOf(toolUseId: string): number | undefined {
     const seq = this.#pending.get(toolUseId)?.seq;
     return seq === undefined || seq < 0 ? undefined : seq;

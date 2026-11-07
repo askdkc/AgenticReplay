@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { mkdir, open, rename, writeFile } from 'node:fs/promises';
+import { existsSync, createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { mkdir, open, rename, writeFile, readFile, lstat, realpath, rm } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import type {
@@ -136,6 +137,9 @@ export class TraceWriter {
   readonly #started = process.hrtime.bigint();
   readonly #startedAtMs = Date.now();
   #seq = 0;
+  #handleClosed = false;
+  #monoOffset = 0;
+  #previousRedactions: ReturnType<Redactor['records']> = [];
   /** Whether run.start reached disk, so run.end can tell an open run from an unopened one. */
   #opened = false;
   #closedEvent = false;
@@ -162,7 +166,11 @@ export class TraceWriter {
     this.#base = base;
   }
 
-  static async create(runsDir: string, init: TraceWriterInit): Promise<TraceWriter> {
+  static async create(
+    runsDir: string,
+    init: TraceWriterInit,
+    recovery?: { onEvent?: (event: TraceEvent) => void },
+  ): Promise<TraceWriter> {
     const runId = init.runId ?? `run_${randomBytes(6).toString('hex')}`;
     if (!RUN_ID_PATTERN.test(runId))
       throw new Error(`not a valid run id: ${JSON.stringify(runId)}`);
@@ -194,16 +202,183 @@ export class TraceWriter {
       captureDirectoryName(base.created_at, base.adapter.id, title, runId),
     );
     await mkdir(runsDir, { recursive: true, mode: DIR_MODE });
-    await mkdir(runDir, { mode: DIR_MODE });
-    await writeFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`, {
-      mode: FILE_MODE,
-    });
+    try {
+      await mkdir(runDir, { mode: DIR_MODE });
+    } catch (error) {
+      if (!recovery || (error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const info = await lstat(runDir);
+      if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        (await realpath(runDir)) !== runDir ||
+        (process.getuid && info.uid !== process.getuid()) ||
+        (info.mode & 0o077) !== 0
+      )
+        throw new Error('unsafe initialization directory');
+      const manifestPath = join(runDir, 'manifest.json');
+      const manifestInfo = await lstat(manifestPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (manifestInfo) {
+        if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink())
+          throw new Error('unsafe initialization manifest');
+        const previous: Manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+        assertManifest(previous);
+        if (
+          previous.run_id !== runId ||
+          previous.cwd !== base.cwd ||
+          previous.adapter.id !== base.adapter.id ||
+          previous.created_at !== base.created_at
+        )
+          throw new Error('initialization identity mismatch');
+        if (previous.ended_at || previous.counts?.events) {
+          // Missing data from a populated trace is corruption, not unfinished initialization.
+          await lstat(join(runDir, 'events.jsonl'));
+        }
+        // A crash between manifest publication and events creation leaves no event file.
+        try {
+          await (await open(join(runDir, 'events.jsonl'), 'ax', FILE_MODE)).close();
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+        return TraceWriter.resume(runDir, runId, recovery.onEvent);
+      }
+      const events = await lstat(join(runDir, 'events.jsonl')).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return undefined;
+          throw error;
+        },
+      );
+      if (events && (!events.isFile() || events.isSymbolicLink() || events.size !== 0))
+        throw new Error('cannot reconstruct initialization over recorded events');
+    }
+    // Publish the initial manifest atomically too: a failed creation must remain retryable.
+    await atomicTraceFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`);
 
     const handle = await open(join(runDir, 'events.jsonl'), 'a', FILE_MODE);
     const writer = new TraceWriter(runId, runDir, base, redactor, handle);
     writer.#sessionTitle = title;
     writer.#titlePriority = title.trim() ? 3 : 0;
     return writer;
+  }
+
+  /** Reopen only a caller-owned recovery claim, never discover or rewrite historical runs. */
+  static async resume(
+    runDir: string,
+    expectedRunId: string,
+    onEvent?: (event: TraceEvent) => void,
+  ): Promise<TraceWriter> {
+    const info = await lstat(runDir);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (await realpath(runDir)) !== runDir ||
+      (process.getuid && info.uid !== process.getuid()) ||
+      (info.mode & 0o077) !== 0
+    )
+      throw new Error('unsafe recovery directory');
+    const base: Manifest = JSON.parse(await readFile(join(runDir, 'manifest.json'), 'utf8'));
+    assertManifest(base);
+    if (base.run_id !== expectedRunId) throw new Error('recovery identity mismatch');
+    const eventsPath = join(runDir, 'events.jsonl');
+    const eventInfo = await lstat(eventsPath);
+    if (!eventInfo.isFile() || eventInfo.isSymbolicLink())
+      throw new Error('unsafe recovery events');
+    const check = await open(eventsPath, 'r');
+    try {
+      if (eventInfo.size > 0) {
+        const last = Buffer.alloc(1);
+        await check.read(last, 0, 1, eventInfo.size - 1);
+        if (last[0] !== 10) throw new Error('partial recovery event');
+      }
+    } finally {
+      await check.close();
+    }
+    const writer = new TraceWriter(
+      expectedRunId,
+      runDir,
+      base,
+      new Redactor({ envAllowlist: [] }),
+      await open(eventsPath, 'a', FILE_MODE),
+    );
+    try {
+      for await (const line of createInterface({
+        input: createReadStream(eventsPath),
+        crlfDelay: Infinity,
+      })) {
+        const event: TraceEvent = JSON.parse(line);
+        assertEvent(event);
+        if (event.seq !== writer.#seq || writer.#closedEvent)
+          throw new Error('invalid recovery sequence');
+        if (event.type === 'run.start') {
+          if (event.seq !== 0) throw new Error('duplicate recovery start');
+          writer.#opened = true;
+        }
+        if (event.type === 'run.end') writer.#closedEvent = true;
+        writer.#seq++;
+        writer.#turn = event.turn;
+        writer.#monoOffset = Math.max(writer.#monoOffset, event.mono_us);
+        onEvent?.(event);
+      }
+      try {
+        writer.#previousRedactions = JSON.parse(
+          await readFile(join(runDir, 'redactions.json'), 'utf8'),
+        ).records;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      // Preserve the recovery path; a restarted run must not be renamed under its claim.
+      writer.#sessionTitle = 'Codex turn';
+      writer.#titlePriority = 3;
+      if (
+        writer.#closedEvent &&
+        base.ended_at &&
+        base.integrity?.events_sha256 === (await sha256File(eventsPath))
+      ) {
+        writer.#sealed = base;
+        await writer.#handle.close();
+        writer.#handleClosed = true;
+      } else {
+        writer.markCaptureIncomplete('recorder_restarted');
+        for (const issue of base.capture?.issues ?? []) writer.markCaptureIncomplete(issue);
+      }
+      return writer;
+    } catch (error) {
+      await writer.#handle.close();
+      throw error;
+    }
+  }
+
+  get hasEnded(): boolean {
+    return this.#closedEvent;
+  }
+  get finalizedManifest(): Manifest | undefined {
+    return this.#sealed;
+  }
+
+  /** Drain and leave an unfinished run recoverable; shutdown is not host completion. */
+  async suspend(): Promise<void> {
+    if (this.#sealed || this.#handleClosed) return;
+    await this.#tail;
+    this.markCaptureIncomplete('recorder_shutdown');
+    try {
+      await this.#handle.sync();
+    } finally {
+      await this.#handle.close();
+      this.#handleClosed = true;
+    }
+    await atomicTraceFile(
+      join(this.#runDir, 'redactions.json'),
+      JSON.stringify({
+        policy_version: REDACTION_POLICY_VERSION,
+        records: [...this.#previousRedactions, ...this.#redactor.records()],
+      }),
+    );
+    await atomicTraceFile(
+      join(this.#runDir, 'manifest.json'),
+      JSON.stringify({ ...this.#base, capture: this.#capture }),
+    );
   }
 
   /**
@@ -289,7 +464,7 @@ export class TraceWriter {
     // frame whose clock ran slightly behind the run's start.
     const mono_us = init.occurredAt
       ? Math.max(0, (when.getTime() - this.#startedAtMs) * 1000)
-      : Number((process.hrtime.bigint() - this.#started) / 1000n);
+      : this.#monoOffset + Number((process.hrtime.bigint() - this.#started) / 1000n);
     const turn = init.turn ?? this.#turn;
     this.#turn = turn;
     const written = this.#tail.then(() => this.#write(ts, mono_us, turn, init));
@@ -302,8 +477,11 @@ export class TraceWriter {
   async close(exitCode?: number): Promise<Manifest> {
     if (this.#sealed) return this.#sealed;
     await this.#tail;
-    await this.#handle.sync();
-    await this.#handle.close();
+    if (!this.#handleClosed) {
+      await this.#handle.sync();
+      await this.#handle.close();
+      this.#handleClosed = true;
+    }
 
     const blobs = await this.#blobs.count();
     const rawManifest: Manifest = {
@@ -312,7 +490,12 @@ export class TraceWriter {
       counts: { events: this.#seq, blobs },
       redaction: {
         policy_version: REDACTION_POLICY_VERSION,
-        rules_fired: this.#redactor.rulesFired(),
+        rules_fired: [...this.#previousRedactions, ...this.#redactor.records()].reduce<
+          Record<string, number>
+        >((counts, record) => {
+          counts[record.rule] = (counts[record.rule] ?? 0) + record.count;
+          return counts;
+        }, {}),
       },
       integrity: { events_sha256: await sha256File(this.#eventsPath), blob_count: blobs },
       // Conditional for the same reason the fork keys are: the schema forbids unknown keys, and a
@@ -334,19 +517,16 @@ export class TraceWriter {
 
     const redactions = {
       policy_version: REDACTION_POLICY_VERSION,
-      records: this.#redactor.records(),
+      records: [...this.#previousRedactions, ...this.#redactor.records()],
     };
-    await writeFile(
+    await atomicTraceFile(
       join(this.#runDir, 'redactions.json'),
       `${JSON.stringify(redactions, null, 2)}\n`,
-      {
-        mode: FILE_MODE,
-      },
     );
-    await writeFile(join(this.#runDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {
-      mode: FILE_MODE,
-    });
-    this.#sealed = manifest;
+    await atomicTraceFile(
+      join(this.#runDir, 'manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
     const titledDir = join(
       dirname(this.#runDir),
       captureDirectoryName(
@@ -360,6 +540,7 @@ export class TraceWriter {
       await rename(this.#runDir, titledDir);
       this.#runDir = titledDir;
     }
+    this.#sealed = manifest;
     return manifest;
   }
 
@@ -477,7 +658,13 @@ export class TraceWriter {
     }
 
     assertEvent(out);
-    await this.#handle.write(`${JSON.stringify(out)}\n`);
+    const before = (await this.#handle.stat()).size;
+    try {
+      await this.#handle.writeFile(`${JSON.stringify(out)}\n`);
+    } catch (error) {
+      await this.#handle.truncate(before);
+      throw error;
+    }
     if (init.type === 'run.start' || init.type === 'session.snapshot') {
       const title = init.attrs?.session_title ?? init.attrs?.title;
       if (typeof title === 'string' && title.trim() && this.#titlePriority < 2) {
@@ -506,5 +693,28 @@ export class TraceWriter {
     if (out.type === 'run.end') this.#closedEvent = true;
     this.#seq = seq + 1;
     return out;
+  }
+}
+
+/** Atomic, durable publication allows a failed close to be retried without a torn manifest. */
+async function atomicTraceFile(path: string, value: string): Promise<void> {
+  const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    const handle = await open(temporary, 'wx', FILE_MODE);
+    try {
+      await handle.writeFile(value);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, path);
+    const directory = await open(dirname(path), 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    await rm(temporary, { force: true });
   }
 }
