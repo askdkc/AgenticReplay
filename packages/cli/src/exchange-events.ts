@@ -375,7 +375,7 @@ function collectToolUses(
 }
 
 /** The decoded reasoning a reply carried, thinking blocks joined in stream order. */
-function collectThinking(res: CanonicalResponse | undefined): string {
+export function collectThinking(res: CanonicalResponse | undefined): string {
   if (!res) return '';
   return res.content
     .filter((b): b is Extract<CanonicalContent, { type: 'thinking' }> => b.type === 'thinking')

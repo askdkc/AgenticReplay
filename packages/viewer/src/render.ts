@@ -340,7 +340,12 @@ function parts(event: TraceEvent): RowParts {
       return {
         label: 'thinking',
         detail: pick(a, 'model'),
-        meta: chars === undefined ? '' : `${chars} chars`,
+        meta: [
+          a['partial'] === true ? 'partial response' : '',
+          chars === undefined ? '' : `${chars} chars`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
       };
     }
     case 'error':

@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_CAPTURED_BYTES,
   HostPolicy,
   RunCa,
+  codexDialect,
   resolveTlsHosts,
   type InterceptFailure,
   type NetExchange,
@@ -16,6 +17,7 @@ import type { ParsedArgs } from './args.js';
 import type { Output } from './out.js';
 import type { SerialQueue } from './serial.js';
 import { captureLimits } from './capture-limits.js';
+import { collectThinking } from './exchange-events.js';
 
 /**
  * TLS interception, shared by every command that runs an agent live.
@@ -376,7 +378,7 @@ export async function trustRunCa(
 }
 
 /**
- * One decrypted HTTP exchange agenticreplay did not recognise as a model call.
+ * One observed network exchange, including incomplete model traffic.
  *
  * `net.request` / `net.response` have been in the spec since v0 and nothing has ever emitted them;
  * this is what makes them real. The pair is deliberately shaped like `model.request` /
@@ -442,7 +444,7 @@ export async function persistNetExchange(
         }
       : { payload: exchange.requestBody, transformations: requestChanges }),
   });
-  await writer.append({
+  const response = await writer.append({
     type: 'net.response',
     actor: 'agenticreplay',
     turn,
@@ -490,6 +492,27 @@ export async function persistNetExchange(
         }
       : { payload: exchange.responseBody, transformations: responseChanges }),
   });
+
+  // An unfinished Codex stream stays out of exact replay, but can carry usable summary text.
+  const codex = codexDialect();
+  if (
+    !exchange.responseComplete &&
+    !exchange.responseTruncated &&
+    exchange.responseBody &&
+    codex.matches(exchange.path.split('?')[0] ?? '')
+  ) {
+    const thinking = collectThinking(codex.parseStream(exchange.responseBody));
+    if (thinking !== '') {
+      await writer.append({
+        type: 'model.thinking',
+        actor: 'model',
+        turn,
+        causes: [response.seq],
+        attrs: { chars: thinking.length, partial: true },
+        payload: thinking,
+      });
+    }
+  }
 }
 
 /**

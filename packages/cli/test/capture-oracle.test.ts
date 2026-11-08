@@ -7,6 +7,63 @@ import { TraceReader, TraceWriter } from '@agenticreplay/core';
 import { createProxy } from '@agenticreplay/proxy';
 import { persistNetExchange, persistNetRequestStart } from '../src/tls-capture.js';
 
+it('records the Codex thinking received before an interrupted WebSocket response', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ar-codex-thinking-'));
+  const writer = await TraceWriter.create(dir, {
+    adapter: { id: 'exec' },
+    cwd: dir,
+    argv: [],
+    agenticreplayVersion: '0.5.0',
+  });
+  const responseBody = ['First thought.', 'Second thought.']
+    .map((delta, summary_index) => {
+      const type = 'response.reasoning_summary_text.delta';
+      return `event: ${type}\ndata: ${JSON.stringify({ type, output_index: 0, summary_index, delta })}\n\n`;
+    })
+    .join('');
+  try {
+    await persistNetExchange(writer, 1, {
+      requestId: 'request-one',
+      requestStartedAt: Date.now(),
+      host: 'chatgpt.com',
+      port: 443,
+      method: 'GET',
+      path: '/backend-api/codex/responses',
+      transport: 'websocket',
+      requestHeaders: {},
+      requestBody: '{}',
+      requestBytes: 2,
+      requestTruncated: false,
+      status: 101,
+      responseHeaders: { 'content-type': 'text/event-stream' },
+      responseBody,
+      responseBytes: Buffer.byteLength(responseBody),
+      responseTruncated: false,
+      responseComplete: false,
+      abandoned: true,
+      durationMs: 1,
+    });
+    await writer.close(1);
+    const reader = await TraceReader.open(writer.runDir);
+    const events = await reader.events();
+    const response = events.find((event) => event.type === 'net.response')!;
+    const thinking = events.filter((event) => event.type === 'model.thinking');
+    expect(thinking).toHaveLength(1);
+    expect(thinking[0]).toMatchObject({
+      actor: 'model',
+      causes: [response.seq],
+      attrs: { partial: true },
+    });
+    expect(await reader.resolvePayload(thinking[0]!)).toBe('First thought.\nSecond thought.');
+    expect(await reader.resolvePayload(response)).toBe(responseBody);
+    expect(events.some((event) => event.type === 'model.response')).toBe(false);
+    expect(reader.manifest().capture?.status).toBe('incomplete');
+  } finally {
+    await writer.close(1);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The expected bodies come from the endpoint's own log, not a recorder translator/redactor.
 const secret = 'sk-' + 'a'.repeat(32);
 const protocols = [

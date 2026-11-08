@@ -472,6 +472,7 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
     name: string;
     args: string;
     text: string;
+    summary: Map<number, string>;
   }
   const items = new Map<number, Item>();
   /** Deltas name their item by `item_id`; the index is how they are ordered. */
@@ -484,7 +485,7 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
   const at = (index: number, kind: Item['kind'] = 'message'): Item => {
     let item = items.get(index);
     if (!item) {
-      item = { kind, id: '', callId: '', name: '', args: '', text: '' };
+      item = { kind, id: '', callId: '', name: '', args: '', text: '', summary: new Map() };
       items.set(index, item);
     }
     return item;
@@ -559,6 +560,12 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
             .map((block) => block.text)
             .join('');
         }
+        if (kind === 'reasoning') {
+          asArray(raw['summary']).forEach((part, index) => {
+            const text = asString(asRecord(part)['text']);
+            if (text !== undefined) item.summary.set(index, text);
+          });
+        }
         if (item.id !== '') indexOfItem.set(item.id, index);
         break;
       }
@@ -569,7 +576,16 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
       case 'response.reasoning_summary_text.delta': {
         const item = resolve(data);
         item.kind = 'reasoning';
-        item.text += asString(data['delta']) ?? '';
+        const index = asNumber(data['summary_index']) ?? 0;
+        item.summary.set(index, (item.summary.get(index) ?? '') + (asString(data['delta']) ?? ''));
+        break;
+      }
+      case 'response.reasoning_summary_text.done':
+      case 'response.reasoning_summary_part.done': {
+        const item = resolve(data);
+        item.kind = 'reasoning';
+        const text = asString(data['text']) ?? asString(asRecord(data['part'])['text']);
+        if (text !== undefined) item.summary.set(asNumber(data['summary_index']) ?? 0, text);
         break;
       }
       case 'response.function_call_arguments.delta':
@@ -605,12 +621,11 @@ export function parseResponsesSse(chunks: string[] | string): CanonicalResponse 
         name: item.name,
         [item.kind === 'custom_tool_call' ? 'input' : 'arguments']: item.args,
       });
+    } else if (item.kind === 'reasoning') {
+      const summary = [...item.summary].sort(([a], [b]) => a - b).map(([, text]) => ({ text }));
+      if (summary.length) output.push({ type: 'reasoning', summary });
     } else if (item.text !== '') {
-      output.push(
-        item.kind === 'reasoning'
-          ? { type: 'reasoning', summary: [{ text: item.text }] }
-          : { type: 'message', content: [{ type: 'output_text', text: item.text }] },
-      );
+      output.push({ type: 'message', content: [{ type: 'output_text', text: item.text }] });
     }
   }
   return responsesToCanonicalResponse({

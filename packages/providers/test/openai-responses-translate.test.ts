@@ -332,13 +332,16 @@ describe('responses SSE', () => {
     });
   });
 
-  it('reads reasoning summary deltas as thinking', () => {
+  it('keeps reasoning summary parts separate when the response is interrupted', () => {
     const stream = [
       'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}\n\n',
-      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"delta":"weighing options"}\n\n',
+      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"weighing " }\n\n',
+      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"options"}\n\n',
+      'event: response.reasoning_summary_text.done\ndata: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":"weighing options"}\n\n',
+      'event: response.reasoning_summary_part.done\ndata: {"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":"selecting an option"}}\n\n',
     ];
     expect(parseResponsesSse(stream).content).toEqual([
-      { type: 'thinking', text: 'weighing options' },
+      { type: 'thinking', text: 'weighing options\nselecting an option' },
     ]);
   });
 
