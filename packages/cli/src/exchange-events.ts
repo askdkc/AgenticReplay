@@ -30,7 +30,13 @@ export interface PendingToolCall {
 }
 
 export interface DerivedEvent {
-  type: 'model.request' | 'model.response' | 'tool.call' | 'tool.result' | 'retrieval.context';
+  type:
+    | 'model.request'
+    | 'model.response'
+    | 'model.thinking'
+    | 'tool.call'
+    | 'tool.result'
+    | 'retrieval.context';
   actor: 'agent' | 'model' | 'harness';
   attrs: Record<string, unknown>;
   payload?: unknown;
@@ -175,6 +181,21 @@ export class ExchangeEventDeriver {
       payload: exchange.rawResponse,
     });
     const responseAt = events.length - 1;
+
+    // The reasoning a reply carries — Anthropic `thinking` blocks, OpenAI `reasoning_content` and
+    // Responses reasoning summaries all arrive here as canonical `thinking` blocks — is inside the
+    // raw payload but buried in the wire shape. Log it decoded, one event per reasoned turn,
+    // pointing at the response it came from; a turn without reasoning logs nothing.
+    const thinking = collectThinking(response);
+    if (thinking !== '') {
+      events.push({
+        type: 'model.thinking',
+        actor: 'model',
+        attrs: { chars: thinking.length },
+        payload: thinking,
+        causesIndex: [responseAt],
+      });
+    }
 
     for (const use of collectToolUses(response)) {
       events.push({
@@ -351,6 +372,16 @@ function collectToolUses(
   return res.content.filter(
     (b): b is Extract<CanonicalContent, { type: 'tool_use' }> => b.type === 'tool_use',
   );
+}
+
+/** The decoded reasoning a reply carried, thinking blocks joined in stream order. */
+function collectThinking(res: CanonicalResponse | undefined): string {
+  if (!res) return '';
+  return res.content
+    .filter((b): b is Extract<CanonicalContent, { type: 'thinking' }> => b.type === 'thinking')
+    .map((b) => b.text)
+    .filter((text) => text !== '')
+    .join('\n');
 }
 
 /**

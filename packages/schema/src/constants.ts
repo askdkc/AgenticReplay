@@ -13,6 +13,7 @@ export const EVENT_TYPES = [
   'run.end',
   'model.request',
   'model.response',
+  'model.thinking',
   'tool.call',
   'tool.result',
   'mcp.request',

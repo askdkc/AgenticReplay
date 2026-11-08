@@ -73,6 +73,7 @@ export interface LoopFinding {
 const KIND_BY_TYPE: Record<string, string> = {
   'model.request': 'MODEL',
   'model.response': 'MODEL',
+  'model.thinking': 'THINK',
   'tool.call': 'TOOL',
   'tool.result': 'TOOL',
   'shell.exec': 'SHELL',
@@ -330,6 +331,16 @@ function parts(event: TraceEvent): RowParts {
         ]
           .filter((part): part is string => part !== undefined)
           .join(' · '),
+      };
+    }
+    case 'model.thinking': {
+      // The decoded reasoning itself is the payload; the row shows how much of it there was and
+      // which model produced it, so a reader knows where to open the full text.
+      const chars = num(a['chars']);
+      return {
+        label: 'thinking',
+        detail: pick(a, 'model'),
+        meta: chars === undefined ? '' : `${chars} chars`,
       };
     }
     case 'error':

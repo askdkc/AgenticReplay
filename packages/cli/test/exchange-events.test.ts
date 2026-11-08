@@ -94,6 +94,32 @@ describe('ExchangeEventDeriver', () => {
     expect(response.causesIndex).toEqual([requestAt]);
   });
 
+  it('decodes the response thinking into a model.thinking event pointing at its response', () => {
+    const events = new ExchangeEventDeriver().derive(
+      exchange({
+        canonicalResponse: {
+          id: 'msg_0',
+          model: 'claude-opus-5',
+          stop_reason: 'tool_use',
+          content: [
+            { type: 'thinking', text: 'The build is red, so run the tests.' },
+            { type: 'thinking', text: 'Then fix the import.' },
+            { type: 'text', text: 'On it.' },
+          ],
+          usage: { input_tokens: 10, output_tokens: 3 },
+        },
+      }),
+      1,
+    );
+    const responseAt = events.findIndex((e) => e.type === 'model.response');
+    const thinking = events.find((e) => e.type === 'model.thinking');
+    expect(thinking, 'a reply that reasoned must log its reasoning').toBeDefined();
+    expect(thinking!.actor).toBe('model');
+    expect(thinking!.causesIndex).toEqual([responseAt]);
+    expect(thinking!.payload).toBe('The build is red, so run the tests.\nThen fix the import.');
+    expect(thinking!.attrs['chars']).toBe(56);
+  });
+
   it('derives a tool.call from a tool_use in the response', () => {
     const events = new ExchangeEventDeriver().derive(
       exchange({
