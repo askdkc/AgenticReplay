@@ -12,6 +12,7 @@
  */
 
 import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
+import type { CaptureDiagnostic } from './capture-diagnostic.js';
 import { CREDIT_LINE } from './credit.js';
 import { CLIENT_SOURCE } from './client/main.js';
 import { VIEWER_CSS } from './css.js';
@@ -29,6 +30,7 @@ import {
 
 export interface RenderInput {
   manifest: Manifest;
+  captureDiagnostic?: CaptureDiagnostic;
   events: TraceEvent[];
   /** Blob contents by `$blob` reference (or bare digest). Anything absent renders as omitted. */
   blobs?: Record<string, string>;
@@ -252,9 +254,27 @@ function statHtml(label: string, value: string, flag = false): string {
   }>${escapeHtml(value)}</dd></div>`;
 }
 
+function captureDiagnosticHtml(diagnostic: CaptureDiagnostic): string {
+  const details = [
+    diagnostic.code ? `${diagnostic.reason} (${diagnostic.code})` : diagnostic.reason,
+    diagnostic.missingEvents === undefined
+      ? undefined
+      : `Missing events: ${formatTokens(diagnostic.missingEvents)}`,
+    diagnostic.unresolvedCalls === undefined
+      ? undefined
+      : `Unresolved calls: ${formatTokens(diagnostic.unresolvedCalls)}`,
+  ]
+    .filter((detail) => detail !== undefined)
+    .join(' · ');
+  return `<section class="findings" aria-label="Recording diagnosis"><p class="finding"><span><strong>DSH recording ${escapeHtml(diagnostic.state)}</strong> · ${escapeHtml(details)}</span></p></section>`;
+}
+
 /** Renders a complete, standalone HTML document for one run. */
 export function renderTraceHtml(input: RenderInput, options: RenderOptions = {}): string {
-  const { manifest, events } = input;
+  const { manifest, events, captureDiagnostic } = input;
+  const captureStatus = captureDiagnostic
+    ? 'incomplete'
+    : (manifest.capture?.status ?? 'unverified');
   const blobs = input.blobs ?? {};
   const max = options.maxInlineChars ?? DEFAULT_MAX_INLINE_CHARS;
   const script = options.script ?? CLIENT_SOURCE;
@@ -264,11 +284,7 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
   const loops = detectLoops(events);
 
   const stats = [
-    statHtml(
-      'capture',
-      manifest.capture?.status ?? 'unverified',
-      manifest.capture?.status !== 'complete',
-    ),
+    statHtml('capture', captureStatus, captureStatus !== 'complete'),
     statHtml('duration', formatDuration(summary.durationMs)),
     statHtml('events', formatTokens(summary.eventCount)),
     statHtml('turns', formatTokens(summary.turnCount)),
@@ -334,6 +350,7 @@ export function renderTraceHtml(input: RenderInput, options: RenderOptions = {})
 <button id="agenticreplay-theme" type="button" aria-label="Switch colour theme">auto</button>
 </header>
 ${manifest.capture?.issues.length ? `<p class="sub">Capture issues: ${escapeHtml(manifest.capture.issues.join(', '))}</p>` : ''}
+${captureDiagnostic ? captureDiagnosticHtml(captureDiagnostic) : ''}
 ${findings}
 <main class="split">
 <section class="list" aria-label="Timeline">

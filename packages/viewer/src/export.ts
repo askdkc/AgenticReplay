@@ -29,8 +29,8 @@ export async function exportTraceHtml(
   outPath: string,
   options: ExportOptions = {},
 ): Promise<ExportResult> {
-  const { manifest, events, blobs } = await readTraceDir(runDir, options);
-  const html = renderTraceHtml({ manifest, events, blobs }, options);
+  const trace = await readTraceDir(runDir, options);
+  const html = renderTraceHtml(trace, options);
   const target = resolve(outPath);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, html, 'utf8');

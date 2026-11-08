@@ -40,6 +40,7 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "run.end",
         "model.request",
         "model.response",
+        "model.thinking",
         "tool.call",
         "tool.result",
         "mcp.request",

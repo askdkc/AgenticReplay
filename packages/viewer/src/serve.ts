@@ -6,9 +6,10 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { CAPTURE_STATUS_FILE } from './capture-diagnostic.js';
 import { renderTraceHtml, type RenderOptions } from './html.js';
 import { bodyText, readTraceDir, type ReadTraceOptions } from './trace-dir.js';
 
@@ -49,28 +50,35 @@ export async function serveViewer(options: ServeOptions): Promise<ViewerServer> 
   let cache: { key: string; html: string } | null = null;
 
   async function stamp(): Promise<string> {
-    try {
-      const info = await stat(join(options.runDir, 'events.jsonl'));
-      return `${info.mtimeMs}:${info.size}`;
-    } catch {
-      return 'absent';
-    }
+    const files = [
+      stat(join(options.runDir, 'events.jsonl')),
+      stat(join(options.runDir, 'manifest.json')),
+      lstat(join(options.runDir, CAPTURE_STATUS_FILE)),
+    ];
+    const versions = await Promise.allSettled(files);
+    return versions
+      .map((version) => {
+        if (version.status === 'rejected') return 'absent';
+        const { ino, mtimeMs, ctimeMs, size } = version.value;
+        return `${ino}:${mtimeMs}:${ctimeMs}:${size}`;
+      })
+      .join('/');
   }
 
-  // Re-render only when events.jsonl has moved, so a live run can be watched with refresh.
+  // A recorder can write diagnostics or finalize its manifest after the timeline stops growing.
   async function document(): Promise<string> {
     const key = await stamp();
     if (cache && cache.key === key) return cache.html;
     // The live page must not aggregate arbitrarily large bodies in memory. It renders previews
     // from no blob bytes and serves the complete redacted file on demand below.
     const readOptions = { ...options, maxBlobBytes: options.maxBlobBytes ?? LIVE_PREVIEW_BYTES };
-    const { manifest, events, blobs } = await readTraceDir(options.runDir, readOptions);
+    const trace = await readTraceDir(options.runDir, readOptions);
     const address = server.address() as AddressInfo;
     const shown = address.address.includes(':') ? `[${address.address}]` : address.address;
-    const html = renderTraceHtml(
-      { manifest, events, blobs },
-      { ...options, blobDownloadBaseUrl: `http://${shown}:${address.port}/blobs` },
-    );
+    const html = renderTraceHtml(trace, {
+      ...options,
+      blobDownloadBaseUrl: `http://${shown}:${address.port}/blobs`,
+    });
     cache = { key, html };
     return html;
   }

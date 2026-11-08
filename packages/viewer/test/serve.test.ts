@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { serveViewer } from '../src/serve.js';
-import { ev, resetSeq, tempRunDir, writeRun } from './fixtures.js';
+import { ev, manifest, resetSeq, tempRunDir, writeRun } from './fixtures.js';
 
 const scratch: string[] = [];
 afterAll(async () => {
@@ -19,6 +20,45 @@ async function runDir(): Promise<string> {
 }
 
 describe('serveViewer', () => {
+  it('refreshes a DSH capture diagnostic even when no timeline events have changed', async () => {
+    const dir = await tempRunDir('serve-diagnostic');
+    scratch.push(dir);
+    const original = manifest({ adapter: { id: 'kiokuko-dsh' } });
+    await writeRun(dir, { manifest: original });
+    const server = await serveViewer({ runDir: dir });
+    try {
+      const readPage = async () => {
+        const response = await fetch(server.url);
+        expect(response.status).toBe(200);
+        return response.text();
+      };
+      expect(await readPage()).not.toContain('DSH recording');
+      await writeFile(
+        join(dir, 'capture-status.json'),
+        JSON.stringify({
+          format: 'dsh.capture-status.v1',
+          httpCapture: false,
+          runId: original.run_id,
+          state: 'incomplete',
+          lastErrorCode: 'queue_limit',
+        }),
+      );
+      expect(await readPage()).toContain('Recording queue limit reached');
+      await writeFile(
+        join(dir, 'manifest.json'),
+        JSON.stringify({
+          ...original,
+          capture: { status: 'unverified', issues: ['late_manifest_issue'] },
+        }),
+      );
+      expect(await readPage()).toContain('late_manifest_issue');
+      await rm(join(dir, 'capture-status.json'));
+      expect(await readPage()).not.toContain('DSH recording');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('serves the rendered trace on loopback and closes cleanly', async () => {
     const server = await serveViewer({ runDir: await runDir(), port: 0 });
     try {

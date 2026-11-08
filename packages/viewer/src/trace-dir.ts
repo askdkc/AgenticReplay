@@ -6,6 +6,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assertManifest, type Manifest, type TraceEvent } from '@agenticreplay/schema';
+import { readCaptureDiagnostic, type CaptureDiagnostic } from './capture-diagnostic.js';
 import { referencedBlobs } from './render.js';
 
 /**
@@ -17,6 +18,7 @@ export const DEFAULT_MAX_BLOB_BYTES = Number.POSITIVE_INFINITY;
 
 export interface TraceDirContents {
   manifest: Manifest;
+  captureDiagnostic?: CaptureDiagnostic;
   events: TraceEvent[];
   /** Blob text by `$blob` reference. A digest absent here renders as an omitted payload. */
   blobs: Record<string, string>;
@@ -136,5 +138,13 @@ export async function readTraceDir(
     blobs[ref] = text;
   }
 
-  return { manifest, events, blobs, skippedLines, omittedBlobs };
+  const captureDiagnostic = await readCaptureDiagnostic(runDir, manifest);
+  return {
+    manifest,
+    events,
+    blobs,
+    skippedLines,
+    omittedBlobs,
+    ...(captureDiagnostic && { captureDiagnostic }),
+  };
 }

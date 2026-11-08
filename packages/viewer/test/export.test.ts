@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { exportTraceHtml } from '../src/export.js';
 import { ev, manifest, resetSeq, tempRunDir, writeRun } from './fixtures.js';
@@ -17,6 +17,114 @@ async function fixture(label: string, run: Parameters<typeof writeRun>[1]): Prom
 }
 
 describe('exportTraceHtml', () => {
+  it.each([
+    ['queue_limit', 'Recording queue limit reached', 'incomplete', 'unverified'],
+    ['index_persistence_failed', 'Could not save the recording index', 'incomplete', 'complete'],
+    ['trace_limit', 'Trace size limit reached', 'failed', 'unverified'],
+  ] as const)(
+    'exports a safe DSH capture diagnostic for %s',
+    async (code, reason, state, status) => {
+      const dir = await fixture(code, {
+        manifest: manifest({
+          adapter: { id: 'kiokuko-dsh' },
+          capture: { status, issues: ['manifest_issue'] },
+        }),
+        events: [ev({ type: 'note', attrs: { text: 'timeline remains readable' } })],
+      });
+      const diagnostic = JSON.stringify({
+        format: 'dsh.capture-status.v1',
+        httpCapture: false,
+        runId: 'run_abc123',
+        state,
+        lastErrorCode: code,
+        missingEvents: 2,
+        unresolvedCalls: 1,
+        failure: {
+          phase: 'PRIVATE-PHASE',
+          eventType: 'PRIVATE-TYPE',
+          callId: 'PRIVATE-CALL',
+          code,
+        },
+      });
+      const diagnosticPath = join(dir, 'capture-status.json');
+      const manifestPath = join(dir, 'manifest.json');
+      const originalManifest = await readFile(manifestPath, 'utf8');
+      await writeFile(diagnosticPath, diagnostic);
+      const written = await readFile(
+        (await exportTraceHtml(dir, join(dir, 'out.html'))).path,
+        'utf8',
+      );
+      expect(written).toContain('<dd class="flag">incomplete</dd>');
+      expect(written).toContain(`DSH recording ${state}`);
+      expect(written).toContain(reason);
+      expect(written).toContain(code);
+      expect(written).toContain('Missing events: 2');
+      expect(written).toContain('Unresolved calls: 1');
+      expect(written).toContain('manifest_issue');
+      expect(written).toContain('timeline remains readable');
+      expect(written).not.toContain('PRIVATE-');
+      expect(await readFile(manifestPath, 'utf8')).toBe(originalManifest);
+      expect(await readFile(diagnosticPath, 'utf8')).toBe(diagnostic);
+    },
+  );
+
+  it('ignores unbound, unreadable, or oversized DSH diagnostics', async () => {
+    const dir = await fixture('unsafe-diagnostic', {
+      manifest: manifest({ adapter: { id: 'kiokuko-dsh' } }),
+    });
+    const path = join(dir, 'capture-status.json');
+    const out = join(dir, 'out.html');
+    const valid = {
+      format: 'dsh.capture-status.v1',
+      httpCapture: false,
+      runId: 'run_abc123',
+      state: 'failed',
+      lastErrorCode: 'queue_limit',
+    };
+    for (const body of [
+      JSON.stringify({ ...valid, runId: 'run_def456' }),
+      JSON.stringify({ ...valid, state: 'completed' }),
+      JSON.stringify({ ...valid, format: 'unknown' }),
+      '{"format":',
+      JSON.stringify({ ...valid, extra: 'x'.repeat(8_193) }),
+    ]) {
+      await writeFile(path, body);
+      await exportTraceHtml(dir, out);
+      expect(await readFile(out, 'utf8')).not.toContain('DSH recording');
+    }
+    await rm(path);
+    const other = join(dir, 'other.json');
+    await writeFile(other, JSON.stringify(valid));
+    await symlink(other, path);
+    await exportTraceHtml(dir, out);
+    expect(await readFile(out, 'utf8')).not.toContain('DSH recording');
+  });
+
+  it('reports a failure without copying unknown codes or free text into the export', async () => {
+    const dir = await fixture('unknown-diagnostic', {
+      manifest: manifest({ adapter: { id: 'kiokuko-dsh' } }),
+    });
+    await writeFile(
+      join(dir, 'capture-status.json'),
+      JSON.stringify({
+        format: 'dsh.capture-status.v1',
+        httpCapture: false,
+        runId: 'run_abc123',
+        state: 'failed',
+        lastErrorCode: 'PRIVATE_TOKEN',
+        missingEvents: -1,
+      }),
+    );
+    const written = await readFile(
+      (await exportTraceHtml(dir, join(dir, 'out.html'))).path,
+      'utf8',
+    );
+    expect(written).toContain('DSH recording failed');
+    expect(written).toContain('Recording failure reason unavailable');
+    expect(written).not.toContain('PRIVATE_TOKEN');
+    expect(written).not.toContain('Missing events:');
+  });
+
   it('reads a run directory and writes one self-contained file', async () => {
     resetSeq();
     const dir = await fixture('basic', {
