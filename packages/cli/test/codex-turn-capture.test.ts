@@ -4,7 +4,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { createServer, request } from 'node:http';
 import { createConnection, type AddressInfo } from 'node:net';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +153,175 @@ it('records a direct Dock WebSocket and forwards ordinary HTTP to the same origi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it.each(['normal', 'compaction', 'interrupted', 'retry'] as const)(
+  'keeps one linked result per Codex tool call after a %s response',
+  async (scenario) => {
+    const root = await realpath(await mkdtemp('/tmp/ar-dock-results-'));
+    const socketPath = join(root, 'review.sock');
+    const runs = join(root, 'runs');
+    await mkdir(runs);
+    const ca = await RunCa.create({ runDir: root });
+    const cert = ca.issue('127.0.0.1');
+    const origin = createHttpsServer({ key: cert.keyPem, cert: cert.certPem });
+    const wsOrigin = new WebSocketServer({ server: origin });
+    const callIds = ['call_fn', 'call_custom'];
+    const results = [
+      { type: 'function_call_output', call_id: callIds[0], output: 'function result' },
+      { type: 'custom_tool_call_output', call_id: callIds[1], output: 'custom result' },
+    ];
+    const observedInputs: unknown[] = [];
+    wsOrigin.on('connection', (socket) => {
+      socket.on('message', (bytes) => {
+        const n = observedInputs.push(JSON.parse(bytes.toString()).input);
+        const interrupted = n === 2 && (scenario === 'interrupted' || scenario === 'retry');
+        const output =
+          n === 1
+            ? [
+                { type: 'function_call', call_id: callIds[0], name: 'echo', arguments: '{}' },
+                {
+                  type: 'custom_tool_call',
+                  call_id: callIds[1],
+                  name: 'patch',
+                  input: 'patch text',
+                },
+              ]
+            : scenario === 'compaction'
+              ? [{ type: 'compaction', encrypted_content: 'fixture' }]
+              : [];
+        socket.send(
+          JSON.stringify({
+            type: interrupted ? 'response.created' : 'response.completed',
+            response: {
+              id: 'resp_' + n,
+              object: 'response',
+              status: 'completed',
+              model: 'gpt-test',
+              output,
+            },
+          }),
+        );
+      });
+    });
+    const requestResults = [
+      { type: 'function_call_output', call_id: 'old-call', output: 'historical result' },
+      ...results,
+      ...(scenario === 'compaction' ? [{ type: 'compaction_trigger' }] : []),
+    ];
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve));
+    const { port } = origin.address() as AddressInfo;
+    const turns = await openCodexWorktreeCapture(socketPath, new Map([[root, runs]]));
+    const disconnected = Promise.withResolvers<void>();
+    const proxy = await createProxy({
+      retainExchanges: false,
+      tls: {
+        ca,
+        hosts: ['127.0.0.1'],
+        directCodexOrigin: { host: '127.0.0.1', port },
+        trustedOriginCerts: [await readFile(ca.certPath, 'utf8')],
+        onNetExchange(exchange) {
+          turns.finish(exchange);
+          if (exchange.abandoned) disconnected.resolve();
+        },
+      },
+      onRequestStart: turns.start,
+      onExchange: turns.model,
+    });
+    let client: WebSocket | undefined;
+    try {
+      const connect = async () => {
+        const socket = new WebSocket(
+          proxy.url.replace(/^http:/u, 'ws:') + '/backend-api/codex/responses',
+        );
+        await once(socket, 'open');
+        return socket;
+      };
+      client = await connect();
+      const send = async (input: unknown[]) => {
+        const reply = once(client!, 'message');
+        client!.send(
+          JSON.stringify({
+            type: 'response.create',
+            model: 'gpt-test',
+            input,
+            client_metadata: {
+              'x-codex-turn-metadata': JSON.stringify({
+                thread_id: 'chat-1',
+                turn_id: 'results-turn',
+                workspaces: { [root]: {} },
+              }),
+            },
+          }),
+        );
+        return JSON.parse((await reply)[0].toString()).type;
+      };
+      expect(await send([{ role: 'user', content: 'run two tools' }])).toBe('response.completed');
+      const interrupted = scenario === 'interrupted' || scenario === 'retry';
+      expect(await send(requestResults)).toBe(
+        interrupted ? 'response.created' : 'response.completed',
+      );
+      if (interrupted) {
+        client.terminate();
+        await disconnected.promise;
+      }
+      if (scenario === 'retry') {
+        client = await connect();
+        expect(await send(requestResults)).toBe('response.completed');
+      }
+      expect(observedInputs.slice(1)).toEqual(
+        scenario === 'retry' ? [requestResults, requestResults] : [requestResults],
+      );
+      const finish =
+        JSON.stringify({
+          cwd: root,
+          sessionId: 'chat-1',
+          turnId: 'results-turn',
+          action: 'finish',
+          outcome: scenario === 'interrupted' ? 'interrupted' : 'completed',
+        }) + '\n';
+      const capture = interrupted ? 'incomplete' : 'complete';
+      await vi.waitFor(async () => {
+        expect(await requestTurn(socketPath, finish)).toEqual({ status: 'finalized', capture });
+      });
+      const [directory] = await readdir(runs);
+      const reader = await TraceReader.open(join(runs, directory!));
+      const events = await reader.events();
+      expect(reader.manifest().capture?.status).toBe(capture);
+      const toolResults = events.filter((event) => event.type === 'tool.result');
+      expect(toolResults.map((event) => event.attrs?.tool_use_id)).toEqual(callIds);
+      for (const [index, result] of toolResults.entries()) {
+        const call = events.find(
+          (event) => event.type === 'tool.call' && event.attrs?.tool_use_id === callIds[index],
+        );
+        expect(call).toBeDefined();
+        expect(result.causes).toEqual([call!.seq]);
+        expect(result.payload).toBe(results[index]!.output);
+      }
+      if (interrupted) {
+        const aborted = events.find(
+          (event) => event.type === 'net.response' && event.attrs?.response_complete === false,
+        );
+        expect(aborted).toBeDefined();
+        expect(toolResults.every((event) => event.seq < aborted!.seq)).toBe(true);
+      } else {
+        const modelRequest = events.findLast((event) => event.type === 'model.request');
+        expect(modelRequest?.causes).toEqual(toolResults.map((event) => event.seq));
+      }
+      expect(events.filter((event) => event.type === 'model.response')).toHaveLength(
+        scenario === 'interrupted' ? 1 : 2,
+      );
+    } finally {
+      client?.terminate();
+      await proxy.close();
+      await turns.close();
+      for (const socket of wsOrigin.clients) socket.terminate();
+      wsOrigin.close();
+      await new Promise<void>((resolve) => origin.close(() => resolve()));
+      await ca.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 it('seals only the named Codex API turn while attach stays live', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'ar-codex-')));

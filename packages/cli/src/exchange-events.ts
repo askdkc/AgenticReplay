@@ -107,31 +107,15 @@ export class ExchangeEventDeriver {
       resultsAt.push(events.length - 1);
     }
 
-    for (const result of collectToolResults(exchange.canonicalRequest)) {
-      // Already accounted for on an earlier turn — the resent conversation is not new information.
-      if (this.#closed.has(result.tool_use_id)) continue;
-      // No pending call either: recording began mid-conversation, so this result is the first
-      // thing we know about that tool use. Record it rather than lose it.
-      const pending = this.#pending.get(result.tool_use_id);
-      events.push({
-        type: 'tool.result',
-        actor: 'harness',
-        attrs: {
-          tool_use_id: result.tool_use_id,
-          name: pending?.name ?? 'unknown',
-          is_error: result.is_error ?? false,
-          bytes: result.content.length,
-        },
-        payload: result.content,
-        causesToolId: result.tool_use_id,
-      });
-      resultsAt.push(events.length - 1);
-      // Deliberately not deleted here. The recorder resolves the call's seq *after* derive
-      // returns — it has to, since the seq only exists once the event is written — so dropping the
-      // entry in this loop meant `causes` came back empty on every tool result ever recorded, with
-      // no error to notice. `#closed` is what stops a resent result being re-emitted, so the
-      // pending entry can outlive the result it answered without any duplication.
-      this.#closed.add(result.tool_use_id);
+    const toolResults = this.deriveToolResults(
+      exchange.canonicalRequest,
+      exchange.dialect === 'codex' || exchange.dialect === 'openai-responses'
+        ? 'known-or-trailing'
+        : 'trailing',
+    );
+    for (const result of toolResults) {
+      resultsAt.push(events.length);
+      events.push(result);
     }
 
     events.push({
@@ -203,6 +187,45 @@ export class ExchangeEventDeriver {
       this.#pending.set(use.id, { id: use.id, name: use.name, input: use.input, seq: -1, turn });
     }
 
+    return events;
+  }
+
+  deriveToolResults(
+    request: CanonicalRequest,
+    scope: 'known' | 'known-or-trailing' | 'trailing',
+  ): DerivedEvent[] {
+    const trailing = request.messages.at(-1);
+    const messages = scope === 'trailing' ? request.messages.slice(-1) : request.messages;
+    const events: DerivedEvent[] = [];
+    // Responses sends each result as a separate input item, sometimes followed by
+    // compaction or reasoning. Scan earlier items only for calls this run observed.
+    for (const message of messages) {
+      if (message.role !== 'user') continue;
+      for (const result of message.content) {
+        if (
+          result.type !== 'tool_result' ||
+          !result.tool_use_id ||
+          this.#closed.has(result.tool_use_id)
+        )
+          continue;
+        const pending = this.#pending.get(result.tool_use_id);
+        if (!pending && (scope === 'known' || message !== trailing)) continue;
+        events.push({
+          type: 'tool.result',
+          actor: 'harness',
+          attrs: {
+            tool_use_id: result.tool_use_id,
+            name: pending?.name ?? 'unknown',
+            is_error: result.is_error ?? false,
+            bytes: result.content.length,
+          },
+          payload: result.content,
+          causesToolId: result.tool_use_id,
+        });
+        // Keep the call until the writer has resolved its causal sequence number.
+        this.#closed.add(result.tool_use_id);
+      }
+    }
     return events;
   }
 
@@ -321,20 +344,6 @@ export function retrievalContext(req: CanonicalRequest): RetrievalContext | unde
   };
 }
 
-function collectToolResults(
-  req: CanonicalRequest,
-): Array<Extract<CanonicalContent, { type: 'tool_result' }>> {
-  const out: Array<Extract<CanonicalContent, { type: 'tool_result' }>> = [];
-  // Only the trailing user message can carry results for the calls we are still holding open;
-  // scanning the whole conversation would re-emit every earlier result on every turn.
-  const last = req.messages[req.messages.length - 1];
-  if (!last || last.role !== 'user') return out;
-  for (const block of last.content) {
-    if (block.type === 'tool_result') out.push(block);
-  }
-  return out;
-}
-
 function collectToolUses(
   res: CanonicalResponse | undefined,
 ): Array<Extract<CanonicalContent, { type: 'tool_use' }>> {
@@ -367,10 +376,30 @@ export async function appendDerivedEvents(
    */
   onDerived?: (derived: DerivedEvent) => void,
 ): Promise<void> {
+  await appendDerivedBatch(writer, deriver, deriver.derive(exchange, turn), turn, onDerived);
+}
+
+/** Persist results carried by a request without projecting an incomplete exchange as a model call. */
+export async function appendObservedToolResults(
+  writer: TraceWriter,
+  deriver: ExchangeEventDeriver,
+  request: CanonicalRequest,
+  turn: number,
+): Promise<void> {
+  await appendDerivedBatch(writer, deriver, deriver.deriveToolResults(request, 'known'), turn);
+}
+
+async function appendDerivedBatch(
+  writer: TraceWriter,
+  deriver: ExchangeEventDeriver,
+  events: DerivedEvent[],
+  turn: number,
+  onDerived?: (derived: DerivedEvent) => void,
+): Promise<void> {
   /** `written[i]` is the seq of the i-th derived event, which is what `causesIndex` refers to. */
   const written: number[] = [];
   try {
-    for (const derived of deriver.derive(exchange, turn)) {
+    for (const derived of events) {
       const causes: number[] = [];
       if (derived.causesToolId) {
         const seq = deriver.seqOf(derived.causesToolId);

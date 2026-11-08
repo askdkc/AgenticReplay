@@ -4,8 +4,17 @@ import { createServer, type Socket } from 'node:net';
 import { chmod, lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, basename } from 'node:path';
 import { TraceWriter, captureDirectoryName } from '@agenticreplay/core';
-import type { NetExchange, NetRequest, RecordedExchange } from '@agenticreplay/proxy';
-import { appendDerivedEvents, ExchangeEventDeriver } from './exchange-events.js';
+import {
+  codexDialect,
+  type NetExchange,
+  type NetRequest,
+  type RecordedExchange,
+} from '@agenticreplay/proxy';
+import {
+  appendDerivedEvents,
+  appendObservedToolResults,
+  ExchangeEventDeriver,
+} from './exchange-events.js';
 import { persistNetExchange } from './tls-capture.js';
 import { AGENTICREPLAY_VERSION } from './version.js';
 
@@ -43,6 +52,17 @@ function turnIdentity(request: NetRequest) {
     }
   } catch {
     // Unknown metadata stays in the ordinary recording only.
+  }
+}
+
+const codexRequest = codexDialect().toCanonicalRequest;
+
+function readUnpromotedRequest(exchange: NetExchange) {
+  if (exchange.modelDialect || exchange.requestTruncated || !exchange.requestBody) return;
+  try {
+    return codexRequest(JSON.parse(exchange.requestBody));
+  } catch {
+    // Keep opaque or partial bodies in the network trace.
   }
 }
 
@@ -553,7 +573,15 @@ async function openCapture(
         turn.broken = true;
       enqueue(
         turn,
-        async (writer) => persistNetExchange(writer, turn.exchanges, exchange),
+        async (writer) => {
+          try {
+            const request = readUnpromotedRequest(exchange);
+            if (request)
+              await appendObservedToolResults(writer, turn.deriver, request, turn.exchanges + 1);
+          } finally {
+            await persistNetExchange(writer, turn.exchanges, exchange);
+          }
+        },
         Buffer.byteLength(exchange.requestBody) + Buffer.byteLength(exchange.responseBody),
       );
       finishNotifiedTurn(turn);
