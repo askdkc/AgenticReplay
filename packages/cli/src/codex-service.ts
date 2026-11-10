@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { ensureRunsDir } from '@agenticreplay/core';
-import { createProxy, RunCa } from '@agenticreplay/proxy';
+import { createProxy, RunCa, type TlsInterceptOptions } from '@agenticreplay/proxy';
 import {
   codexConfigStatus,
   codexServiceBaseUrl,
@@ -20,6 +20,20 @@ const label = 'io.github.askdkc.agenticreplay.codex-dock';
 const exec = promisify(execFile);
 const origin = { host: 'chatgpt.com', port: 443 };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+
+/** The daemon and its integration tests share the complete capture callback wiring. */
+export function codexServiceCaptureCallbacks(
+  capture: () => Awaited<ReturnType<typeof openCodexWorktreeCapture>> | undefined,
+): Pick<TlsInterceptOptions, 'onNetExchange' | 'onWebSocketObservation' | 'onFailure'> {
+  return {
+    onNetExchange: (exchange) => capture()?.finish(exchange),
+    onWebSocketObservation: (observation) => capture()?.observeWebSocket(observation),
+    onFailure: (failure) => {
+      capture()?.failure(failure);
+      process.stderr.write(JSON.stringify({ event: 'codex.capture_failed', ...failure }) + '\n');
+    },
+  };
+}
 
 interface ServiceState {
   version: 1;
@@ -330,28 +344,30 @@ async function serve(paths: Paths) {
   let turns: Awaited<ReturnType<typeof openCodexWorktreeCapture>> | undefined;
   let proxy: Awaited<ReturnType<typeof createProxy>> | undefined;
   try {
-    proxy = await createProxy({
-      host: '127.0.0.1',
-      port: state.port,
-      retainExchanges: false,
-      tls: {
-        ca: await RunCa.create({ runDir: scratch }),
-        hosts: [origin.host],
-        directCodexOrigin: origin,
-        passThroughWebSockets: true,
-        onNetExchange: (exchange) => turns?.finish(exchange),
-      },
-      onRequestStart: (request) => turns?.start(request),
-      onExchange: (exchange) => turns?.model(exchange),
-    });
-    // The HTTP port is bound before the private socket signals readiness.
+    const ca = await RunCa.create({ runDir: scratch });
     try {
       await privatePath(paths.socket, 'socket');
       await rm(paths.socket);
     } catch (error) {
       if (errno(error) !== 'ENOENT') throw error;
     }
+    // A host may reconnect as soon as the HTTP port opens, including during service restart.
+    // Its first frame must already have a durable capture owner.
     turns = await openCodexWorktreeCapture(paths.socket, worktrees);
+    proxy = await createProxy({
+      host: '127.0.0.1',
+      port: state.port,
+      retainExchanges: false,
+      tls: {
+        ca,
+        hosts: [origin.host],
+        directCodexOrigin: origin,
+        passThroughWebSockets: true,
+        ...codexServiceCaptureCallbacks(() => turns),
+      },
+      onRequestStart: (request) => turns?.start(request),
+      onExchange: (exchange) => turns?.model(exchange),
+    });
     await new Promise<void>((resolve) => {
       const stop = () => {
         process.off('SIGTERM', stop);

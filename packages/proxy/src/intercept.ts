@@ -25,6 +25,8 @@ import type { CaptureTransformation } from '@agenticreplay/schema';
 import type { RunCa } from './ca.js';
 import { HostPolicy } from './tls-hosts.js';
 import { isCodexResponsesUpgrade, relayWebSocket } from './codex-websocket.js';
+import type { WebSocketCaptureReason, WebSocketObservation } from './websocket-observation.js';
+export type { WebSocketCaptureReason, WebSocketObservation } from './websocket-observation.js';
 
 /**
  * HTTP CONNECT: tunnel it, or terminate it and look inside.
@@ -81,6 +83,9 @@ export interface NetExchange {
   port: number;
   method: string;
   transport?: 'websocket';
+  connectionId?: string;
+  correlation?: 'matched' | 'lost' | 'unconfirmed';
+  captureReasons?: WebSocketCaptureReason[];
   /** The completed Responses exchange ended with a client-side tool call. */
   codexTurnContinues?: boolean;
   path: string;
@@ -151,6 +156,8 @@ export interface NetRequest {
   port: number;
   method: string;
   transport?: 'websocket';
+  connectionId?: string;
+  correlation?: 'matched' | 'lost';
   codexWarmup?: boolean;
   path: string;
   requestHeaders: Record<string, HeaderValue>;
@@ -340,6 +347,8 @@ export interface InterceptFailure {
   port: number;
   reason: string;
   kind: InterceptFailureKind;
+  connectionId?: string;
+  code?: WebSocketCaptureReason;
 }
 
 export interface TlsInterceptOptions {
@@ -363,6 +372,7 @@ export interface TlsInterceptOptions {
   maxBufferedBytes?: number;
   onRequestStart?: (request: NetRequest) => void | Promise<void>;
   onNetExchange?: (exchange: NetExchange) => void;
+  onWebSocketObservation?: (observation: WebSocketObservation) => void | Promise<void>;
   onTunnel?: (tunnel: TunnelRecord) => void;
   onFailure?: (failure: InterceptFailure) => void;
 }
@@ -372,6 +382,7 @@ export interface TlsInterceptHandle {
   policy: HostPolicy;
   /** Destroys every tunnel and decrypted session. Without it a run hangs on an idle keep-alive. */
   close: () => void;
+  drain: () => Promise<void>;
   forwardDirect?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 }
 
@@ -483,6 +494,7 @@ export function attachTlsIntercept(
     return undefined;
   };
   const open = new Set<Socket | TLSSocket>();
+  const websocketCaptures = new Set<Promise<void>>();
   const directOrigin = options.directCodexOrigin;
 
   const upgrade = (
@@ -507,6 +519,10 @@ export function attachTlsIntercept(
         budget,
         callbacks: options,
         secretHeaders: SECRET_REQUEST_HEADERS,
+        track: (drained) => {
+          websocketCaptures.add(drained);
+          void drained.then(() => websocketCaptures.delete(drained));
+        },
       });
       return;
     }
@@ -1369,6 +1385,9 @@ export function attachTlsIntercept(
       h2Servers.clear();
       for (const socket of open) socket.destroy();
       open.clear();
+    },
+    drain: async () => {
+      while (websocketCaptures.size) await Promise.all(websocketCaptures);
     },
   };
 }

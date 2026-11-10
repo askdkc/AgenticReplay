@@ -12,6 +12,7 @@ import {
   type NetRequest,
   type TlsInterceptInfo,
   type TunnelRecord,
+  type WebSocketObservation,
 } from '@agenticreplay/proxy';
 import type { ParsedArgs } from './args.js';
 import type { Output } from './out.js';
@@ -56,6 +57,7 @@ export interface TlsCaptureRequest {
   unclaimed?: UnclaimedPaths;
   onRequestStart?: (request: NetRequest) => Promise<void>;
   onNetExchange?: (exchange: NetExchange) => void;
+  onWebSocketObservation?: (observation: WebSocketObservation) => void | Promise<void>;
 }
 
 export interface TlsCapture {
@@ -137,6 +139,24 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
           requestTurns.delete(exchange.requestId);
           if (writer) writes.push(() => persistNetExchange(writer, turn, exchange));
         },
+        onWebSocketObservation: (observation: WebSocketObservation) => {
+          if (req.onWebSocketObservation) return req.onWebSocketObservation(observation);
+          if (writer) {
+            // Do not borrow the current turn for uncorrelated connection traffic.
+            const saved = new Promise<void>((resolve, reject) => {
+              writes.push(async () => {
+                try {
+                  await persistWebSocketObservation(writer, observation);
+                  resolve();
+                } catch (error) {
+                  reject(error);
+                  throw error;
+                }
+              });
+            });
+            return saved;
+          }
+        },
         onTunnel: (tunnel: TunnelRecord) => {
           if (writer) writes.push(() => persistTunnel(writer, req.turn(), tunnel));
         },
@@ -156,6 +176,54 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
       },
     },
   };
+}
+
+/** Connection-scoped evidence never acquires a turn or a request/response causal link. */
+export async function persistWebSocketObservation(
+  writer: TraceWriter,
+  observation: WebSocketObservation,
+): Promise<void> {
+  const { payload, ...metadata } = observation;
+  const incomplete =
+    observation.lostAt !== undefined ||
+    observation.omission !== undefined ||
+    observation.reason === 'save_failed' ||
+    observation.reason === 'frame_parse_failure';
+  if (incomplete)
+    writer.markCaptureIncomplete(observation.omission ?? observation.reason ?? 'correlation_lost');
+  await writer.append({
+    type:
+      observation.kind === 'message'
+        ? observation.direction === 'client'
+          ? 'net.request'
+          : 'net.response'
+        : 'note',
+    actor: observation.direction === 'client' ? 'agent' : 'agenticreplay',
+    occurredAt: new Date(observation.observedAt),
+    attrs: {
+      ...metadata,
+      connection_id: observation.connectionId,
+      transport: 'websocket',
+      scope: 'connection',
+      correlation: observation.state,
+      capture_incomplete: incomplete,
+      ...(observation.omission ? { capture_reason: observation.omission } : {}),
+    },
+    ...(payload === undefined ? {} : { payload }),
+    ...(observation.omission
+      ? {
+          transformations: [
+            {
+              kind: 'omission',
+              location: 'payload',
+              rule: 'capture_limit',
+              count: 1,
+              reason: observation.omission,
+            },
+          ],
+        }
+      : {}),
+  });
 }
 
 export async function persistNetRequestStart(
@@ -389,6 +457,22 @@ export async function persistNetExchange(
   turn: number,
   exchange: NetExchange,
 ): Promise<void> {
+  // Connection observations own ambiguous payloads. A request ID is not proof of a reply.
+  if (exchange.correlation === 'lost') {
+    writer.markCaptureIncomplete('correlation_lost');
+    await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      turn,
+      attrs: {
+        rule: 'correlation_lost',
+        connection_id: exchange.connectionId,
+        request_id: exchange.requestId,
+        capture_incomplete: true,
+      },
+    });
+    return;
+  }
   const failedBeforeHeaders =
     exchange.status === 0 && Boolean(exchange.responseError) && exchange.responseBytes === 0;
   const incomplete =
@@ -419,6 +503,9 @@ export async function persistNetExchange(
       port: exchange.port,
       method: exchange.method,
       ...(exchange.transport === undefined ? {} : { transport: exchange.transport }),
+      ...(exchange.connectionId
+        ? { connection_id: exchange.connectionId, correlation: exchange.correlation }
+        : {}),
       path: exchange.path,
       ...(exchange.alpn === undefined ? {} : { alpn: exchange.alpn }),
       // Absent means intercepted — every exchange the interceptor produces. The proxy's plaintext
@@ -428,6 +515,7 @@ export async function persistNetExchange(
       headers: exchange.requestHeaders,
       bytes: exchange.requestBytes,
       truncated: exchange.requestTruncated,
+      ...(exchange.captureReasons ? { capture_reasons: exchange.captureReasons } : {}),
     },
     ...(exchange.requestTruncated
       ? {
@@ -453,12 +541,18 @@ export async function persistNetExchange(
       request_id: exchange.requestId,
       capture_incomplete: incomplete,
       response_complete: exchange.responseComplete,
-      transport_outcome: exchange.abandoned
-        ? 'client_aborted'
-        : exchange.responseError
-          ? 'origin_error'
-          : 'completed',
+      transport_outcome: exchange.captureReasons?.length
+        ? exchange.captureReasons[0]
+        : exchange.abandoned
+          ? 'client_aborted'
+          : exchange.responseError
+            ? 'origin_error'
+            : 'completed',
       ...(exchange.responseError ? { error: exchange.responseError } : {}),
+      ...(exchange.captureReasons ? { capture_reasons: exchange.captureReasons } : {}),
+      ...(exchange.connectionId
+        ? { connection_id: exchange.connectionId, correlation: exchange.correlation }
+        : {}),
       host: exchange.host,
       port: exchange.port,
       status: exchange.status,
@@ -479,6 +573,7 @@ export async function persistNetExchange(
     },
     ...(exchange.responseTruncated
       ? {
+          ...(exchange.responseBody ? { payload: exchange.responseBody } : {}),
           transformations: [
             ...responseChanges,
             {
@@ -496,6 +591,7 @@ export async function persistNetExchange(
   // An unfinished Codex stream stays out of exact replay, but can carry usable summary text.
   const codex = codexDialect();
   if (
+    exchange.correlation !== 'unconfirmed' &&
     !exchange.responseComplete &&
     !exchange.responseTruncated &&
     exchange.responseBody &&

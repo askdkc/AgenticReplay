@@ -18,6 +18,7 @@ import {
   setupTlsCapture,
   persistNetRequestStart,
   persistNetExchange,
+  persistWebSocketObservation,
 } from '../tls-capture.js';
 import { upstreamPlan } from '../upstream.js';
 import { openCodexTurnCapture } from '../codex-turn-capture.js';
@@ -165,6 +166,10 @@ async function runAttached(
     onNetExchange: (exchange) => {
       desktopTurns?.finish(exchange);
       finish(exchange);
+    },
+    onWebSocketObservation: async (observation) => {
+      if (desktopTurns) await desktopTurns.observeWebSocket(observation);
+      else await persistWebSocketObservation(writer, observation);
     },
   });
   if (tls.ca) minted.push(tls.ca);

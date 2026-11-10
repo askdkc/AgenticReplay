@@ -556,6 +556,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // traffic instead, which is what it is.
     if (
       dialect &&
+      exchange.correlation !== 'lost' &&
+      exchange.correlation !== 'unconfirmed' &&
       (exchange.method === 'POST' || exchange.transport === 'websocket') &&
       !exchange.requestTruncated &&
       exchange.responseComplete &&
@@ -1737,13 +1739,15 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           },
         }
       : {}),
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
         // Tunnels and decrypted sessions are long-lived by design, and `close` waits for every
         // open connection. Without this a recorded run would hang on exit behind an agent's idle
         // keep-alive socket.
         interception?.close();
         (server as Server).close((err) => (err ? reject(err) : resolve()));
-      }),
+      });
+      await interception?.drain();
+    },
   };
 }

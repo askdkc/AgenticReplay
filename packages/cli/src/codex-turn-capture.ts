@@ -9,6 +9,8 @@ import {
   type NetExchange,
   type NetRequest,
   type RecordedExchange,
+  type InterceptFailure,
+  type WebSocketObservation,
 } from '@agenticreplay/proxy';
 import {
   appendDerivedEvents,
@@ -17,6 +19,7 @@ import {
 } from './exchange-events.js';
 import { persistNetExchange } from './tls-capture.js';
 import { AGENTICREPLAY_VERSION } from './version.js';
+import { openWebSocketCapture } from './websocket-capture.js';
 
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && /^[\w-]{1,128}$/u.test(value);
@@ -58,7 +61,14 @@ function turnIdentity(request: NetRequest) {
 const codexRequest = codexDialect().toCanonicalRequest;
 
 function readUnpromotedRequest(exchange: NetExchange) {
-  if (exchange.modelDialect || exchange.requestTruncated || !exchange.requestBody) return;
+  if (
+    exchange.correlation === 'lost' ||
+    exchange.correlation === 'unconfirmed' ||
+    exchange.modelDialect ||
+    exchange.requestTruncated ||
+    !exchange.requestBody
+  )
+    return;
   try {
     return codexRequest(JSON.parse(exchange.requestBody));
   } catch {
@@ -77,12 +87,14 @@ interface CapturedTurn {
   root: string;
   open: Set<string>;
   awaitingModel: Set<string>;
+  connections: Set<string>;
   writer: Promise<TraceWriter>;
   writerFailed: boolean;
   deriver: ExchangeEventDeriver;
   writes: Promise<void>;
   exchanges: number;
   broken: boolean;
+  captureFailures: Set<'save_failed' | 'buffer_limit'>;
   needsContinuation: boolean;
   sealed?: Promise<string | null>;
 }
@@ -129,6 +141,7 @@ async function openCapture(
     worktrees,
   );
   const turns = new Map<string, CapturedTurn>();
+  const connections = openWebSocketCapture(join(parent, 'websocket-captures'));
   const attempts = new Map<string, CapturedTurn>();
   const settled = new Map<
     string,
@@ -163,6 +176,7 @@ async function openCapture(
   ) => {
     if (buffered + bytes > (options.maxBufferedBytes ?? 256 * 1024 * 1024)) {
       turn.broken = true;
+      turn.captureFailures.add('buffer_limit');
       return;
     }
     buffered += bytes;
@@ -171,6 +185,7 @@ async function openCapture(
       .then(async () => write(await writer))
       .catch(() => {
         turn.broken = true;
+        turn.captureFailures.add('save_failed');
       })
       .finally(() => {
         buffered -= bytes;
@@ -181,6 +196,15 @@ async function openCapture(
     const result = (async () => {
       await turn.writes;
       const writer = await turn.writer;
+      for (const reason of turn.captureFailures) {
+        writer.markCaptureIncomplete(reason);
+        if (!writer.hasEnded)
+          await writer.append({
+            type: 'note',
+            actor: 'agenticreplay',
+            attrs: { reason, capture_incomplete: true },
+          });
+      }
       const complete =
         turn.completion === 'completed' &&
         !turn.broken &&
@@ -252,12 +276,14 @@ async function openCapture(
       ...(receipt.outcome ? { completion: receipt.outcome } : {}),
       open: new Set(),
       awaitingModel: new Set(),
+      connections: new Set(),
       deriver: new ExchangeEventDeriver(),
       writer: Promise.resolve(undefined as never),
       writerFailed: false,
       writes: Promise.resolve(),
       exchanges: 0,
       broken: recovered,
+      captureFailures: new Set(),
       needsContinuation: false,
     };
     initializeWriter(turn, recovered);
@@ -315,6 +341,7 @@ async function openCapture(
     })();
     void turn.writer.catch(() => {
       turn.broken = true;
+      turn.captureFailures.add('save_failed');
       turn.writerFailed = true;
     });
   }
@@ -482,6 +509,25 @@ async function openCapture(
   }, 1000);
   recoveryTimer.unref();
   return {
+    observeWebSocket(observation: WebSocketObservation) {
+      return connections.write(observation);
+    },
+    failure(failure: InterceptFailure) {
+      // No nearest-turn fallback: only turns that actually used this connection are affected.
+      for (const turn of turns.values()) {
+        if (!failure.connectionId || !turn.connections.has(failure.connectionId) || turn.sealed)
+          continue;
+        turn.broken = true;
+        enqueue(turn, async (writer) => {
+          writer.markCaptureIncomplete(failure.code ?? 'transport_interception_failed');
+          await writer.append({
+            type: 'note',
+            actor: 'agenticreplay',
+            attrs: { ...failure, capture_incomplete: true },
+          });
+        });
+      }
+    },
     start(request: NetRequest) {
       if (closing || (options.requireWorkspace && request.codexWarmup)) return;
       const identity = turnIdentity(request);
@@ -528,6 +574,8 @@ async function openCapture(
         turn = activate(receipt, previous !== undefined);
       }
       if (turn.sealed) return;
+      if (request.connectionId) turn.connections.add(request.connectionId);
+      if (request.correlation === 'lost') turn.broken = true;
       turn.open.add(request.requestId);
       turn.awaitingModel.add(request.requestId);
       attempts.set(request.requestId, turn);
@@ -606,6 +654,7 @@ async function openCapture(
           }
         }
         await Promise.all(sealing);
+        await connections.close();
         return { modelExchanges, completeTurns };
       })());
     },

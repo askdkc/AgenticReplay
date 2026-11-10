@@ -471,7 +471,11 @@ it.each(['same-process', 'restart'])(
         );
       }
       expect(await f.notify()).toMatchObject({ status: 'finalized', capture: 'incomplete' });
-      expect((await f.read()).events.map((e) => e.type)).toEqual(['run.start', 'run.end']);
+      const events = (await f.read()).events;
+      expect(events.map((e) => e.type)).toEqual(
+        mode === 'same-process' ? ['run.start', 'note', 'run.end'] : ['run.start', 'run.end'],
+      );
+      if (mode === 'same-process') expect(events[1]?.attrs?.reason).toBe('save_failed');
     } finally {
       spy.mockRestore();
       await reopened?.close();

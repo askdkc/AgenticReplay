@@ -221,7 +221,7 @@ it.each(['normal', 'compaction', 'interrupted', 'retry'] as const)(
         trustedOriginCerts: [await readFile(ca.certPath, 'utf8')],
         onNetExchange(exchange) {
           turns.finish(exchange);
-          if (exchange.abandoned) disconnected.resolve();
+          if (exchange.captureReasons?.includes('connection_closed')) disconnected.resolve();
         },
       },
       onRequestStart: turns.start,
