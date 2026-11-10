@@ -108,7 +108,7 @@ jobs:
       # failed, so a contributor can run the suite without all of them.
       - run: >
           pip install openai anthropic litellm langgraph langchain-openai browser-use haystack-ai
-          crewai openai-agents openhands-sdk llama-index-core llama-index-llms-openai
+          crewai openai-agents openhands-sdk llama-index-core llama-index-llms-openai mcp
       # Mastra is the one framework here that is JS, and it is 130 MB — more than this repo's whole
       # dependency tree. `--no-save` keeps it out of package.json so it costs this job and nothing
       # else: no npm ci anywhere else gets slower, and a contributor who has not run this line gets

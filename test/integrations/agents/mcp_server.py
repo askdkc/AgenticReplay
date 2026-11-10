@@ -5,9 +5,15 @@ the replay, not the tool. `lookup` answers from its argument so a replay that se
 recorded frame is visible in the output rather than only in a count.
 """
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.mcpserver import MCPServer
+except ModuleNotFoundError as error:
+    if error.name != "mcp.server.mcpserver":
+        raise
+    # MCP 1.x used FastMCP; 2.x renamed it to MCPServer.
+    from mcp.server.fastmcp import FastMCP as MCPServer
 
-app = FastMCP("agenticreplay-check")
+app = MCPServer("agenticreplay-check")
 
 
 @app.tool()
