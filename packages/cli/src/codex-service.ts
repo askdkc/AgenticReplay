@@ -15,6 +15,7 @@ import {
 } from './codex-service-config.js';
 import { openCodexWorktreeCapture } from './codex-turn-capture.js';
 import { reviewRepository } from './review-store.js';
+import { isVersionedServicePath, resolveServiceNode } from './codex-service-launch.js';
 
 const label = 'io.github.askdkc.agenticreplay.codex-dock';
 const exec = promisify(execFile);
@@ -248,6 +249,11 @@ async function stopService() {
 async function register(paths: Paths, cwd: string, configOption?: string) {
   const configPath = configOption === undefined ? codexProfile() : resolve(cwd, configOption);
   const root = await reviewRepository(cwd);
+  const entry = process.argv[1];
+  if (!entry) throw new Error('The installed AgenticReplay CLI path could not be determined.');
+  if (isVersionedServicePath(resolve(entry)))
+    throw new Error('Register using an AgenticReplay installation at a stable, unversioned path.');
+  const plist = launchPlist(resolve(entry), await resolveServiceNode(process.env.PATH ?? ''));
   await withLock(paths, async () => {
     const existing = await readState(paths);
     if (existing) {
@@ -260,15 +266,30 @@ async function register(paths: Paths, cwd: string, configOption?: string) {
       const added = !existing.worktrees.includes(root);
       if (added && existing.worktrees.length >= 64)
         throw new Error('Too many registered Git worktrees.');
-      if (added) await saveState(paths, { ...existing, worktrees: [...existing.worktrees, root] });
+      // launchd caches ProgramArguments. Updating the file then kickstarting the old job
+      // would still execute its deleted runtime; unload before installing the replacement.
+      const launchChanged = existing.plistDigest !== digest(plist);
+      let current = existing;
+      if (launchChanged) {
+        const previousPlist = await readFile(paths.plist, 'utf8');
+        await stopService();
+        try {
+          await writeFile(paths.plist, plist, { mode: 0o600 });
+          current = { ...existing, plistDigest: digest(plist) };
+          await saveState(paths, current);
+        } catch (error) {
+          await writeFile(paths.plist, previousPlist, { mode: 0o600 });
+          throw error;
+        }
+      }
+      if (added) await saveState(paths, { ...current, worktrees: [...current.worktrees, root] });
       try {
         await startService(paths, added || !(await canReview(paths.socket)));
         if (configStatus === 'clear')
           await setCodexServiceEndpoint(configPath, existing.port, true);
       } catch (error) {
         if (added) {
-          await saveState(paths, existing);
-          await startService(paths, true);
+          await saveState(paths, current);
         }
         throw error;
       }
@@ -280,9 +301,6 @@ async function register(paths: Paths, cwd: string, configOption?: string) {
       );
     if (await launchLoaded())
       throw new Error('A Codex service already uses this LaunchAgent label.');
-    const entry = process.argv[1];
-    if (!entry) throw new Error('The installed AgenticReplay CLI path could not be determined.');
-    const plist = launchPlist(resolve(entry), process.execPath);
     const state: ServiceState = {
       version: 1,
       configPath,

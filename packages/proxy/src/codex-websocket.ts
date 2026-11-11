@@ -15,6 +15,13 @@ const { Receiver } = ws as typeof ws & {
 };
 const TURN = 'x-codex-turn-metadata';
 const TERMINAL = new Set(['response.completed', 'response.failed', 'response.incomplete', 'error']);
+// Codex sends these connection-level notifications before response.created, between
+// response events, and after a terminal. They do not identify a model response.
+const CONNECTION_NOTIFICATIONS = new Set([
+  'codex.rate_limits',
+  'codex.response.metadata',
+  'responsesapi.websocket_timing',
+]);
 const CLIENT_TOOL_CALLS = new Set([
   'function_call',
   'custom_tool_call',
@@ -328,6 +335,10 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
     response(bytes: Buffer, binary: boolean) {
       if (state === 'closed') return;
       const message = binary ? undefined : parseMessage(bytes);
+      if (typeof message?.type === 'string' && CONNECTION_NOTIFICATIONS.has(message.type)) {
+        observe('server', 'message', bytes, { representation: 'text' });
+        return;
+      }
       const response = message?.response as Record<string, unknown> | undefined;
       const id = response?.id ?? message?.response_id;
       const item = message?.item as Record<string, unknown> | undefined;

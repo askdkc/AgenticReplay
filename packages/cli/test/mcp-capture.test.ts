@@ -96,6 +96,8 @@ describe('mcp capture', () => {
 
   it('records the JSON-RPC the agent exchanged with the server', async () => {
     const result = await record();
+    const generated = JSON.parse(await readFile(join(result.runDir, 'mcp-config.json'), 'utf8'));
+    expect(generated.mcpServers.echo.command).toBe('node');
     const events = await (await TraceReader.open(result.runDir)).events();
     const mcp = events.filter((e) => e.type === 'mcp.request' || e.type === 'mcp.response');
 

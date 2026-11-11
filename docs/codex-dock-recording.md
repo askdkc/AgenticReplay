@@ -13,6 +13,15 @@ The service binds IPv4 loopback and forwards API traffic to ChatGPT over verifie
 
 The service uses a user LaunchAgent and is restarted by launchd. No system proxy, custom app launcher, or installed certificate is required. The owner-only review socket is under `~/.agenticreplay/codex-dock/`. Query it with one newline-terminated JSON object `{cwd, sessionId, turnId}`. A complete recording returns `{status:"sealed", traceDirectory}`. An unfinished or not-yet-seen turn returns `pending`. A rejected scope or a capture that cannot prove a complete exchange returns `unavailable`. The live lookup cache is bounded. A recorder restart may make an earlier identity undiscoverable through the socket even though its trace files are still on disk.
 
+Registration uses a stable Node launcher from `PATH`, such as `/opt/homebrew/bin/node`,
+and preserves that symlink instead of saving its version-specific target. The CLI
+installation must also have a stable path. Versioned runtime locations are rejected.
+Normal Node updates can replace the symlink target without changing the service.
+For an older registration that saved a deleted runtime, run `register` again from
+an authorized worktree. It refreshes the owned launch definition and reloads it in
+launchd, preserving the profile, service port, and registered worktrees. Repeating
+registration with the same launch definition does not restart a healthy service.
+
 The explicit `record codex --desktop` command can launch the app and use the active service for a registered worktree. With the service disabled, it uses the scoped recorder for the launched process. Per-run TLS flags apply to the scoped recorder.
 
 To remove the service, quit Codex first so the current process releases the old endpoint, then run:

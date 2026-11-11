@@ -4,6 +4,12 @@ WebSocket forwarding, connection evidence, and request/response correlation are
 separate. A recorder failure does not disconnect a live socket. Ambiguous traffic
 is never promoted into model, thinking, or tool events.
 
+Codex's `codex.rate_limits`, `codex.response.metadata`, and
+`responsesapi.websocket_timing` notifications are retained as connection evidence.
+They do not identify a model response and do not change request correlation, even
+when they arrive before a warmup response or after its terminal event. Unknown
+messages still follow the correlation checks below.
+
 The Dock service writes connection traces under
 `~/.agenticreplay/codex-dock/websocket-captures/`. An attached recorder with a Codex
 review socket uses `websocket-captures/` beside that socket. These traces belong

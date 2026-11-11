@@ -62,6 +62,13 @@ describe('shell shim', () => {
     await rm(runDir, { recursive: true, force: true });
   });
 
+  it('saves a PATH-resolved node command instead of the current runtime target', async () => {
+    const file = join(shim.dir, process.platform === 'win32' ? 'sh.cmd' : 'sh');
+    const script = await readFile(file, 'utf8');
+    expect(script).not.toContain(process.execPath);
+    expect(script).toContain(process.platform === 'win32' ? '"node"' : "'node'");
+  });
+
   /** Run a command through a PATH that has the shim directory first, as `agenticreplay record` does. */
   async function through(command: string, args: string[]) {
     return run(command, args, {

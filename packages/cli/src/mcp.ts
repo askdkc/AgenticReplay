@@ -131,7 +131,7 @@ export async function setupMcpCapture(opts: {
   const framesPath = join(opts.runDir, 'mcp-frames.jsonl');
   const shim = resolveShimEntry();
   const shimArgs = [shim, '--out', framesPath];
-  const { config, rewritten, skipped } = rewriteMcpConfig(parsed, process.execPath, shimArgs);
+  const { config, rewritten, skipped } = rewriteMcpConfig(parsed, 'node', shimArgs);
 
   const configPath = join(opts.runDir, 'mcp-config.json');
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });

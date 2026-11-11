@@ -81,7 +81,8 @@ export async function installShellShim(options: InstallOptions): Promise<Install
   await mkdir(dir, { recursive: true });
 
   const runner = await resolveRunnerBin();
-  const node = process.execPath;
+  // Resolve Node when the shim runs, so a runtime update cannot leave a saved Cellar path.
+  const node = 'node';
   const windows = process.platform === 'win32';
 
   for (const name of shims) {

@@ -45,6 +45,38 @@ function fixture(
   return { capture, exchanges, observations, held: () => held };
 }
 
+it('keeps Codex connection notifications separate from warmup and model responses', async () => {
+  const { capture, exchanges, observations } = fixture();
+  const notifications = [
+    { type: 'codex.rate_limits', rate_limits: {} },
+    { type: 'codex.response.metadata', headers: {} },
+    { type: 'responsesapi.websocket_timing', timing_metrics: { response_id: 'warmup' } },
+  ];
+  capture.response(encode(notifications[0]), false);
+  capture.request(encode({ type: 'response.create', generate: false, input: [] }), false);
+  capture.response(encode(notifications[0]), false);
+  capture.response(encode(notifications[1]), false);
+  capture.response(encode({ type: 'response.created', response: { id: 'warmup' } }), false);
+  capture.response(encode(notifications[2]), false);
+  capture.response(terminal('warmup'), false);
+  capture.response(encode(notifications[2]), false);
+  capture.request(create(), false);
+  capture.response(encode(notifications[0]), false);
+  capture.response(encode(notifications[1]), false);
+  capture.response(encode({ type: 'response.created', response: { id: 'answer' } }), false);
+  capture.response(terminal('answer'), false);
+  capture.close();
+  await capture.drained;
+  expect(exchanges).toHaveLength(2);
+  expect(exchanges.every((e) => e.responseComplete && e.correlation === 'matched')).toBe(true);
+  expect(exchanges[0]?.codexWarmup).toBe(true);
+  expect(observations.some((e) => e.state === 'lost')).toBe(false);
+  for (const notification of notifications) {
+    expect(observations.some((e) => e.payload === JSON.stringify(notification))).toBe(true);
+    expect(exchanges.every((e) => !e.responseBody?.includes(notification.type))).toBe(true);
+  }
+});
+
 it('drains a normal cancellation by its known response ID and retains the incomplete exchange', async () => {
   const { capture, exchanges, observations, held } = fixture();
   capture.request(create(), false);
