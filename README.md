@@ -69,3 +69,10 @@ Kiokuko host integration.
 ## License
 
 Apache-2.0. Trace specification: CC BY 4.0.
+
+### ChatGPT conversations and turn receipts
+
+Ordinary ChatGPT conversation capture is currently **unsupported**: no official host
+lifecycle connector has been verified. Codex runtime capture is a separate path.
+See [turn receipts and verification limits](docs/turn-receipts.md) for the shared
+schema, local receipt protocol, retention, and outstanding Kiokuko integration.

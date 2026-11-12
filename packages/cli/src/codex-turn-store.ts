@@ -1,3 +1,4 @@
+import { assertTurnReceipt, type TurnReceipt as SharedTurnReceipt } from '@agenticreplay/schema';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, lstat, readdir, readFile, open, rename, rm, realpath } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -10,7 +11,10 @@ export interface TurnReceipt {
   runDir: string;
   createdAt: string;
   state: 'active' | 'finalized';
-  outcome?: 'completed' | 'interrupted';
+  outcome?: 'completed' | 'interrupted' | 'failed';
+  requestIds?: string[];
+  requestIdsTruncated?: boolean;
+  receipt?: SharedTurnReceipt;
   capture?: 'complete' | 'incomplete';
 }
 
@@ -32,7 +36,7 @@ export async function openTurnStore(directory: string, worktrees: ReadonlyMap<st
     if (!/^[a-f0-9]{64}\.json$/u.test(entry)) continue;
     const file = join(directory, entry);
     const stat = await lstat(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192 || (stat.mode & 0o077) !== 0)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536 || (stat.mode & 0o077) !== 0)
       throw new Error('unsafe turn receipt');
     const r = JSON.parse(await readFile(file, 'utf8')) as TurnReceipt;
     if (
@@ -41,12 +45,32 @@ export async function openTurnStore(directory: string, worktrees: ReadonlyMap<st
       filename(r.key) !== entry ||
       !/^run_[a-f0-9]{6,32}$/u.test(r.runId) ||
       typeof r.runDir !== 'string' ||
+      (r.requestIds !== undefined &&
+        (!Array.isArray(r.requestIds) ||
+          r.requestIds.length > 32 ||
+          r.requestIds.some((id) => typeof id !== 'string' || !/^[\w-]{1,128}$/u.test(id)))) ||
       !['active', 'finalized'].includes(r.state) ||
-      (r.outcome !== undefined && r.outcome !== 'completed' && r.outcome !== 'interrupted') ||
+      (r.outcome !== undefined &&
+        r.outcome !== 'completed' &&
+        r.outcome !== 'interrupted' &&
+        r.outcome !== 'failed') ||
       (r.state === 'finalized' &&
         (!r.outcome || !['complete', 'incomplete'].includes(r.capture ?? '')))
     )
       throw new Error('invalid turn receipt');
+    if (r.receipt !== undefined) {
+      assertTurnReceipt(r.receipt);
+      if (
+        r.state !== 'finalized' ||
+        r.receipt.source !== 'codex-runtime' ||
+        JSON.stringify([r.receipt.sessionId, r.receipt.turnId]) !== r.key ||
+        r.receipt.recording.runId !== r.runId ||
+        r.receipt.recording.directory !== r.runDir ||
+        r.receipt.outcome !== r.outcome ||
+        r.receipt.capture !== r.capture
+      )
+        throw new Error('turn receipt identity mismatch');
+    }
     const runs = worktrees.get(r.root);
     if (runs === undefined) continue;
     if (dirname(r.runDir) !== runs) throw new Error('turn receipt scope mismatch');
@@ -56,7 +80,8 @@ export async function openTurnStore(directory: string, worktrees: ReadonlyMap<st
   return {
     receipts,
     save(receipt: TurnReceipt): Promise<void> {
-      const snapshot = { ...receipt };
+      const snapshot = structuredClone(receipt);
+      if (snapshot.receipt) assertTurnReceipt(snapshot.receipt);
       const result = writes.then(async () => {
         const target = join(directory, filename(snapshot.key));
         const temporary = target + '.' + randomBytes(6).toString('hex') + '.tmp';

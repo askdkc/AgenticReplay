@@ -370,8 +370,20 @@ async function serve(paths: Paths) {
       if (errno(error) !== 'ENOENT') throw error;
     }
     // A host may reconnect as soon as the HTTP port opens, including during service restart.
-    // Its first frame must already have a durable capture owner.
-    turns = await openCodexWorktreeCapture(paths.socket, worktrees);
+    // Initialize capture first; if unavailable, explicitly degrade to relay-only service.
+    try {
+      turns = await openCodexWorktreeCapture(paths.socket, worktrees);
+    } catch {
+      // Recorder storage/socket failure must not disable the configured model relay.
+      process.stderr.write(
+        JSON.stringify({
+          event: 'codex.capture_unavailable',
+          capture: 'disabled',
+          relay: 'continuing',
+          retry: 'restart-recorder',
+        }) + '\n',
+      );
+    }
     proxy = await createProxy({
       host: '127.0.0.1',
       port: state.port,

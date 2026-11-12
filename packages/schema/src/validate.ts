@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
+import type { TurnReceipt } from './turn-receipt.js';
 import type { Manifest, TraceEvent } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -57,4 +58,17 @@ export function assertManifest(value: unknown): asserts value is Manifest {
   }
   const r = validateManifest(value);
   if (!r.valid) throw new Error(`invalid manifest: ${r.errors.join('; ')}`);
+}
+
+export const turnReceiptSchema = require('../schema/turn-receipt.schema.json') as Record<
+  string,
+  unknown
+>;
+const validateTurnReceiptFn = ajv.compile(turnReceiptSchema);
+export function validateTurnReceipt(value: unknown): ValidationResult {
+  return toResult(validateTurnReceiptFn(value) as boolean, validateTurnReceiptFn.errors);
+}
+export function assertTurnReceipt(value: unknown): asserts value is TurnReceipt {
+  const result = validateTurnReceipt(value);
+  if (!result.valid) throw new Error('invalid turn receipt: ' + result.errors.join('; '));
 }

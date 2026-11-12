@@ -187,7 +187,15 @@ async function runAttached(
     attrs: { adapter: adapter.id, cwd, attached: true },
   });
 
-  desktopTurns = reviewSocket ? await openCodexTurnCapture(reviewSocket, cwd, dir) : undefined;
+  if (reviewSocket) {
+    try {
+      desktopTurns = await openCodexTurnCapture(reviewSocket, cwd, dir);
+    } catch {
+      out.warn('codex.capture_unavailable', {
+        next: 'Turn receipts unavailable; relay continues. Restart after fixing recorder storage/socket access.',
+      });
+    }
+  }
   const proxy = await createProxy({
     retainExchanges: false,
     host: bind,

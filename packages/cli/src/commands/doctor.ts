@@ -56,6 +56,12 @@ export async function doctorCommand(
 
   const checks: DoctorCheck[] = [
     checkNode(),
+    {
+      name: 'ChatGPT conversation capture',
+      status: 'warn',
+      detail: 'unsupported — no verified official host lifecycle connector; real-host E2E not run',
+      fix: 'Codex runtime capture is separate. Do not intercept /f/conversation or copy credentials.',
+    },
     git.check,
     await checkWorkspace(cwd, git.available),
     writable.check,

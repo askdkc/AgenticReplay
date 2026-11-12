@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenticreplay.dev/schema/turn-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "receiptId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source": {
+      "enum": ["codex-runtime", "chatgpt-host"]
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[\\w-]{1,128}$"
+    },
+    "turnId": {
+      "type": "string",
+      "pattern": "^[\\w-]{1,128}$"
+    },
+    "branchId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[\\w-]{1,128}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scope": {
+      "enum": ["user", "background", "subagent", "unknown"]
+    },
+    "requestIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[\\w-]{1,128}$"
+      },
+      "maxItems": 32,
+      "uniqueItems": true
+    },
+    "identityComplete": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "enum": ["completed", "interrupted", "failed"]
+    },
+    "evidence": {
+      "const": "host-notification"
+    },
+    "recording": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^run_[a-f0-9]{6,32}$"
+        },
+        "directory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "eventsSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": ["runId", "directory", "eventsSha256"]
+    },
+    "capture": {
+      "enum": ["complete", "incomplete"]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "source",
+    "sessionId",
+    "turnId",
+    "branchId",
+    "scope",
+    "requestIds",
+    "identityComplete",
+    "outcome",
+    "evidence",
+    "recording",
+    "capture"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "identityComplete": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "branchId": {
+            "type": "string",
+            "pattern": "^[\\w-]{1,128}$"
+          },
+          "scope": {
+            "enum": ["user", "background", "subagent"]
+          },
+          "requestIds": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

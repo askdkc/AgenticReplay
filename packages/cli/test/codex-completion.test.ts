@@ -649,3 +649,103 @@ it.each(['completed', 'interrupted', 'competing-interrupt'])(
     }
   },
 );
+
+it('exposes an immutable common receipt only after explicit host completion', async () => {
+  const f = await fixture();
+  let reopened: Awaited<ReturnType<typeof openCodexWorktreeCapture>> | undefined;
+  try {
+    f.capture.start(f.request);
+    f.capture.model(f.model);
+    f.capture.finish(f.net);
+    expect(await f.notify({ action: 'receipt' })).toEqual({ status: 'pending' });
+    expect(await f.notify({ sessionId: 'other' })).toEqual({ status: 'pending' });
+    expect(await f.notify({ turnId: 'parallel' })).toEqual({ status: 'pending' });
+    await f.notify();
+    const first = await f.notify({ action: 'receipt' });
+    expect(first).toMatchObject({
+      status: 'finalized',
+      receipt: {
+        schemaVersion: 1,
+        source: 'codex-runtime',
+        sessionId: 'chat',
+        turnId: 'turn',
+        requestIds: ['req-1'],
+        scope: 'unknown',
+        branchId: null,
+        identityComplete: false,
+        outcome: 'completed',
+        capture: 'complete',
+      },
+    });
+    const { assertTurnReceipt, matchesUserTurn } = await import('@agenticreplay/schema');
+    const receipt = (first as any).receipt;
+    assertTurnReceipt(receipt);
+    expect(
+      matchesUserTurn(receipt, {
+        source: 'codex-runtime',
+        sessionId: 'chat',
+        turnId: 'turn',
+        branchId: null,
+      }),
+    ).toBe(false);
+    const { createHash } = await import('node:crypto');
+    expect(receipt.recording.eventsSha256).toBe(
+      createHash('sha256')
+        .update(await readFile(join(receipt.recording.directory, 'events.jsonl')))
+        .digest('hex'),
+    );
+    expect(await f.notify({ action: 'receipt' })).toEqual(first);
+    await f.capture.close();
+    reopened = await openCodexWorktreeCapture(
+      join(f.root, 'turn.sock'),
+      new Map([[f.root, f.root]]),
+    );
+    expect(await f.notify({ action: 'receipt' })).toEqual(first);
+    expect(await f.notify({ action: 'receipt', cwd: '/tmp/elsewhere' })).toEqual({
+      status: 'unavailable',
+    });
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+
+it.each(['failed', 'interrupted'])(
+  'does not promote %s to completed, including after restart',
+  async (outcome) => {
+    const f = await fixture();
+    let reopened: Awaited<ReturnType<typeof openCodexWorktreeCapture>> | undefined;
+    try {
+      f.capture.start(f.request);
+      f.capture.model(f.model);
+      f.capture.finish(f.net);
+      expect(await f.notify({ outcome })).toEqual({ status: 'finalized', capture: 'incomplete' });
+      const result = await f.notify({ action: 'receipt' });
+      expect(result).toMatchObject({ receipt: { outcome, capture: 'incomplete' } });
+      expect(await f.notify()).toEqual({ status: 'unavailable' });
+      await f.capture.close();
+      reopened = await openCodexWorktreeCapture(
+        join(f.root, 'turn.sock'),
+        new Map([[f.root, f.root]]),
+      );
+      expect(await f.notify({ action: 'receipt' })).toEqual(result);
+      expect(await f.notify()).toEqual({ status: 'unavailable' });
+    } finally {
+      await reopened?.close();
+      await f.close();
+    }
+  },
+);
+
+it('never accepts the private ChatGPT path as a Codex turn', async () => {
+  const f = await fixture();
+  try {
+    f.capture.start({ ...f.request, path: '/f/conversation' });
+    f.capture.model(f.model);
+    f.capture.finish(f.net);
+    expect(await f.notify()).toEqual({ status: 'pending' });
+    expect(await f.notify({ action: 'receipt' })).toEqual({ status: 'pending' });
+  } finally {
+    await f.close();
+  }
+});

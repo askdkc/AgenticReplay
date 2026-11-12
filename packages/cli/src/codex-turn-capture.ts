@@ -1,4 +1,6 @@
-import { randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import type { TurnReceipt as SharedTurnReceipt } from '@agenticreplay/schema';
+import { createHash, randomBytes } from 'node:crypto';
 import { openTurnStore, type TurnReceipt } from './codex-turn-store.js';
 import { createServer, type Socket } from 'node:net';
 import { chmod, lstat, realpath } from 'node:fs/promises';
@@ -76,7 +78,7 @@ function readUnpromotedRequest(exchange: NetExchange) {
   }
 }
 
-type TurnOutcome = 'completed' | 'interrupted';
+type TurnOutcome = 'completed' | 'interrupted' | 'failed';
 
 interface CapturedTurn {
   key: string;
@@ -231,8 +233,35 @@ async function openCapture(
         turn.endOutcome = turn.completion;
       }
       const manifest = await writer.close();
+      const [sessionId, turnId] = JSON.parse(turn.key) as [string, string];
+      const digest = createHash('sha256');
+      for await (const chunk of createReadStream(join(writer.runDir, 'events.jsonl')))
+        digest.update(chunk);
+      const shared: SharedTurnReceipt = {
+        schemaVersion: 1,
+        receiptId: createHash('sha256')
+          .update(JSON.stringify(['codex-runtime', turn.key, turn.receipt.runId]))
+          .digest('hex'),
+        source: 'codex-runtime',
+        sessionId,
+        turnId,
+        // Current Codex transport metadata does not prove branch or actor scope.
+        branchId: null,
+        scope: 'unknown',
+        identityComplete: false,
+        requestIds: turn.receipt.requestIds ?? [],
+        outcome: turn.completion!,
+        evidence: 'host-notification',
+        recording: {
+          runId: turn.receipt.runId,
+          directory: writer.runDir,
+          eventsSha256: digest.digest('hex'),
+        },
+        capture: manifest.capture?.status === 'complete' ? 'complete' : 'incomplete',
+      };
       const receipt: TurnReceipt = {
         ...turn.receipt,
+        receipt: shared,
         state: 'finalized',
         outcome: turn.completion!,
         capture: manifest.capture?.status === 'complete' ? 'complete' : 'incomplete',
@@ -316,7 +345,9 @@ async function openCapture(
                 if (event.type === 'model.response') turn.exchanges++;
                 if (
                   event.type === 'run.end' &&
-                  (event.attrs?.outcome === 'completed' || event.attrs?.outcome === 'interrupted')
+                  (event.attrs?.outcome === 'completed' ||
+                    event.attrs?.outcome === 'interrupted' ||
+                    event.attrs?.outcome === 'failed')
                 )
                   turn.endOutcome = event.attrs.outcome;
               },
@@ -413,10 +444,13 @@ async function openCapture(
       void (async () => {
         const request = JSON.parse(input) as Record<string, unknown> | null;
         if (
-          (request?.action !== undefined && request.action !== 'finish') ||
+          (request?.action !== undefined &&
+            request.action !== 'finish' &&
+            request.action !== 'receipt') ||
           (request?.action === 'finish' &&
             request.outcome !== 'completed' &&
-            request.outcome !== 'interrupted') ||
+            request.outcome !== 'interrupted' &&
+            request.outcome !== 'failed') ||
           typeof request?.cwd !== 'string' ||
           !worktrees.has(request.cwd) ||
           !identifier(request.sessionId) ||
@@ -427,6 +461,11 @@ async function openCapture(
         if (settled.has(key)) return { status: 'unavailable' };
         const receipt = store.receipts.get(key);
         if (receipt && receipt.root !== request.cwd) return { status: 'unavailable' };
+        if (request.action === 'receipt') {
+          return receipt?.state === 'finalized' && receipt.receipt
+            ? { status: 'finalized', receipt: receipt.receipt }
+            : { status: receipt?.state === 'finalized' ? 'unavailable' : 'pending' };
+        }
         const outcome: TurnOutcome =
           request.action === 'finish' ? (request.outcome as TurnOutcome) : 'completed';
         const reply = (r: TurnReceipt) =>
@@ -451,13 +490,13 @@ async function openCapture(
           if (
             request.action === 'finish' &&
             (!turn.endOutcome || turn.endOutcome === outcome) &&
-            (turn.completion !== 'interrupted' || outcome === 'interrupted')
+            (!turn.completion || turn.completion === 'completed' || turn.completion === outcome)
           )
             await persistCompletion(turn, outcome);
           return { status: 'pending' };
         }
         if (turn.endOutcome && turn.endOutcome !== outcome) return { status: 'unavailable' };
-        if (turn.completion === 'interrupted' && outcome !== 'interrupted')
+        if (turn.completion && turn.completion !== 'completed' && outcome !== turn.completion)
           return { status: 'unavailable' };
         if (turn.sealed) {
           await turn.sealed;
@@ -574,6 +613,16 @@ async function openCapture(
         turn = activate(receipt, previous !== undefined);
       }
       if (turn.sealed) return;
+      const ids = turn.receipt.requestIds ?? [];
+      if (!ids.includes(request.requestId)) {
+        if (ids.length < 32 && identifier(request.requestId)) {
+          turn.receipt = { ...turn.receipt, requestIds: [...ids, request.requestId] };
+        } else turn.receipt = { ...turn.receipt, requestIdsTruncated: true };
+        // Serialized with trace writes; recorder I/O never blocks transport forwarding.
+        enqueue(turn, async () => {
+          await store.save(turn.receipt);
+        });
+      }
       if (request.connectionId) turn.connections.add(request.connectionId);
       if (request.correlation === 'lost') turn.broken = true;
       turn.open.add(request.requestId);
