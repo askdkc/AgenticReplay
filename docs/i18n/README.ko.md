@@ -12,11 +12,7 @@ AgenticReplay는 AI 하네스의 API 통신을 기록해 오류 분석과 개선
 Node.js 24 이상, Git, 사용 설정을 마친 AI 하네스가 필요합니다.
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

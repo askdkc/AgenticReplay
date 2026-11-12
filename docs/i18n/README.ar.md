@@ -14,11 +14,7 @@
 يتطلب Node.js 24 أو أحدث، وGit، وبيئة تشغيل وكلاء ذكاء اصطناعي مُهيّأة للاستخدام.
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

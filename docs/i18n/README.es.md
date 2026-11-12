@@ -14,11 +14,7 @@ cambios en archivos para localizar dónde falló la ejecución.
 Requiere Node.js 24 o posterior, Git y un entorno de ejecución de agentes de IA configurado.
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

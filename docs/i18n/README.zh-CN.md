@@ -12,11 +12,7 @@ AgenticReplay 记录 AI 运行框架的 API 通信，帮助定位问题并改进
 需要 Node.js 24 或更新版本、Git，以及已配置好的 AI 运行框架。
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

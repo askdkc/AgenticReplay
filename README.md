@@ -14,11 +14,7 @@ where a run went wrong.
 Requires Node.js 24+, Git, and a configured AI harness.
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

@@ -14,11 +14,7 @@ Fehlerstelle im Ablauf zu finden.
 Voraussetzung: Node.js 24 oder neuer, Git und ein eingerichteter KI-Harness.
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 

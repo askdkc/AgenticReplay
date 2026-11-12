@@ -12,11 +12,7 @@ AgenticReplay は、AI ハーネスの API 通信を記録し、不具合の調�
 Node.js 24 以降、Git、利用設定済みの AI ハーネスが必要です。
 
 ```console
-git clone https://github.com/askdkc/AgenticReplay.git
-cd AgenticReplay
-npm ci
-npm run build
-npm install -g .
+npm i -g agenticreplay
 agenticreplay doctor
 ```
 
