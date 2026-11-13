@@ -22,7 +22,7 @@ import {
   assertEvent,
   assertManifest,
 } from '@agenticreplay/schema';
-import { BlobStore, sha256File } from './blobs.js';
+import { BlobLimitError, BlobStore, sha256File } from './blobs.js';
 import { REDACTION_POLICY_VERSION, Redactor } from './redaction.js';
 import { captureDirectoryName, firstUserPrompt } from './run-names.js';
 
@@ -80,7 +80,17 @@ export function redactManifest(redactor: Redactor, manifest: Manifest): Manifest
   return scrubbed;
 }
 
+export interface StorageLimits {
+  /** Physical blob file bytes, after compression. */
+  blobBytes?: number;
+  /** Normal events.jsonl bytes; diagnostics have a separate 64 KiB reserve. */
+  eventBytes?: number;
+}
+const DIAGNOSTIC_BYTES = 64 * 1024;
+const END_BYTES = 4096;
+
 export interface TraceWriterInit {
+  storageLimits?: StorageLimits;
   /** Defaults to a fresh `run_<12 hex>`. */
   runId?: string;
   /** A host-generated session title, when available. Never used as a raw filesystem path. */
@@ -131,6 +141,7 @@ export class TraceWriter {
   readonly #runId: string;
   readonly #eventsPath: string;
   readonly #blobs: BlobStore;
+  readonly #eventBytes: number;
   readonly #redactor: Redactor;
   readonly #handle: FileHandle;
   readonly #base: Manifest;
@@ -156,11 +167,13 @@ export class TraceWriter {
     base: Manifest,
     redactor: Redactor,
     handle: FileHandle,
+    limits: StorageLimits = {},
   ) {
     this.#runId = runId;
     this.#runDir = runDir;
     this.#eventsPath = join(runDir, 'events.jsonl');
-    this.#blobs = new BlobStore(join(runDir, 'blobs'));
+    this.#blobs = new BlobStore(join(runDir, 'blobs'), limits.blobBytes);
+    this.#eventBytes = limits.eventBytes ?? 16 * 1024 * 1024;
     this.#redactor = redactor;
     this.#handle = handle;
     this.#base = base;
@@ -171,6 +184,9 @@ export class TraceWriter {
     init: TraceWriterInit,
     recovery?: { onEvent?: (event: TraceEvent) => void },
   ): Promise<TraceWriter> {
+    for (const limit of Object.values(init.storageLimits ?? {})) {
+      if (!Number.isSafeInteger(limit) || limit < 0) throw new Error('invalid storage limit');
+    }
     const runId = init.runId ?? `run_${randomBytes(6).toString('hex')}`;
     if (!RUN_ID_PATTERN.test(runId))
       throw new Error(`not a valid run id: ${JSON.stringify(runId)}`);
@@ -242,7 +258,7 @@ export class TraceWriter {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         }
-        return TraceWriter.resume(runDir, runId, recovery.onEvent);
+        return TraceWriter.resume(runDir, runId, recovery.onEvent, init.storageLimits);
       }
       const events = await lstat(join(runDir, 'events.jsonl')).catch(
         (error: NodeJS.ErrnoException) => {
@@ -257,7 +273,7 @@ export class TraceWriter {
     await atomicTraceFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`);
 
     const handle = await open(join(runDir, 'events.jsonl'), 'a', FILE_MODE);
-    const writer = new TraceWriter(runId, runDir, base, redactor, handle);
+    const writer = new TraceWriter(runId, runDir, base, redactor, handle, init.storageLimits);
     writer.#sessionTitle = title;
     writer.#titlePriority = title.trim() ? 3 : 0;
     return writer;
@@ -268,6 +284,7 @@ export class TraceWriter {
     runDir: string,
     expectedRunId: string,
     onEvent?: (event: TraceEvent) => void,
+    limits?: StorageLimits,
   ): Promise<TraceWriter> {
     const info = await lstat(runDir);
     if (
@@ -301,6 +318,7 @@ export class TraceWriter {
       base,
       new Redactor({ envAllowlist: [] }),
       await open(eventsPath, 'a', FILE_MODE),
+      limits,
     );
     try {
       for await (const line of createInterface({
@@ -548,7 +566,14 @@ export class TraceWriter {
     const seq = this.#seq;
     const removed: string[] = [];
     const transformations: CaptureTransformation[] = [...(init.transformations ?? [])];
+    const before = (await this.#handle.stat()).size;
+    let omission: string | undefined;
     let payload = init.payload;
+    if (before >= this.#eventBytes) {
+      omission = 'event_storage_limit';
+      payload = undefined;
+      this.markCaptureIncomplete(omission);
+    }
     let bodyEvidence: { body_bytes: number; body_sha256: string } | undefined;
     if (payload !== undefined) {
       const json = JSON.stringify(payload);
@@ -582,7 +607,14 @@ export class TraceWriter {
         });
       }
       if (Buffer.byteLength(scrubbed.value) > INLINE_PAYLOAD_LIMIT) {
-        payload = await this.#blobs.put(scrubbed.value, 'application/json');
+        try {
+          payload = await this.#blobs.put(scrubbed.value, 'application/json');
+        } catch (error) {
+          if (!(error instanceof BlobLimitError)) throw error;
+          omission = 'blob_storage_limit';
+          this.markCaptureIncomplete(omission);
+          payload = undefined;
+        }
       } else payload = JSON.parse(scrubbed.value) as Payload;
     }
 
@@ -642,7 +674,7 @@ export class TraceWriter {
         reason: 'secret redaction policy',
       })),
     );
-    const out = JSON.parse(scrubbed.value) as TraceEvent;
+    let out = JSON.parse(scrubbed.value) as TraceEvent;
     if (Object.keys(operationalPaths).length) out.attrs = { ...out.attrs, ...operationalPaths };
     // The complete payload was already scanned above. Scanning it again as part of the envelope
     // doubles work and can apply a different policy to inline and spilled bodies.
@@ -657,10 +689,34 @@ export class TraceWriter {
       ) as CaptureTransformation[];
     }
 
+    if (omission) out.attrs = { ...out.attrs, payload_omitted: omission };
+    let line = `${JSON.stringify(out)}\n`;
+    if (before + Buffer.byteLength(line) > this.#eventBytes) {
+      this.markCaptureIncomplete('event_storage_limit');
+      // Keep a bounded diagnostic, never the unbounded payload/attrs that filled the store.
+      const attrs: Record<string, unknown> = { payload_omitted: omission ?? 'event_storage_limit' };
+      for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
+        const value = out.attrs?.[key];
+        if (typeof value === 'string') attrs[key] = value.slice(0, 96);
+        else if (typeof value === 'number' || typeof value === 'boolean') attrs[key] = value;
+      }
+      out = { seq, ts, mono_us, turn, type: init.type, actor: init.actor, attrs };
+      line = `${JSON.stringify(out)}\n`;
+      const allowance =
+        init.type === 'run.end'
+          ? DIAGNOSTIC_BYTES
+          : init.type === 'error'
+            ? DIAGNOSTIC_BYTES - END_BYTES
+            : END_BYTES;
+      const limit = this.#eventBytes + allowance;
+      if (before + Buffer.byteLength(line) > limit) {
+        this.markCaptureIncomplete('diagnostic_storage_limit');
+        throw new Error('diagnostic storage limit reached');
+      }
+    }
     assertEvent(out);
-    const before = (await this.#handle.stat()).size;
     try {
-      await this.#handle.writeFile(`${JSON.stringify(out)}\n`);
+      await this.#handle.writeFile(line);
     } catch (error) {
       await this.#handle.truncate(before);
       throw error;

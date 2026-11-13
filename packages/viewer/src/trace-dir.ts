@@ -3,10 +3,11 @@
  * @agenticreplay/core: the format is the contract, and a reader that only knows the spec proves it.
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assertManifest, type Manifest, type TraceEvent } from '@agenticreplay/schema';
 import { readCaptureDiagnostic, type CaptureDiagnostic } from './capture-diagnostic.js';
+import { readViewerBlob } from './blob-file.js';
 import { referencedBlobs } from './render.js';
 
 /**
@@ -113,20 +114,12 @@ export async function readTraceDir(
       continue;
     }
     const path = join(runDir, 'blobs', hex.slice(0, 2), hex);
-    let size: number;
-    try {
-      size = (await stat(path)).size;
-    } catch {
-      omittedBlobs += 1;
-      continue;
-    }
-    if (size > budget) {
-      omittedBlobs += 1;
-      continue;
-    }
+    let size = 0;
     let text: string | null;
     try {
-      text = decodeText(await readFile(path));
+      const bytes = await readViewerBlob(path, budget);
+      size = bytes.length;
+      text = decodeText(bytes);
     } catch {
       text = null;
     }

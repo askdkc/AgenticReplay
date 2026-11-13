@@ -529,3 +529,87 @@ describe('TraceWriter.close', () => {
     }
   });
 });
+
+describe('storage budgets and diagnostic reserve', () => {
+  it('omits a blob over the physical budget but preserves its event and completion', async () => {
+    const writer = await TraceWriter.create(runs, { ...INIT, storageLimits: { blobBytes: 0 } });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    const event = await writer.append({
+      type: 'net.response',
+      actor: 'agenticreplay',
+      payload: 'hello '.repeat(2000),
+    });
+    expect(event.payload).toBeUndefined();
+    expect(event.attrs?.payload_omitted).toBe('blob_storage_limit');
+    await writer.append({
+      type: 'error',
+      actor: 'agenticreplay',
+      attrs: { message: 'upstream failed' },
+    });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay', attrs: { exit_code: 1 } });
+    const manifest = await writer.close(1);
+    expect(manifest.capture?.status).toBe('incomplete');
+    expect(manifest.capture?.issues).toContain('blob_storage_limit');
+    expect(manifest.counts?.blobs).toBe(0);
+    expect((await lines(writer)).at(-1)?.attrs?.exit_code).toBe(1);
+  });
+
+  it('reserves termination space even after diagnostics fill, with dense event sequences', async () => {
+    const writer = await TraceWriter.create(runs, { ...INIT, storageLimits: { eventBytes: 0 } });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    let rejected = false;
+    for (let i = 0; i < 600; i++) {
+      try {
+        await writer.append({
+          type: 'error',
+          actor: 'agenticreplay',
+          attrs: { message: 'failure '.repeat(1000) },
+        });
+      } catch (error) {
+        expect(String(error)).toContain('diagnostic storage limit');
+        rejected = true;
+        break;
+      }
+    }
+    expect(rejected).toBe(true);
+    await writer.append({
+      type: 'run.end',
+      actor: 'agenticreplay',
+      attrs: { reason: 'provider failed', exit_code: 2 },
+    });
+    await writer.close(2);
+    const events = await lines(writer);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
+    expect(events.at(-1)?.attrs?.reason).toBe('provider failed');
+    expect((await stat(join(writer.runDir, 'events.jsonl'))).size).toBeLessThanOrEqual(64 * 1024);
+  });
+});
+
+it('does not let ordinary overflow events consume the error reserve', async () => {
+  const writer = await TraceWriter.create(runs, { ...INIT, storageLimits: { eventBytes: 0 } });
+  await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+  let rejected = false;
+  for (let i = 0; i < 100; i++) {
+    try {
+      await writer.append({ type: 'note', actor: 'agenticreplay' });
+    } catch {
+      rejected = true;
+      break;
+    }
+  }
+  expect(rejected).toBe(true);
+  const error = await writer.append({
+    type: 'error',
+    actor: 'agenticreplay',
+    attrs: { message: 'original upstream failure' },
+  });
+  expect(error.attrs?.message).toBe('original upstream failure');
+  // Even control characters cannot make the bounded terminal record exceed its reserve.
+  await writer.append({
+    type: 'run.end',
+    actor: 'agenticreplay',
+    attrs: { reason: '\u0000'.repeat(10000), exit_code: 1 },
+  });
+  await writer.close(1);
+  expect((await lines(writer)).at(-1)?.type).toBe('run.end');
+});

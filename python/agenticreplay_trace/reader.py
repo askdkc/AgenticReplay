@@ -10,6 +10,7 @@ datasets with holes nobody can see.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
@@ -170,7 +171,9 @@ class TraceReader:
                 if event is not None:
                     yield event
 
-    def blob(self, ref: BlobRef | str, *, verify: bool = False) -> bytes:
+    def blob(
+        self, ref: BlobRef | str, *, verify: bool = False, max_bytes: int = 256 * 1024 * 1024
+    ) -> bytes:
         """The bytes of a content-addressed payload (spec §2.2).
 
         `verify` re-hashes the content. It is off by default so that an unverified read returns
@@ -180,9 +183,20 @@ class TraceReader:
         """
         hexdigest = _bare_digest(ref)
         path = self._run_dir / "blobs" / hexdigest[:2] / hexdigest
+        if not isinstance(max_bytes, int) or max_bytes < 0:
+            raise ValueError("invalid blob read limit")
+        max_bytes = min(max_bytes, 256 * 1024 * 1024)
         try:
-            data = path.read_bytes()
-        except OSError as exc:
+            if not path.exists():
+                path = path.with_name(path.name + ".gz")
+            if path.stat().st_size > 256 * 1024 * 1024:
+                raise TraceFormatError("stored blob exceeds limit")
+            opener = gzip.open if path.suffix == ".gz" else open
+            with opener(path, "rb") as handle:
+                data = handle.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise TraceFormatError("expanded blob exceeds limit")
+        except FileNotFoundError as exc:
             raise BlobNotFoundError(
                 f"blob not found: {_SHA256_PREFIX}{hexdigest} (looked in {path})"
             ) from exc

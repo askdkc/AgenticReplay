@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import {
   chmod,
@@ -468,10 +469,11 @@ async function blobFiles(
   for (const shard of await readdir(root, { withFileTypes: true }).catch(() => [])) {
     if (!shard.isDirectory()) continue;
     for (const name of await readdir(join(root, shard.name))) {
-      if (!/^[0-9a-f]{64}$/.test(name)) continue;
-      const bytes = await readFile(join(root, shard.name, name));
+      if (!/^[0-9a-f]{64}(?:\.gz)?$/.test(name)) continue;
+      const stored = await readFile(join(root, shard.name, name));
+      const bytes = name.endsWith('.gz') ? gunzipSync(stored) : stored;
       found.push({
-        name,
+        name: name.replace(/\.gz$/, ''),
         digest: createHash('sha256').update(bytes).digest('hex'),
         text: bytes.toString('utf8'),
       });

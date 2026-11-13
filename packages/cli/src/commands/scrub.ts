@@ -1,7 +1,15 @@
+import { gzipSync } from 'node:zlib';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
-import { Redactor, redactManifest, resolveRunSelector } from '@agenticreplay/core';
+import {
+  BLOB_FILE_NAME,
+  encodeBlob,
+  readBlobFile,
+  Redactor,
+  redactManifest,
+  resolveRunSelector,
+} from '@agenticreplay/core';
 import { runGit, runGitRaw } from '@agenticreplay/fs-capture';
 import { validateEvent, validateManifest, type Manifest } from '@agenticreplay/schema';
 import type { ParsedArgs } from '../args.js';
@@ -13,7 +21,7 @@ const DIR_MODE = 0o700;
 const BLOB_PREFIX = 'sha256:';
 
 /** What `BlobStore` treats as a blob. Anything else under `blobs/` is a partial write. */
-const BLOB_NAME = /^[0-9a-f]{64}$/;
+const BLOB_NAME = BLOB_FILE_NAME;
 
 /** Bounds how much object content one `git cat-file --batch` holds in memory at a time. */
 const BATCH_BYTES = 8 * 1024 * 1024;
@@ -35,7 +43,7 @@ export interface ScrubResult {
 /** A file the scrub will replace, held back until every check on every file has passed. */
 interface PendingWrite {
   path: string;
-  contents: string;
+  contents: string | Uint8Array;
   /** Where a moved blob is coming from, so the plan can say so rather than name a new file. */
   movedFrom?: string;
 }
@@ -146,7 +154,8 @@ export async function scrubCommand(
   /** Old blob files, deleted only once every new one is in place. */
   const stale = new Set<string>();
   for (const path of blobPaths) {
-    const buf = await readFile(path);
+    const compressed = /\.gz(?:\.[0-9a-f]+\.tmp)?$/.test(path);
+    const buf = compressed ? await readBlobFile(path) : await readFile(path);
     // Skip binary. A NUL byte, or a UTF-8 round trip that loses bytes, means rewriting this file
     // as text would corrupt it — and a secret is not going to be hiding in a PNG anyway.
     const text = asText(buf);
@@ -161,14 +170,18 @@ export async function scrubCommand(
     // points at. It is still scrubbed: a scrubber that skips a file holding the material is
     // the one failure this command must not have.
     if (!BLOB_NAME.test(basename(path))) {
-      pending.push({ path, contents: scrubbed.value });
+      pending.push({ path, contents: compressed ? gzipSync(scrubbed.value) : scrubbed.value });
       continue;
     }
     const digest = createHash('sha256').update(scrubbed.value, 'utf8').digest('hex');
-    moved.set(basename(path), { digest, bytes: Buffer.byteLength(scrubbed.value, 'utf8') });
+    moved.set(basename(path).replace(/\.gz$/, ''), {
+      digest,
+      bytes: Buffer.byteLength(scrubbed.value, 'utf8'),
+    });
+    const encoded = await encodeBlob(Buffer.from(scrubbed.value));
     pending.push({
-      path: join(blobsRoot, digest.slice(0, 2), digest),
-      contents: scrubbed.value,
+      path: join(blobsRoot, digest.slice(0, 2), digest + encoded.suffix),
+      contents: encoded.bytes,
       movedFrom: path,
     });
     stale.add(path);
@@ -460,7 +473,11 @@ function blobCountAfter(
   for (const write of pending) {
     if (write.movedFrom !== undefined) after.add(write.path);
   }
-  return [...after].filter((path) => BLOB_NAME.test(basename(path))).length;
+  return new Set(
+    [...after]
+      .filter((path) => BLOB_NAME.test(basename(path)))
+      .map((path) => basename(path).replace(/\.gz$/, '')),
+  ).size;
 }
 
 /** Why a scrubbed event line cannot be written, or undefined when it can. */

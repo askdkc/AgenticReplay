@@ -7,3 +7,5 @@ export * from './reader.js';
 export { runIdFromDirectory, captureDirectoryName } from './run-names.js';
 export * from './redaction.js';
 export * from './writer.js';
+export * from './compact.js';
+export * from './auto-compact.js';

@@ -421,3 +421,25 @@ class TestReadOnly:
     def test_exposes_no_write_api(self) -> None:
         forbidden = {"write", "append", "put", "record", "redact", "fork", "delete"}
         assert forbidden.isdisjoint(dir(TraceReader))
+
+
+class TestCompressedBlobs:
+    def test_gzip_legacy_limits_and_corruption(self, tmp_path: Path) -> None:
+        import gzip
+        data = ("日本語 conversation " * 1000).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        write_trace(tmp_path, [])
+        path = tmp_path / "blobs" / digest[:2] / digest
+        path.parent.mkdir(parents=True)
+        compressed = path.with_name(digest + ".gz")
+        compressed.write_bytes(gzip.compress(data))
+        reader = TraceReader.open(tmp_path)
+        assert reader.blob(digest, verify=True, max_bytes=len(data)) == data
+        with pytest.raises(TraceFormatError, match="expanded blob"):
+            reader.blob(digest, max_bytes=len(data) - 1)
+        compressed.write_bytes(b"broken gzip")
+        with pytest.raises(gzip.BadGzipFile):
+            reader.blob(digest)
+        # Old raw files take precedence, including in mixed-format stores.
+        path.write_bytes(data)
+        assert reader.blob(digest, verify=True) == data

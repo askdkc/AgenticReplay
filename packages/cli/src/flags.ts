@@ -63,6 +63,7 @@ export const BY_COMMAND: Record<string, readonly string[]> = {
   // that a configured destination needs no url typed at it. `--source` and `--limit` are the
   // listing's own parameters, passed through rather than reimplemented here.
   list: ['remote', 'gateway', 'source', 'limit'],
+  compact: ['dry-run'],
   gc: ['older-than', 'keep', 'dry-run'],
   doctor: [],
   setup: ['gateway', 'key', 'key-env'],
@@ -171,6 +172,7 @@ const POSITIONALS: Record<string, number> = {
   quickstart: 0,
   attach: 0,
   list: 0,
+  compact: 1,
   gc: 0,
   doctor: 0,
   setup: 0,

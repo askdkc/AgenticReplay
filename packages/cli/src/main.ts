@@ -1,3 +1,4 @@
+import { autoCompact } from '@agenticreplay/core';
 import { assertKnownFlags, assertNoStrayPositionals } from './flags.js';
 import { parseArgs, type ParsedArgs } from './args.js';
 import { AgenticReplay } from './api.js';
@@ -18,6 +19,7 @@ import {
 } from './commands/inspect.js';
 import { pullCommand, pushCommand } from './commands/sync.js';
 import { scrubCommand } from './commands/scrub.js';
+import { compactCommand } from './commands/compact.js';
 import { gcCommand } from './commands/gc.js';
 import { doctorCommand } from './commands/doctor.js';
 import { modelsCommand, setupCommand } from './commands/setup.js';
@@ -67,6 +69,8 @@ const HELP = `agenticreplay ${AGENTICREPLAY_VERSION} — record and inspect AI a
         --gateway <url>          with --remote: where to look (a gateway you named)
         --source gateway|upload  with --remote: what it recorded, or what was pushed
         --limit N                with --remote: how many (default 20)
+  agenticreplay compact [run]            compress sealed runs (default: all local runs)
+        --dry-run                inspect savings without changing files
   agenticreplay gc --older-than 7d        reclaim old recording data
                                  --keep N, --dry-run
   agenticreplay doctor                    check this machine can record at all
@@ -183,6 +187,13 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
     // Same reasoning, other half of the command line: an argument nothing reads is an
     // instruction that went nowhere, and for `record` it is the agent's own arguments.
     assertNoStrayPositionals(args);
+    // Explicit maintenance/dry-run commands control their own writes. Help/version return above.
+    if (
+      ['record', 'attach', 'show', 'graph', 'export', 'ui', 'review', 'list', 'mcp'].includes(
+        args.command,
+      )
+    )
+      await autoCompact(cwd);
 
     switch (args.command) {
       case 'quickstart':
@@ -223,6 +234,9 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         return 0;
       case 'list':
         await listCommand(args, out, cwd);
+        return 0;
+      case 'compact':
+        await compactCommand(args, out, cwd);
         return 0;
       case 'gc':
         await gcCommand(args, out, cwd);
@@ -327,6 +341,7 @@ async function jsonMain(args: ParsedArgs, cwd: string): Promise<number> {
     // about it, which is the failure the plain path exists to surface.
     assertKnownFlags(args);
     assertNoStrayPositionals(args);
+    if (['show', 'events', 'graph', 'list'].includes(args.command)) await autoCompact(cwd);
 
     const agenticreplay = new AgenticReplay({ cwd });
     const selector = args.positionals[0] ?? 'last';

@@ -168,3 +168,67 @@ describe('BlobStore.has / count', () => {
     expect(await store.count()).toBe(25);
   });
 });
+
+describe('compressed storage', () => {
+  it('compresses large blobs, preserving the raw hash, length, permissions and deduplication', async () => {
+    const { createHash } = await import('node:crypto');
+    const { gunzipSync } = await import('node:zlib');
+    const { readFile } = await import('node:fs/promises');
+    const input = '日本語 conversation '.repeat(10000);
+    const ref = await store.put(input);
+    const digest = createHash('sha256').update(input).digest('hex');
+    expect(ref.$blob).toBe(`sha256:${digest}`);
+    expect(ref.bytes).toBe(Buffer.byteLength(input));
+    const path = join(store.dir, digest.slice(0, 2), `${digest}.gz`);
+    const packed = await readFile(path);
+    expect(packed.length).toBeLessThan(ref.bytes / 10);
+    expect(gunzipSync(packed).toString()).toBe(input);
+    expect(Buffer.from(await store.get(ref)).toString()).toBe(input);
+    expect(await store.has(ref)).toBe(true);
+    const before = await stat(path);
+    await store.put(input);
+    expect((await stat(path)).mtimeMs).toBe(before.mtimeMs);
+    expect(await store.count()).toBe(1);
+    if (process.platform !== 'win32') expect(before.mode & 0o777).toBe(0o600);
+  });
+
+  it('retains incompressible data and legacy blobs without rewriting', async () => {
+    const { randomBytes } = await import('node:crypto');
+    const { writeFile } = await import('node:fs/promises');
+    const input = randomBytes(8192);
+    const ref = await store.put(input);
+    expect((await allFiles(store.dir))[0]).not.toMatch(/\.gz$/);
+    expect(Buffer.from(await store.get(ref))).toEqual(input);
+    // A legacy large blob at its original digest must win over compression.
+    const legacy = await store.put('small');
+    const hex = legacy.$blob.slice(7);
+    await writeFile(join(store.dir, hex.slice(0, 2), hex), 'small');
+    expect(await store.put('small')).toEqual(legacy);
+  });
+
+  it('enforces stored-byte limits at the boundary, across reopen and concurrent puts', async () => {
+    const limited = new BlobStore(store.dir, 5);
+    await limited.put('hello');
+    await expect(limited.put('!')).rejects.toThrow(/limit/);
+    await expect(new BlobStore(store.dir, 5).put('!')).rejects.toThrow(/limit/);
+    expect(await limited.put('hello')).toBeDefined();
+    const concurrent = new BlobStore(join(dir, 'concurrent'), 5);
+    const results = await Promise.allSettled([concurrent.put('aaaa'), concurrent.put('bbbb')]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const compressed = new BlobStore(join(dir, 'compressed'), 100);
+    await compressed.put('x'.repeat(10000));
+    expect(await compressed.count()).toBe(1);
+  });
+
+  it('bounds decompression and rejects corrupt gzip without treating it as missing', async () => {
+    const { readBlobFile } = await import('../src/blobs.js');
+    const { writeFile } = await import('node:fs/promises');
+    const ref = await store.put('x'.repeat(10000));
+    const hex = ref.$blob.slice(7);
+    const path = join(store.dir, hex.slice(0, 2), `${hex}.gz`);
+    expect((await readBlobFile(path, 10000)).length).toBe(10000);
+    await expect(readBlobFile(path, 9999)).rejects.toThrow();
+    await writeFile(path, 'broken gzip');
+    await expect(store.get(ref)).rejects.not.toThrow(/not found/);
+  });
+});

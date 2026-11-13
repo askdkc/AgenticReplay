@@ -6,9 +6,10 @@
  */
 
 import { createServer } from 'node:http';
-import { lstat, readFile, stat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { readViewerBlob } from './blob-file.js';
 import { CAPTURE_STATUS_FILE } from './capture-diagnostic.js';
 import { renderTraceHtml, type RenderOptions } from './html.js';
 import { bodyText, readTraceDir, type ReadTraceOptions } from './trace-dir.js';
@@ -95,7 +96,7 @@ export async function serveViewer(options: ServeOptions): Promise<ViewerServer> 
       const blob = /^\/blobs\/([0-9a-f]{2,})$/i.exec(path);
       if (blob) {
         try {
-          const stored = await readFile(
+          const stored = await readViewerBlob(
             join(options.runDir, 'blobs', blob[1]!.slice(0, 2), blob[1]!),
           );
           const body = Buffer.from(bodyText(stored.toString('utf8')));

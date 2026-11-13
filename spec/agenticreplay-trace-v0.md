@@ -93,10 +93,33 @@ silently accepted as opaque inline data.
 
 Writers MUST spill any payload whose serialized form exceeds **4096 bytes** to a blob, so that
 `events.jsonl` stays readable with `jq` and `rg`. Blobs are stored at
-`blobs/<first two hex chars>/<full hex digest>` and are immutable.
+`blobs/<first two hex chars>/<full hex digest>` (raw) or the same path with `.gz`
+(gzip). Both forms are immutable. The digest and `BlobRef.bytes` describe the **uncompressed**
+bytes, after redaction. Readers try the raw path first, then `.gz` only when the raw path is
+absent. Writers compress blobs of at least 4096 bytes only when this reduces size and reuse an
+existing blob in either representation. Readers must limit expanded bytes, not just stored bytes.
+AgenticReplay readers enforce a 256 MiB per-blob ceiling; the Viewer can apply a smaller aggregate
+expanded-byte budget. Older readers that only support raw files must be upgraded before reading
+new compressed runs. `events.jsonl` remains uncompressed.
 
-Because every model turn resends the whole conversation, content addressing is what keeps a trace
-`O(n)` in new content rather than `O(n²)` in turns. Implementations MUST NOT store duplicate blobs.
+The writer defaults to 256 MiB of stored blob content and 16 MiB of normal event content per run.
+A separate 64 KiB event allowance retains bounded diagnostic records, with its last 4 KiB reserved
+for `run.end`. `TraceWriterInit.storageLimits` can set `blobBytes` and `eventBytes` independently.
+When content cannot be retained, the event carries `attrs.payload_omitted` and the capture is
+marked incomplete. Once diagnostic space is exhausted, further nonterminal appends reject;
+`run.end` remains writable. These limits exclude manifests, redaction ledgers, filesystem snapshots
+and filesystem block overhead. They do not reserve physical disk blocks or guarantee writes when
+the filesystem is full.
+
+Content addressing deduplicates identical blobs; it does not deduplicate shared prefixes between
+different model requests. Implementations MUST NOT store duplicate logical blobs.
+
+Completed historical runs can be compacted explicitly with `agenticreplay compact [run]`
+(`--dry-run` only estimates savings). Ordinary local CLI startup and embedded `ensureRunsDir()`
+perform a quiet incremental migration. A private `.blob-compaction-v1.json` checkpoint records
+progress; its hash is tied to events.jsonl. Unsealed runs are skipped. Help/version and explicit
+maintenance commands do not implicitly migrate. Startup migration is best-effort and does not
+abort the caller on failure. It does not make legacy third-party raw-only readers compatible.
 
 ### 2.3 Event types
 
@@ -221,3 +244,7 @@ Redaction is best-effort mitigation, not a guarantee. A trace is sensitive mater
 
 `manifest.json.integrity.events_sha256` is the SHA-256 of `events.jsonl` at the moment the run
 ended. Readers SHOULD verify it and MUST report, not repair, a mismatch.
+
+Ordinary overflow events may use only the first 4 KiB of the diagnostic allowance. Errors may
+use the first 60 KiB; only `run.end` may use the final 4 KiB. Repeated normal events therefore
+cannot consume the error and termination reserve.

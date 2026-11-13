@@ -84,6 +84,9 @@ export async function ensureRunsDir(cwd: string): Promise<string> {
       { mode: 0o600, flag: 'wx' },
     ).catch(() => undefined);
   }
+  // Maintenance is best-effort and runs before the new recording is opened.
+  const { autoCompact } = await import('./auto-compact.js');
+  await autoCompact(cwd);
   return dir;
 }
 

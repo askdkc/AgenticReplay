@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, readdir, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { listRuns, runsDir } from '@agenticreplay/core';
+import { BLOB_FILE_NAME, listRuns, runsDir } from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 
@@ -20,7 +20,6 @@ const UNITS: Record<string, number> = {
   w: 604_800_000,
 };
 
-const HEX64 = /^[0-9a-f]{64}$/;
 /** Any digest mentioned anywhere in an event line counts as a reference. See {@link inspectRun}. */
 const DIGEST_IN_LINE = /[0-9a-f]{64}/g;
 
@@ -282,7 +281,7 @@ async function orphanBlobs(blobsRoot: string, referenced: Set<string>): Promise<
     const shardDir = join(blobsRoot, shard.name);
     for (const name of await readdir(shardDir).catch(() => [])) {
       // Only files named as a digest: a half-written `.tmp` belongs to whoever is writing it.
-      if (!HEX64.test(name) || referenced.has(name)) continue;
+      if (!BLOB_FILE_NAME.test(name) || referenced.has(name.replace(/\.gz$/, ''))) continue;
       const path = join(shardDir, name);
       const info = await stat(path).catch(() => null);
       if (!info?.isFile()) continue;
