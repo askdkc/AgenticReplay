@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlobStore, TraceReader, TraceWriter, listRuns } from '@agenticreplay/core';
+import { isBlobRef } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
 import { stripAnsi } from '../src/out.js';
@@ -37,6 +38,8 @@ describe('gc', () => {
       argv: ['test'],
       cwd,
       agenticreplayVersion: '0.1.0',
+      // Host environment metadata must not determine the size of an accounting fixture.
+      envAllowlist: [],
     });
     await writer.append({ type: 'run.start', actor: 'agenticreplay', turn: 0 });
     for (const payload of payloads) {
@@ -314,18 +317,39 @@ describe('gc', () => {
   });
 
   describe('accounting', () => {
-    it('reports the bytes a removed run actually occupied', async () => {
-      const a = await makeRun([`padding ${'x'.repeat(9000)}`]);
-      const b = await makeRun();
-      await ageRun(a, 30 * DAY);
-      await ageRun(b, 1 * DAY);
-      const expected = await fileBytes(a);
+    it.each(['raw', 'gzip'] as const)(
+      'reports actual stored bytes when removing a run with %s blobs',
+      async (format) => {
+        const a = await makeRun([`padding ${'x'.repeat(9000)}`]);
+        const b = await makeRun();
+        const reader = await TraceReader.open(a);
+        const ref = (await reader.events()).find((event) => isBlobRef(event.payload))?.payload;
+        if (!isBlobRef(ref)) throw new Error('accounting fixture must contain a blob');
+        const hex = ref.$blob.slice(7);
+        const rawPath = join(a, 'blobs', hex.slice(0, 2), hex);
+        const gzipPath = `${rawPath}.gz`;
+        expect((await stat(gzipPath)).size).toBeLessThan(ref.bytes);
+        if (format === 'raw') {
+          // Emulate the legacy on-disk representation without changing the logical content.
+          await writeFile(rawPath, await reader.blob(ref), { mode: 0o600 });
+          await rm(gzipPath);
+        }
+        const storedBytes = (await stat(format === 'raw' ? rawPath : gzipPath)).size;
+        if (format === 'raw') expect(storedBytes).toBe(ref.bytes);
+        else expect(storedBytes).toBeLessThan(ref.bytes);
+        await ageRun(a, 30 * DAY);
+        await ageRun(b, 1 * DAY);
+        const expected = await fileBytes(a);
 
-      const result = await gcCommand(parseArgs(['gc', '--older-than', '7d']), out, cwd);
+        const result = await gcCommand(parseArgs(['gc', '--older-than', '7d']), out, cwd);
 
-      expect(expected).toBeGreaterThan(9000);
-      expect(result.bytesReclaimed).toBe(expected);
-    });
+        // Include metadata too; never assume the raw payload length is a lower bound.
+        expect(expected).toBeGreaterThan(storedBytes);
+        expect(result).toEqual({ runsRemoved: 1, blobsRemoved: 0, bytesReclaimed: expected });
+        expect(await exists(a)).toBe(false);
+        expect(await exists(b)).toBe(true);
+      },
+    );
   });
 
   describe('cli wiring', () => {
