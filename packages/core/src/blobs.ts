@@ -62,13 +62,16 @@ function toBytes(data: Uint8Array | string): Uint8Array {
  */
 export class BlobStore {
   readonly #dir: string;
-  readonly #maxStoredBytes: number;
+  readonly #maxStoredBytes: number | undefined;
   #tail: Promise<unknown> = Promise.resolve();
   #storedBytes: number | undefined;
 
-  /** @param dir The blob root, conventionally `<runDir>/blobs`. */
-  constructor(dir: string, maxStoredBytes = MAX_BLOB_BYTES) {
-    if (!Number.isSafeInteger(maxStoredBytes) || maxStoredBytes < 0)
+  /** Cumulative storage is unlimited by default; the per-blob read/write ceiling still applies. */
+  constructor(dir: string, maxStoredBytes?: number) {
+    if (
+      maxStoredBytes !== undefined &&
+      (!Number.isSafeInteger(maxStoredBytes) || maxStoredBytes < 0)
+    )
       throw new Error('invalid blob storage limit');
     this.#dir = dir;
     this.#maxStoredBytes = maxStoredBytes;
@@ -96,7 +99,7 @@ export class BlobStore {
     if ((await exists(path)) || (await exists(`${path}.gz`))) return ref;
     const encoded = await encodeBlob(bytes);
     path += encoded.suffix;
-    if (this.#storedBytes === undefined) {
+    if (this.#maxStoredBytes !== undefined && this.#storedBytes === undefined) {
       let total = 0;
       const shards = await readdir(this.#dir, { withFileTypes: true }).catch(
         (error: NodeJS.ErrnoException) => {
@@ -113,7 +116,10 @@ export class BlobStore {
       }
       this.#storedBytes = total;
     }
-    if (this.#storedBytes + encoded.bytes.byteLength > this.#maxStoredBytes)
+    if (
+      this.#maxStoredBytes !== undefined &&
+      this.#storedBytes! + encoded.bytes.byteLength > this.#maxStoredBytes
+    )
       throw new BlobLimitError('blob storage limit reached');
 
     await mkdir(shard, { recursive: true, mode: DIR_MODE });
@@ -122,7 +128,7 @@ export class BlobStore {
     try {
       await writeFile(tmp, encoded.bytes, { mode: FILE_MODE, flag: 'wx' });
       await rename(tmp, path);
-      this.#storedBytes += encoded.bytes.byteLength;
+      if (this.#storedBytes !== undefined) this.#storedBytes += encoded.bytes.byteLength;
     } finally {
       await rm(tmp, { force: true });
     }

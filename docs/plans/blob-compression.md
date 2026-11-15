@@ -5,10 +5,18 @@ Scope: AgenticReplay storage, readers and historical-recording migration. No cha
 1. Store blobs of at least 4 KiB as `<sha256>.gz` only when gzip reduces size. Keep SHA-256 and BlobRef.bytes based on uncompressed, redacted bytes. Preserve legacy files and atomic private writes.
 2. Read both formats in Core, Viewer downloads/exports and the dependency-free Python reader. Bound decompression to 256 MiB per blob. Use gzip rather than zstd to retain Python >=3.10 support without new native/runtime dependencies.
 3. Make scrub decompress and re-encode, GC recognize compressed names, and keep archives byte-preserving.
-4. Limit stored blob bytes to 256 MiB per run. Limit normal events to 16 MiB, with a separate 64 KiB diagnostic allowance (including 4 KiB reserved for run.end). Oversized/missing content must be explicitly marked incomplete. These are file-content budgets, not filesystem block or whole-directory quotas; metadata and filesystem snapshots are outside them. Actual disk exhaustion cannot be solved by a logical allowance.
+4. The default event budget is 64 MiB (updated 2026-11-15), increased from 16 MiB. The cumulative blob budget is opt-in. `TraceWriterInit.storageLimits.blobBytes` and `.eventBytes` still enforce explicitly requested budgets, including zero. The event budget has a separate 64 KiB diagnostic allowance (including 4 KiB reserved for run.end). Per-blob input/expanded size remains capped at 256 MiB. Oversized/missing content must be explicitly marked incomplete. These are file-content budgets, not filesystem block or whole-directory quotas; metadata and filesystem snapshots are outside them. Actual disk exhaustion cannot be solved by a logical allowance.
 5. Verify round trips, mixed legacy/compressed runs, corrupt and oversized streams, stored-size accounting, bounded diagnostics, scrub/GC, and end-to-end viewer/export/reader behavior. Run build and existing suites. Record untested deployment scope.
 
 No delta encoding. Historical migration is enabled as described below. Old readers cannot read the new .gz representation; downstream reader updates are still required.
+
+## Cumulative-budget correction verification (2026-11-15)
+
+- Added regressions for events exceeding 16 MiB (including suspend/resume and another 40 response bodies) and a blob directory exceeding 256 MiB (sparse existing file, actual stored-byte accounting). Both tests failed against the former defaults. A further regression verifies the new 64 MiB default event budget and termination space.
+- Final 64 MiB default: `npx vitest run packages/core/test --maxWorkers=4`: 375 passed, 16 skipped. Explicit-budget and diagnostic-reserve tests remain passing.
+- `npm run typecheck`, formatting checks for changed files, and `git diff --check` passed.
+- Full-suite execution was interrupted after failures; an isolated viewer integration run confirmed `listen EPERM: operation not permitted 127.0.0.1`. Full-suite success and live Codex capture are not verified. No global installation or running recorder was updated.
+- The reported manifest with 29 omissions was not found in this checkout's `.agenticreplay` records. The four historical failures cannot be attributed individually, and already omitted bodies cannot be reconstructed by this change.
 
 ## Manual inspection
 

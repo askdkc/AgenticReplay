@@ -81,9 +81,9 @@ export function redactManifest(redactor: Redactor, manifest: Manifest): Manifest
 }
 
 export interface StorageLimits {
-  /** Physical blob file bytes, after compression. */
+  /** Optional cumulative physical blob budget, after compression. No budget by default. */
   blobBytes?: number;
-  /** Normal events.jsonl bytes; diagnostics have a separate 64 KiB reserve. */
+  /** events.jsonl budget; defaults to 64 MiB with a separate 64 KiB diagnostic reserve. */
   eventBytes?: number;
 }
 const DIAGNOSTIC_BYTES = 64 * 1024;
@@ -173,7 +173,7 @@ export class TraceWriter {
     this.#runDir = runDir;
     this.#eventsPath = join(runDir, 'events.jsonl');
     this.#blobs = new BlobStore(join(runDir, 'blobs'), limits.blobBytes);
-    this.#eventBytes = limits.eventBytes ?? 16 * 1024 * 1024;
+    this.#eventBytes = limits.eventBytes ?? 64 * 1024 * 1024;
     this.#redactor = redactor;
     this.#handle = handle;
     this.#base = base;

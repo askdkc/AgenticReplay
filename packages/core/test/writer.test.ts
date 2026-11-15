@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { basename, join } from 'node:path';
@@ -531,6 +531,64 @@ describe('TraceWriter.close', () => {
 });
 
 describe('storage budgets and diagnostic reserve', () => {
+  it('enforces the default 64 MiB event budget while preserving termination space', async () => {
+    const writer = await TraceWriter.create(runs, INIT);
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    const detail = 'x'.repeat(1024 * 1024);
+    for (let i = 0; i < 63; i++) {
+      const event = await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        attrs: { detail },
+      });
+      expect(event.attrs?.detail).toBe(detail);
+    }
+    const overflow = await writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      attrs: { detail },
+    });
+    expect(overflow.attrs?.payload_omitted).toBe('event_storage_limit');
+    expect(overflow.attrs?.detail).toBeUndefined();
+    await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+    const manifest = await writer.close(0);
+    expect(manifest.capture?.issues).toContain('event_storage_limit');
+    expect(writer.hasEnded).toBe(true);
+    expect((await stat(join(writer.runDir, 'events.jsonl'))).size).toBeLessThanOrEqual(
+      64 * 1024 * 1024 + 64 * 1024,
+    );
+  });
+
+  it('retains events beyond 16 MiB by default, including after recovery', async () => {
+    let writer = await TraceWriter.create(runs, INIT);
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    const detail = 'ordinary recording detail '.repeat(44000);
+    for (let i = 0; i < 17; i++) {
+      await writer.append({ type: 'note', actor: 'agenticreplay', attrs: { detail } });
+    }
+    expect((await stat(join(writer.runDir, 'events.jsonl'))).size).toBeGreaterThan(
+      16 * 1024 * 1024,
+    );
+    await writer.suspend();
+    writer = await TraceWriter.resume(await realpath(writer.runDir), writer.runId);
+    for (let i = 0; i < 40; i++) {
+      const event = await writer.append({
+        type: 'net.response',
+        actor: 'agenticreplay',
+        payload: `response ${i}`,
+      });
+      expect(event.payload).toBe(`response ${i}`);
+    }
+    await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+    const manifest = await writer.close(0);
+    expect(manifest.capture?.issues).not.toContain('event_storage_limit');
+    expect(manifest.capture?.issues).not.toContain('diagnostic_storage_limit');
+    const events = await lines(writer);
+    expect(events.slice(1, 18).every((e) => e.attrs?.detail === detail)).toBe(true);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
+    expect(events.at(-1)?.type).toBe('run.end');
+  });
+
   it('omits a blob over the physical budget but preserves its event and completion', async () => {
     const writer = await TraceWriter.create(runs, { ...INIT, storageLimits: { blobBytes: 0 } });
     await writer.append({ type: 'run.start', actor: 'agenticreplay' });

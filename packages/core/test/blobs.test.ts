@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateEvent } from '@agenticreplay/schema';
@@ -29,6 +29,24 @@ async function allFiles(root: string): Promise<string[]> {
 }
 
 describe('BlobStore.put', () => {
+  it('does not apply a cumulative 256 MiB budget unless requested', async () => {
+    // A sparse existing file exercises real on-disk accounting without allocating 256 MiB.
+    const shard = join(store.dir, 'aa');
+    await mkdir(shard, { recursive: true });
+    const file = await open(join(shard, 'a'.repeat(64)), 'w');
+    try {
+      await file.truncate(256 * 1024 * 1024);
+    } finally {
+      await file.close();
+    }
+    await expect(new BlobStore(store.dir, 256 * 1024 * 1024).put('next')).rejects.toThrow(/limit/);
+    const ref = await store.put('next');
+    expect(Buffer.from(await store.get(ref)).toString()).toBe('next');
+    const reopened = new BlobStore(store.dir);
+    const next = await reopened.put('after restart');
+    expect(Buffer.from(await reopened.get(next)).toString()).toBe('after restart');
+  });
+
   it('returns a spec-shaped ref with the sha256 of the content', async () => {
     const ref = await store.put('hello');
     // sha256('hello')
