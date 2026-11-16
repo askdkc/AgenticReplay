@@ -25,6 +25,7 @@ import type { CaptureTransformation } from '@agenticreplay/schema';
 import type { RunCa } from './ca.js';
 import { HostPolicy } from './tls-hosts.js';
 import { isCodexResponsesUpgrade, relayWebSocket } from './codex-websocket.js';
+import type { CaptureDiagnostic } from './capture-failure.js';
 import type { WebSocketCaptureReason, WebSocketObservation } from './websocket-observation.js';
 export type { WebSocketCaptureReason, WebSocketObservation } from './websocket-observation.js';
 
@@ -349,6 +350,7 @@ export interface InterceptFailure {
   kind: InterceptFailureKind;
   connectionId?: string;
   code?: WebSocketCaptureReason;
+  captureDiagnostic?: CaptureDiagnostic;
 }
 
 export interface TlsInterceptOptions {
@@ -374,7 +376,7 @@ export interface TlsInterceptOptions {
   onNetExchange?: (exchange: NetExchange) => void;
   onWebSocketObservation?: (observation: WebSocketObservation) => void | Promise<void>;
   onTunnel?: (tunnel: TunnelRecord) => void;
-  onFailure?: (failure: InterceptFailure) => void;
+  onFailure?: (failure: InterceptFailure) => void | Promise<void>;
 }
 
 export interface TlsInterceptHandle {

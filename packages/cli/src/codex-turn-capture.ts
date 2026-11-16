@@ -22,6 +22,7 @@ import {
 import { persistNetExchange } from './tls-capture.js';
 import { AGENTICREPLAY_VERSION } from './version.js';
 import { openWebSocketCapture } from './websocket-capture.js';
+import { noteTurnCaptureFailure } from './capture-failure-note.js';
 
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && /^[\w-]{1,128}$/u.test(value);
@@ -96,6 +97,7 @@ interface CapturedTurn {
   writes: Promise<void>;
   exchanges: number;
   broken: boolean;
+  captureFailureGroups: Set<string>;
   captureFailures: Set<'save_failed' | 'buffer_limit'>;
   needsContinuation: boolean;
   sealed?: Promise<string | null>;
@@ -198,6 +200,7 @@ async function openCapture(
     const result = (async () => {
       await turn.writes;
       const writer = await turn.writer;
+      if (turn.captureFailureGroups.size) writer.markCaptureIncomplete('save_failed');
       for (const reason of turn.captureFailures) {
         writer.markCaptureIncomplete(reason);
         if (!writer.hasEnded)
@@ -312,6 +315,7 @@ async function openCapture(
       writes: Promise.resolve(),
       exchanges: 0,
       broken: recovered,
+      captureFailureGroups: new Set(),
       captureFailures: new Set(),
       needsContinuation: false,
     };
@@ -552,20 +556,7 @@ async function openCapture(
       return connections.write(observation);
     },
     failure(failure: InterceptFailure) {
-      // No nearest-turn fallback: only turns that actually used this connection are affected.
-      for (const turn of turns.values()) {
-        if (!failure.connectionId || !turn.connections.has(failure.connectionId) || turn.sealed)
-          continue;
-        turn.broken = true;
-        enqueue(turn, async (writer) => {
-          writer.markCaptureIncomplete(failure.code ?? 'transport_interception_failed');
-          await writer.append({
-            type: 'note',
-            actor: 'agenticreplay',
-            attrs: { ...failure, capture_incomplete: true },
-          });
-        });
-      }
+      noteTurnCaptureFailure(turns.values(), failure, enqueue);
     },
     start(request: NetRequest) {
       if (closing || (options.requireWorkspace && request.codexWarmup)) return;

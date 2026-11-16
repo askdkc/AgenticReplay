@@ -554,6 +554,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // but a model exchange with no response is not one, and inserting it in the replay set gives
     // the matcher an entry that can answer nothing and cannot be forked. It goes below as network
     // traffic instead, which is what it is.
+    let observed = exchange;
     if (
       dialect &&
       exchange.correlation !== 'lost' &&
@@ -597,14 +598,18 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         // Keep the authoritative wire record even when the dialect projection succeeds. The
         // model event is a convenient replay view; the net event retains headers, framing and
         // transport completion details needed to audit capture fidelity.
-        options.tls?.onNetExchange?.({ ...exchange, modelDialect: dialect.id });
-        return;
+        if (exchange.transport !== 'websocket') {
+          options.tls?.onNetExchange?.({ ...exchange, modelDialect: dialect.id });
+          return;
+        }
+        observed = { ...exchange, modelDialect: dialect.id };
       } catch {
         // Not a model call after all — a path that merely looks like one, or a body this dialect
         // cannot read. Describing it as plain network traffic is honest; guessing is not.
       }
     }
-    options.tls?.onNetExchange?.(exchange);
+    // WebSocket capture owns failure handling and drain for this callback.
+    return options.tls?.onNetExchange?.(observed);
   }
 
   const interception = options.tls

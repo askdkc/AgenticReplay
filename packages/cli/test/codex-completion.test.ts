@@ -486,9 +486,13 @@ it.each(['same-process', 'restart'])(
 
 it('automatically finishes persisted host intent after restarting with no notification sender', async () => {
   const f = await fixture();
-  const spy = vi
-    .spyOn(TraceWriter.prototype, 'close')
-    .mockRejectedValue(Object.assign(new Error('full'), { code: 'ENOSPC' }));
+  let failedWriter: TraceWriter | undefined;
+  const spy = vi.spyOn(TraceWriter.prototype, 'close').mockImplementation(async function (
+    this: TraceWriter,
+  ) {
+    failedWriter = this;
+    throw Object.assign(new Error('full'), { code: 'ENOSPC' });
+  });
   let reopened: Awaited<ReturnType<typeof openCodexWorktreeCapture>> | undefined;
   try {
     f.capture.start(f.request);
@@ -496,6 +500,8 @@ it('automatically finishes persisted host intent after restarting with no notifi
     f.capture.finish(f.net);
     expect(await f.notify()).toEqual({ status: 'pending' });
     await f.capture.close();
+    // The mock bypasses FileHandle.close. Release the old process's handle before reopening.
+    await failedWriter?.suspend();
     spy.mockRestore();
     reopened = await openCodexWorktreeCapture(
       join(f.root, 'turn.sock'),
@@ -511,6 +517,7 @@ it('automatically finishes persisted host intent after restarting with no notifi
     spy.mockRestore();
     await reopened?.close();
     await f.close();
+    await failedWriter?.suspend();
   }
 });
 

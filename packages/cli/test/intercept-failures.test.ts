@@ -72,3 +72,40 @@ describe('what interception reports, by what actually failed', () => {
     }
   });
 });
+
+it('flattens emitted capture diagnostics and suppresses repeated CLI warnings', () => {
+  const logs: LogEntry[] = [];
+  const out = new Output({ write: () => {}, sink: (e) => void logs.push(e), isTTY: false });
+  const failure: InterceptFailure = {
+    host: 'api.example.com',
+    port: 443,
+    kind: 'session',
+    reason: 'capture callback failed',
+    code: 'save_failed',
+    connectionId: 'connection-one',
+    captureDiagnostic: {
+      phase: 'exchange',
+      errorCode: 'EMFILE',
+      errorType: 'Error',
+      firstAt: 100,
+      lastAt: 200,
+      count: 3,
+      emit: false,
+    },
+  };
+  reportInterceptFailure(out, failure);
+  expect(logs).toHaveLength(0);
+  reportInterceptFailure(out, {
+    ...failure,
+    captureDiagnostic: { ...failure.captureDiagnostic!, emit: true, summary: 'final' },
+  });
+  expect(logs).toHaveLength(1);
+  expect(logs[0]?.fields).toMatchObject({
+    code: 'save_failed',
+    phase: 'exchange',
+    errorCode: 'EMFILE',
+    count: 3,
+    summary: 'final',
+  });
+  expect(logs[0]?.fields).not.toHaveProperty('captureDiagnostic');
+});

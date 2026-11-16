@@ -10,7 +10,13 @@ import { codexServiceCaptureCallbacks } from '../src/codex-service.js';
 import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
-import { createProxy, RunCa, type WebSocketObservation } from '@agenticreplay/proxy';
+import {
+  createProxy,
+  RunCa,
+  type WebSocketObservation,
+  type InterceptFailure,
+  type NetExchange,
+} from '@agenticreplay/proxy';
 
 async function finishTurn(socketPath: string, cwd: string, turnId: string) {
   return new Promise<unknown>((resolve, reject) => {
@@ -26,7 +32,13 @@ async function finishTurn(socketPath: string, cwd: string, turnId: string) {
     socket.on('data', (bytes) => {
       data += bytes;
     });
-    socket.on('end', () => resolve(JSON.parse(data)));
+    socket.on('end', () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch (error) {
+        reject(error);
+      }
+    });
   });
 }
 
@@ -122,11 +134,14 @@ it('keeps observed messages after correlation loss across 67 requests and 3 in t
     await recovered;
     await vi.waitFor(() => expect(models).toHaveLength(1));
     for (const turnId of ['first', 'second']) {
-      await vi.waitFor(async () =>
-        expect(await finishTurn(join(root, 'review.sock'), root, turnId)).toEqual({
-          status: 'finalized',
-          capture: 'incomplete',
-        }),
+      await vi.waitFor(
+        async () =>
+          expect(await finishTurn(join(root, 'review.sock'), root, turnId)).toEqual({
+            status: 'finalized',
+            capture: 'incomplete',
+          }),
+        // Finalization waits for the queued writes of all requests, including under CI load.
+        { timeout: 15_000 },
       );
       expect(await finishTurn(join(root, 'review.sock'), root, turnId)).toEqual({
         status: 'finalized',
@@ -201,7 +216,10 @@ it('keeps observed messages after correlation loss across 67 requests and 3 in t
   }
 });
 
-async function liveFixture(maxCapturedBytes = 4096) {
+async function liveFixture(
+  maxCapturedBytes = 4096,
+  onExchangeSaved?: (exchange: NetExchange) => void,
+) {
   const root = await realpath(await mkdtemp('/tmp/ar-ws-wire-'));
   const ca = await RunCa.create({ runDir: root });
   const cert = ca.issue('127.0.0.1');
@@ -227,6 +245,7 @@ async function liveFixture(maxCapturedBytes = 4096) {
   );
   const observations: WebSocketObservation[] = [];
   const models: unknown[] = [];
+  const failures: InterceptFailure[] = [];
   const proxy = await createProxy({
     maxCapturedBytes,
     tls: {
@@ -238,8 +257,14 @@ async function liveFixture(maxCapturedBytes = 4096) {
         observations.push(event);
         return store.write(event);
       },
-      onNetExchange: turns.finish,
-      onFailure: turns.failure,
+      onNetExchange: (exchange) => {
+        turns.finish(exchange);
+        return onExchangeSaved?.(exchange);
+      },
+      onFailure: (failure) => {
+        failures.push(failure);
+        turns.failure(failure);
+      },
     },
     onRequestStart: turns.start,
     onExchange: (exchange) => {
@@ -253,6 +278,7 @@ async function liveFixture(maxCapturedBytes = 4096) {
     upstream,
     observations,
     models,
+    failures,
     received,
     turns,
     async close() {
@@ -536,3 +562,35 @@ it.each(['streamed', 'disconnected'] as const)(
     }
   },
 );
+
+it('classifies promoted exchange callback failures once and keeps relaying subsequent requests', async () => {
+  const seen: NetExchange[] = [];
+  const fixture = await liveFixture(4096, (exchange) => {
+    seen.push(exchange);
+    if (seen.length === 1) throw Object.assign(new Error('fixture-secret'), { code: 'EIO' });
+    if (seen.length === 2)
+      return Promise.reject(Object.assign(new TypeError('fixture-secret'), { code: 'ENOSPC' }));
+  });
+  const client = new WebSocket(
+    fixture.proxy.url.replace('http:', 'ws:') + '/backend-api/codex/responses',
+  );
+  try {
+    await once(client, 'open');
+    for (let n = 1; n <= 3; n++) {
+      const reply = once(client, 'message');
+      client.send(JSON.stringify({ type: 'response.create', model: 'gpt-test', input: [] }));
+      expect(JSON.parse((await reply)[0].toString()).response.id).toBe('resp_' + n);
+    }
+    await vi.waitFor(() => expect(fixture.models).toHaveLength(3));
+    expect(seen).toHaveLength(3);
+    expect(seen.every((exchange) => exchange.modelDialect === 'codex')).toBe(true);
+    expect(fixture.failures.map((failure) => failure.captureDiagnostic)).toMatchObject([
+      { phase: 'exchange', errorCode: 'EIO', errorType: 'Error', count: 1 },
+      { phase: 'exchange', errorCode: 'ENOSPC', errorType: 'TypeError', count: 1 },
+    ]);
+    expect(JSON.stringify(fixture.failures)).not.toContain('fixture-secret');
+  } finally {
+    client.terminate();
+    await fixture.close();
+  }
+});

@@ -1,8 +1,13 @@
 import type { IncomingMessage } from 'node:http';
 import { setImmediate as tick } from 'node:timers/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { responseCapture } from '../src/codex-websocket.js';
-import type { NetExchange, WebSocketObservation } from '../src/intercept.js';
+import type {
+  InterceptFailure,
+  NetExchange,
+  TlsInterceptOptions,
+  WebSocketObservation,
+} from '../src/intercept.js';
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value));
 const create = () => encode({ type: 'response.create', model: 'fixture', input: [] });
@@ -12,6 +17,7 @@ function fixture(
   maxCaptured = 4096,
   available = 1e6,
   save?: (event: WebSocketObservation) => Promise<void>,
+  callbacks?: Partial<TlsInterceptOptions>,
 ) {
   const exchanges: NetExchange[] = [];
   const observations: WebSocketObservation[] = [];
@@ -40,6 +46,7 @@ function fixture(
         observations.push(event);
         return save?.(event);
       },
+      ...callbacks,
     },
   });
   return { capture, exchanges, observations, held: () => held };
@@ -260,3 +267,168 @@ it.each(['body_limit', 'buffer_limit'] as const)(
     expect(held()).toBe(0);
   },
 );
+
+it('coalesces 14,787 callback rejections while attempting every save', async () => {
+  const failures: InterceptFailure[] = [];
+  const error = Object.assign(new TypeError('fixture-secret'), { code: 'ENOSPC' });
+  const { capture, observations, held } = fixture(
+    4096,
+    1e6,
+    async () => {
+      throw error;
+    },
+    {
+      onFailure: (failure) => {
+        failures.push(failure);
+      },
+    },
+  );
+  const notification = encode({ type: 'codex.rate_limits' });
+  for (let i = 0; i < 14_785; i++) {
+    capture.response(notification, false);
+    if (i % 200 === 0) await tick();
+  }
+  capture.close();
+  await capture.drained;
+
+  const emitted = failures.filter((failure) => failure.captureDiagnostic?.emit ?? true);
+  expect(observations).toHaveLength(14_787);
+  expect(emitted).toHaveLength(15);
+  expect(failures).toHaveLength(14_788);
+  expect(emitted.at(-1)?.captureDiagnostic).toMatchObject({
+    phase: 'observation',
+    errorType: 'TypeError',
+    errorCode: 'ENOSPC',
+    count: 14_787,
+    summary: 'final',
+  });
+  expect(JSON.stringify(failures)).not.toContain('fixture-secret');
+  expect(held()).toBe(0);
+});
+
+it('classifies each callback phase and isolates failing diagnostic callbacks', async () => {
+  const failures: InterceptFailure[] = [];
+  const getter = vi.fn(() => {
+    throw new Error('secret-getter');
+  });
+  const proxy = Proxy.revocable(new Error('secret-proxy'), {});
+  proxy.revoke();
+  let requests = 0;
+  let exchanges = 0;
+  const { capture, held } = fixture(4096, 1e6, undefined, {
+    onWebSocketObservation(event) {
+      if (event.kind === 'open')
+        throw Object.defineProperty(new SyntaxError('secret-message'), 'code', { get: getter });
+      if (event.kind === 'close') throw proxy.proxy;
+    },
+    onRequestStart() {
+      if (++requests === 1)
+        throw Object.assign(new RangeError('secret-path'), { code: 'secret-code' });
+    },
+    async onNetExchange() {
+      exchanges++;
+      throw Object.assign(new Error('secret-request'), { code: 'EIO' });
+    },
+    onFailure(failure) {
+      failures.push(failure);
+      if (failures.length % 2) throw new Error('secret-report');
+      return Promise.reject(new Error('secret-report'));
+    },
+  });
+  for (const id of ['one', 'two']) {
+    capture.request(create(), false);
+    capture.response(terminal(id), false);
+  }
+  expect(() => capture.close()).not.toThrow();
+  await capture.drained;
+  expect(requests).toBe(2);
+  expect(exchanges).toBe(1);
+  expect(failures.map((f) => f.captureDiagnostic)).toMatchObject([
+    { phase: 'observation', errorType: 'SyntaxError', errorCode: 'UNKNOWN' },
+    { phase: 'request_start', errorType: 'RangeError', errorCode: 'UNKNOWN' },
+    { phase: 'observation', errorType: 'Unknown', errorCode: 'UNKNOWN' },
+    { phase: 'exchange', errorType: 'Error', errorCode: 'EIO' },
+  ]);
+  expect(getter).not.toHaveBeenCalled();
+  expect(JSON.stringify(failures)).not.toContain('secret-');
+  expect(held()).toBe(0);
+});
+
+it('waits for overflow, deferred close and late exchange rejection before the final summary', async () => {
+  const observations = Promise.withResolvers<void>();
+  const exchange = Promise.withResolvers<void>();
+  const failures: InterceptFailure[] = [];
+  const error = new Error('fixture');
+  const { capture, held } = fixture(4096, 1e6, undefined, {
+    onWebSocketObservation(event) {
+      if (event.kind === 'close' || event.kind === 'diagnostic' || event.kind === 'open')
+        throw error;
+      return observations.promise;
+    },
+    onNetExchange: () => exchange.promise,
+    onFailure: (failure) => {
+      failures.push(failure);
+    },
+  });
+  capture.request(create(), false);
+  const notification = encode({ type: 'codex.rate_limits' });
+  for (let i = 0; i < 260; i++) capture.response(notification, false);
+  capture.close();
+  observations.resolve();
+  await tick();
+  expect(failures.map((f) => f.captureDiagnostic?.count)).toEqual([1, 2, 3]);
+  expect(failures.every((f) => !f.captureDiagnostic?.summary)).toBe(true);
+  expect(held()).toBeGreaterThan(0);
+  exchange.reject(error);
+  await capture.drained;
+  expect(failures.map((f) => f.captureDiagnostic?.count)).toEqual([1, 2, 3, 1, 3]);
+  expect(failures.at(-1)?.captureDiagnostic).toMatchObject({
+    phase: 'observation',
+    summary: 'final',
+  });
+  expect(held()).toBe(0);
+});
+
+it('emits pending cumulative counts every 60 seconds and clears each connection timer', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(100);
+    const failures: InterceptFailure[] = [];
+    const callbacks = {
+      onWebSocketObservation() {
+        throw 'fixture-non-error';
+      },
+      onFailure(failure: InterceptFailure) {
+        failures.push(failure);
+      },
+    };
+    const first = fixture(4096, 1e6, undefined, callbacks).capture;
+    const second = fixture(4096, 1e6, undefined, callbacks).capture;
+    expect(vi.getTimerCount()).toBe(2);
+    const notification = encode({ type: 'codex.rate_limits' });
+    first.response(notification, false);
+    vi.advanceTimersByTime(20_000);
+    first.response(notification, false);
+    vi.advanceTimersByTime(39_999);
+    expect(failures).toHaveLength(4);
+    vi.advanceTimersByTime(1);
+    expect(failures.at(-1)?.captureDiagnostic).toMatchObject({
+      summary: 'periodic',
+      count: 3,
+      firstAt: 100,
+      lastAt: 20_100,
+      errorCode: 'UNKNOWN',
+      errorType: 'Unknown',
+    });
+    vi.advanceTimersByTime(120_000);
+    first.close();
+    second.close();
+    await Promise.all([first.drained, second.drained]);
+    expect(failures.filter((f) => f.captureDiagnostic?.summary)).toHaveLength(1);
+    expect(failures.map((f) => f.captureDiagnostic?.count)).toEqual([1, 1, 2, 3, 3, 4, 2]);
+    expect(failures[0]?.connectionId).not.toBe(failures[1]?.connectionId);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});

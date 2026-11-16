@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { captureFailures, reportWebSocketFailure } from './capture-failure.js';
 import { BINARY_BODY_PREFIX } from '@agenticreplay/core';
 import type { WebSocketCaptureReason, WebSocketObservation } from './websocket-observation.js';
 import type { IncomingMessage } from 'node:http';
@@ -61,7 +62,7 @@ interface PendingResponse {
   request: NetRequest;
   requestBody: string;
   requestBytes: number;
-  start: Promise<void>;
+  start: Promise<boolean>;
   response: string[];
   responseBytes: number;
   held: number;
@@ -94,6 +95,16 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
   let overflow: WebSocketObservation | undefined;
   let deferredClose: WebSocketObservation | undefined;
   let exchangeWrites = 0;
+  const failures = captureFailures((captureDiagnostic) => {
+    reportWebSocketFailure(callbacks.onFailure, {
+      ...target,
+      connectionId,
+      code: 'save_failed',
+      kind: 'session',
+      reason: 'Codex WebSocket recorder callback failed',
+      captureDiagnostic,
+    });
+  });
   let resolveDrained!: () => void;
   const drained = new Promise<void>((resolve) => {
     resolveDrained = resolve;
@@ -105,8 +116,10 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
       exchangeWrites === 0 &&
       !overflow &&
       !deferredClose
-    )
+    ) {
+      failures.finish();
       resolveDrained();
+    }
   }
   // Bounded identity history. Exhaustion loses correlation rather than forgetting old IDs.
   const responseIds = new Set<string>();
@@ -120,21 +133,11 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
         entry[0] !== TURN,
     ),
   );
-  function failure() {
-    callbacks.onFailure?.({
-      ...target,
-      connectionId,
-      code: 'save_failed',
-      kind: 'session',
-      reason: 'Codex WebSocket recorder callback failed',
-    });
-  }
   function deliver(event: WebSocketObservation, held: number) {
     observingWrites++;
     const done = () => {
       budget.release(held);
-      observingWrites--;
-      if (observingWrites === 0) {
+      if (observingWrites === 1) {
         const omitted = overflow;
         const close = deferredClose;
         overflow = undefined;
@@ -142,13 +145,16 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
         if (omitted) deliver(omitted, 0);
         if (close) deliver(close, 0);
       }
+      observingWrites--;
       settle();
     };
     try {
-      void Promise.resolve(callbacks.onWebSocketObservation?.(event)).catch(failure).finally(done);
-    } catch {
+      void Promise.resolve(callbacks.onWebSocketObservation?.(event))
+        .catch((error) => failures.record('observation', error))
+        .finally(done);
+    } catch (error) {
+      failures.record('observation', error);
       done();
-      failure();
     }
   }
   function observe(
@@ -241,8 +247,10 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
     };
     exchangeWrites++;
     void start
-      .then(() => callbacks.onNetExchange?.(observed))
-      .catch(failure)
+      .then((started) => {
+        if (started) return callbacks.onNetExchange?.(observed);
+      })
+      .catch((error) => failures.record('exchange', error))
       .finally(() => {
         budget.release(held);
         exchangeWrites--;
@@ -280,13 +288,16 @@ export function responseCapture(req: IncomingMessage, options: RelayOptions) {
       requestBytes: truncated ? Buffer.alloc(0) : bytes,
       requestTruncated: truncated,
     };
-    let start: Promise<void>;
+    const startFailed = (error: unknown): false => {
+      failures.record('request_start', error);
+      return false;
+    };
+    let start: Promise<boolean>;
     try {
-      start = Promise.resolve(callbacks.onRequestStart?.(request));
+      start = Promise.resolve(callbacks.onRequestStart?.(request)).then(() => true, startFailed);
     } catch (error) {
-      start = Promise.reject(error);
+      start = Promise.resolve(startFailed(error));
     }
-    void start.catch(() => {});
     pending = {
       request,
       start,
@@ -522,7 +533,7 @@ export function relayWebSocket(
   upstream.once('error', () => {
     if (!client.destroyed)
       client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
-    options.callbacks.onFailure?.({
+    reportWebSocketFailure(options.callbacks.onFailure, {
       ...target,
       kind: 'upstream_session',
       reason: 'Codex WebSocket upstream handshake failed',

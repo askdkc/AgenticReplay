@@ -17,6 +17,7 @@ import {
 import type { ParsedArgs } from './args.js';
 import type { Output } from './out.js';
 import type { SerialQueue } from './serial.js';
+import { captureFailureFields, shouldEmitCaptureFailure } from './capture-failure-note.js';
 import { captureLimits } from './capture-limits.js';
 import { collectThinking } from './exchange-events.js';
 
@@ -162,13 +163,13 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
         },
         onFailure: (failure: InterceptFailure) => {
           writer?.markCaptureIncomplete('transport_interception_failed');
-          if (writer)
+          if (writer && shouldEmitCaptureFailure(failure))
             writes.push(async () => {
               await writer.append({
                 type: 'note',
                 actor: 'agenticreplay',
                 turn: req.turn(),
-                attrs: { rule: 'transport_interception_failed', ...failure },
+                attrs: { rule: 'transport_interception_failed', ...captureFailureFields(failure) },
               });
             });
           reportInterceptFailure(out, failure);
@@ -699,7 +700,8 @@ async function extraOriginRoots(env: NodeJS.ProcessEnv = process.env): Promise<s
  * The name is what people grep and alert on, so it is the name that has to be true.
  */
 export function reportInterceptFailure(out: Output, failure: InterceptFailure): void {
-  const { kind, ...fields } = failure;
+  if (!shouldEmitCaptureFailure(failure)) return;
+  const { kind, ...fields } = captureFailureFields(failure);
   switch (kind) {
     case 'client_handshake':
       out.warn('tls.handshake_failed', {

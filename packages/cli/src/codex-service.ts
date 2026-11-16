@@ -13,6 +13,7 @@ import {
   codexServiceBaseUrl,
   setCodexServiceEndpoint,
 } from './codex-service-config.js';
+import { shouldEmitCaptureFailure } from './capture-failure-note.js';
 import { openCodexWorktreeCapture } from './codex-turn-capture.js';
 import { reviewRepository } from './review-store.js';
 import { isVersionedServicePath, resolveServiceNode } from './codex-service-launch.js';
@@ -31,7 +32,8 @@ export function codexServiceCaptureCallbacks(
     onWebSocketObservation: (observation) => capture()?.observeWebSocket(observation),
     onFailure: (failure) => {
       capture()?.failure(failure);
-      process.stderr.write(JSON.stringify({ event: 'codex.capture_failed', ...failure }) + '\n');
+      if (shouldEmitCaptureFailure(failure))
+        process.stderr.write(JSON.stringify({ event: 'codex.capture_failed', ...failure }) + '\n');
     },
   };
 }
