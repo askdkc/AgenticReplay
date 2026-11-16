@@ -29,6 +29,32 @@ import { captureDirectoryName, firstUserPrompt } from './run-names.js';
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 
+function coalesceRedactionTransformations(
+  transformations: readonly CaptureTransformation[],
+): CaptureTransformation[] {
+  const coalesced: CaptureTransformation[] = [];
+  const firstByKey = new Map<string, CaptureTransformation>();
+  for (const transformation of transformations) {
+    const { kind, location, rule, reason, count } = transformation;
+    if (kind !== 'redaction' || !Number.isSafeInteger(count) || count < 0) {
+      coalesced.push({ ...transformation });
+      continue;
+    }
+
+    const key = JSON.stringify([kind, location, rule, reason]);
+    const first = firstByKey.get(key);
+    if (first && Number.isSafeInteger(first.count + count)) {
+      first.count += count;
+      continue;
+    }
+
+    const copy = { ...transformation };
+    coalesced.push(copy);
+    if (!first) firstByKey.set(key, copy);
+  }
+  return coalesced;
+}
+
 /** Remove credential URL components while preserving the other serialized query bytes. */
 function scrubTransportUrl(value: string): { value: string; count: number } {
   let count = 0;
@@ -684,8 +710,10 @@ export class TraceWriter {
     if (transformations.length > 0) {
       // A caller may supply transport annotations; scrub those too before persistence.
       out.transformations = JSON.parse(
-        this.#redactor.redactString(JSON.stringify(transformations), `event:${seq}:transformations`)
-          .value,
+        this.#redactor.redactString(
+          JSON.stringify(coalesceRedactionTransformations(transformations)),
+          `event:${seq}:transformations`,
+        ).value,
       ) as CaptureTransformation[];
     }
 
