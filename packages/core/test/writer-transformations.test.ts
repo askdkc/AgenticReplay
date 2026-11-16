@@ -34,7 +34,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-it('coalesces transformations without losing any redaction evidence for a spilled request', async () => {
+it('keeps spilled request redaction metadata proportional to the number of rules', async () => {
   const count = 14_600;
   const secrets = Array.from(
     { length: count },
@@ -56,22 +56,17 @@ it('coalesces transformations without losing any redaction evidence for a spille
   });
   expect(hashes).toHaveLength(count);
   expect(new Set(hashes).size).toBe(count);
-  const identifiers = hashes.map((hash) => `event:${event.seq}:payload:${hash}`);
-  expect(event.redacted).toHaveLength(count);
-  expect(new Set(event.redacted)).toEqual(new Set(identifiers));
+  const identifier = `event:${event.seq}:payload:sk_api_key`;
+  expect(Buffer.byteLength(raw)).toBeLessThan(1024);
+  expect(event.redacted).toEqual([identifier]);
   const { records } = JSON.parse(
     await readFile(join(writer.runDir, 'redactions.json'), 'utf8'),
   ) as {
     records: { identifier: string; rule: string; count: number }[];
   };
-  const payloadRecords = records.filter(({ identifier }) =>
-    identifier.startsWith(`event:${event.seq}:payload:`),
-  );
-  expect(payloadRecords).toHaveLength(count);
-  expect(new Set(payloadRecords.map(({ identifier }) => identifier))).toEqual(new Set(identifiers));
-  expect(payloadRecords.every((record) => record.rule === 'sk_api_key' && record.count === 1)).toBe(
-    true,
-  );
+  expect(
+    records.filter((record) => record.identifier.startsWith(`event:${event.seq}:payload:`)),
+  ).toEqual([expect.objectContaining({ identifier, rule: 'sk_api_key', count })]);
   expect(transformations?.filter(({ kind }) => kind === 'redaction')).toHaveLength(1);
   expect(transformations).toHaveLength(2);
   expect(transformations).toEqual([

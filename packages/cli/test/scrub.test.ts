@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceWriter } from '@agenticreplay/core';
+import { TraceReader, TraceWriter } from '@agenticreplay/core';
 import { validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
@@ -216,6 +216,42 @@ describe('scrub', () => {
     await makeRun(['remove GONE1 and GONE1 again']);
     await scrubCommand(parseArgs(['scrub', 'last', '--match', 'GONE1']), out, cwd);
     expect(lines.join('')).toMatch(/scrubbed/);
+  });
+
+  it('scrubs request deltas and preserves dependents when their base changes', async () => {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
+      adapter: { id: 'test' },
+      argv: [],
+      cwd,
+      agenticreplayVersion: '0.1.0',
+    });
+    const history = 'shared history '.repeat(5000);
+    const bodies = [history + ' PRIVATEHOST', history + ' PRIVATEHOST new', history + ' public'];
+    for (const payload of bodies) {
+      await writer.append({ type: 'model.request', actor: 'agent', payload });
+    }
+    await writer.close();
+    const storeDir = join(writer.runDir, 'blobs');
+    const tempShard = join(storeDir, 'aa');
+    await mkdir(tempShard, { recursive: true });
+    const temporary = join(tempShard, `${'a'.repeat(64)}.delta.deadbeef.tmp`);
+    await writeFile(temporary, 'abandoned PRIVATEHOST');
+    expect(
+      (await readdir(storeDir, { recursive: true })).filter((name) => name.endsWith('.delta')),
+    ).toHaveLength(2);
+
+    await scrubCommand(parseArgs(['scrub', 'last', '--match', 'PRIVATEHOST']), out, cwd);
+    await expect(stat(temporary)).rejects.toMatchObject({ code: 'ENOENT' });
+    const reader = await TraceReader.open(writer.runDir);
+    const events = await reader.events();
+    expect(await reader.resolvePayload(events[2]!)).toBe(bodies[2]);
+    for (const event of events.slice(0, 2)) {
+      expect(await reader.resolvePayload(event)).not.toContain('PRIVATEHOST');
+    }
+    expect(
+      (await readdir(storeDir, { recursive: true })).some((name) => name.endsWith('.delta')),
+    ).toBe(false);
+    expect((await reader.verifyIntegrity()).ok).toBe(true);
   });
 
   it('is idempotent — scrubbing twice changes nothing the second time', async () => {

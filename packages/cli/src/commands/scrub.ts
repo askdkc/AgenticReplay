@@ -4,8 +4,11 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'n
 import { basename, dirname, join, relative } from 'node:path';
 import {
   BLOB_FILE_NAME,
+  TEMPORARY_DELTA_FILE_NAME,
+  blobFileDigest,
   encodeBlob,
   readBlobFile,
+  readBlobDeltaBase,
   Redactor,
   redactManifest,
   resolveRunSelector,
@@ -153,15 +156,28 @@ export async function scrubCommand(
   const moved = new Map<string, MovedBlob>();
   /** Old blob files, deleted only once every new one is in place. */
   const stale = new Set<string>();
+  const retainedDeltas: string[] = [];
+  const unpublishedDeltas: string[] = [];
   for (const path of blobPaths) {
+    const name = basename(path);
+    if (TEMPORARY_DELTA_FILE_NAME.test(name)) {
+      // Only sealed runs can have abandoned delta writes. These files never had references.
+      if (typeof manifest.ended_at !== 'string')
+        throw new Error('cannot scrub unpublished request deltas in an unsealed run');
+      unpublishedDeltas.push(path);
+      continue;
+    }
+    const delta = BLOB_NAME.test(name) && path.endsWith('.delta');
     const compressed = /\.gz(?:\.[0-9a-f]+\.tmp)?$/.test(path);
-    const buf = compressed ? await readBlobFile(path) : await readFile(path);
+    const buf = compressed || delta ? await readBlobFile(path) : await readFile(path);
     // Skip binary. A NUL byte, or a UTF-8 round trip that loses bytes, means rewriting this file
     // as text would corrupt it — and a secret is not going to be hiding in a PNG anyway.
     const text = asText(buf);
-    if (text === undefined) continue;
-    const scrubbed = scrubText(text);
-    if (scrubbed.value === text) continue;
+    const scrubbed = text === undefined ? undefined : scrubText(text);
+    if (scrubbed === undefined || scrubbed.value === text) {
+      if (delta) retainedDeltas.push(path);
+      continue;
+    }
     removals += scrubbed.removals;
     filesChanged += 1;
     // A file whose name is not a digest is a `put` that crashed between its write and its
@@ -174,7 +190,7 @@ export async function scrubCommand(
       continue;
     }
     const digest = createHash('sha256').update(scrubbed.value, 'utf8').digest('hex');
-    moved.set(basename(path).replace(/\.gz$/, ''), {
+    moved.set(blobFileDigest(basename(path)), {
       digest,
       bytes: Buffer.byteLength(scrubbed.value, 'utf8'),
     });
@@ -184,6 +200,14 @@ export async function scrubCommand(
       contents: encoded.bytes,
       movedFrom: path,
     });
+    stale.add(path);
+  }
+  // Even unchanged deltas must stop depending on any base that scrub is about to remove.
+  for (const path of retainedDeltas) {
+    if (!moved.has(await readBlobDeltaBase(path))) continue;
+    const encoded = await encodeBlob(await readBlobFile(path));
+    const target = join(dirname(path), blobFileDigest(basename(path)) + encoded.suffix);
+    pending.push({ path: target, contents: encoded.bytes, movedFrom: path });
     stale.add(path);
   }
   // Never delete a path something is being written to. Two blobs can scrub to the same content, and
@@ -313,6 +337,8 @@ export async function scrubCommand(
     }
     if (ledger !== undefined)
       out.plain(`  would record the removals in ${relative(runDir, ledger)}`);
+    for (const path of unpublishedDeltas)
+      out.plain(`  would remove unpublished blob ${relative(runDir, path)}`);
     if (fs.matches > 0) out.plain(`  ${fs.matches} shadow-store object(s) would still match`);
   } else {
     await commit(pending);
@@ -321,11 +347,23 @@ export async function scrubCommand(
     // partly unscrubbed rather than one that is scrubbed and unreadable — and re-running the same
     // command finishes it, because the leftover file is found and scrubbed again to the digest it
     // already sits under.
-    for (const path of stale) await rm(path, { force: true });
-    out.phase('scrubbed', { run: runDir, removed: removals, files: filesChanged });
+    // Delete dependents first so a subsequent scrub can still read every surviving delta.
+    const stalePaths = [...stale].sort(
+      (a, b) => Number(b.endsWith('.delta')) - Number(a.endsWith('.delta')),
+    );
+    for (const path of [...unpublishedDeltas, ...stalePaths]) await rm(path, { force: true });
+    out.phase('scrubbed', {
+      run: runDir,
+      removed: removals,
+      files: filesChanged,
+      ...(unpublishedDeltas.length > 0
+        ? { unpublished_blobs_removed: unpublishedDeltas.length }
+        : {}),
+    });
   }
   if (
     removals === 0 &&
+    unpublishedDeltas.length === 0 &&
     reverted === 0 &&
     fs.matches === 0 &&
     fs.unreadable === undefined &&
@@ -476,7 +514,7 @@ function blobCountAfter(
   return new Set(
     [...after]
       .filter((path) => BLOB_NAME.test(basename(path)))
-      .map((path) => basename(path).replace(/\.gz$/, '')),
+      .map((path) => blobFileDigest(basename(path))),
   ).size;
 }
 

@@ -616,6 +616,8 @@ export interface RedactionOptions {
   salt?: string;
   /** Replaces {@link DEFAULT_ENV_ALLOWLIST} outright — this is a deny-by-default control. */
   envAllowlist?: string[];
+  /** Count hits by context and rule, keeping per-value placeholders only in the scrubbed value. */
+  summarizeHits?: boolean;
 }
 
 export interface RedactionResult<T> {
@@ -634,11 +636,13 @@ export interface RedactionResult<T> {
 export class Redactor {
   readonly #salt: string;
   readonly #envAllowlist: Set<string>;
+  readonly #summarizeHits: boolean;
   readonly #records = new Map<string, RedactionRecord>();
 
   constructor(opts: RedactionOptions = {}) {
     this.#salt = opts.salt ?? randomBytes(16).toString('hex');
     this.#envAllowlist = new Set(opts.envAllowlist ?? DEFAULT_ENV_ALLOWLIST);
+    this.#summarizeHits = opts.summarizeHits ?? false;
   }
 
   redactString(
@@ -822,14 +826,22 @@ export class Redactor {
   ): string {
     const hash8 = createHash('sha256').update(this.#salt).update(secret).digest('hex').slice(0, 8);
     const placeholder = `<secret:${kind}:${hash8}>`;
-    const identifier = context ? `${context}:${hash8}` : hash8;
+    const hitId = this.#summarizeHits ? kind : hash8;
+    const identifier = context ? `${context}:${hitId}` : hitId;
     // `\0` as an escape, not a raw NUL byte: a literal NUL in the source makes git classify
     // this file as binary, so every diff of the redactor — the one file that most needs reading in
     // review — comes out as "Bin 7248 -> 7441 bytes" instead of lines.
     const key = `${kind}\0${identifier}`;
     const seen = hits.get(key);
     if (seen) seen.count += 1;
-    else hits.set(key, { rule: kind, identifier, placeholder, count: 1 });
+    else {
+      hits.set(key, {
+        rule: kind,
+        identifier,
+        placeholder: this.#summarizeHits ? `<secret:${kind}:*>` : placeholder,
+        count: 1,
+      });
+    }
     return placeholder;
   }
 

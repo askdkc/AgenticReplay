@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { basename, join } from 'node:path';
@@ -347,6 +347,24 @@ describe('TraceWriter.append', () => {
     await w.close();
   });
 
+  it('never publishes a blob for an oversized or invalid event', async () => {
+    const w = await TraceWriter.create(runs, { ...INIT, storageLimits: { eventBytes: 1024 } });
+    const store = new BlobStore(join(w.runDir, 'blobs'));
+    const payload = { body: 'request text '.repeat(1000) };
+    const overflow = await w.append({
+      type: 'model.request',
+      actor: 'gateway',
+      attrs: { large: 'ordinary text '.repeat(100) },
+      payload,
+    });
+    expect(overflow.payload).toBeUndefined();
+    expect(overflow.attrs?.payload_omitted).toBe('event_storage_limit');
+    expect(await store.count()).toBe(0);
+    await expect(w.append({ type: 'bad' as 'note', actor: 'gateway', payload })).rejects.toThrow();
+    expect(await store.count()).toBe(0);
+    await w.close();
+  });
+
   it('stores one blob for a payload resent across turns', async () => {
     const w = await TraceWriter.create(runs, INIT);
     const big = { conversation: 'y'.repeat(INLINE_PAYLOAD_LIMIT + 1) };
@@ -356,6 +374,34 @@ describe('TraceWriter.append', () => {
     const m = await w.close();
     expect(m.counts?.blobs).toBe(1);
     expect(m.integrity?.blob_count).toBe(1);
+  });
+
+  it('shares the history of growing requests and restores the exact JSON bytes', async () => {
+    const w = await TraceWriter.create(runs, INIT);
+    const history = Array.from({ length: 16000 }, (_, index) =>
+      createHash('sha256').update(String(index)).digest('hex').slice(0, 12),
+    ).join(' ');
+    const requests = [];
+    for (let turn = 0; turn < 8; turn++) {
+      const body = JSON.stringify({
+        messages: [history, ...Array(turn).fill('new message')],
+        stream: true,
+      });
+      const net = await w.append({ type: 'net.request', actor: 'gateway', payload: body });
+      const model = await w.append({ type: 'model.request', actor: 'gateway', payload: body });
+      expect(net.payload).toEqual(model.payload);
+      requests.push({ ref: net.payload as BlobRef, body });
+    }
+    await w.close();
+    const store = new BlobStore(join(w.runDir, 'blobs'));
+    const files = await readdir(store.dir, { recursive: true });
+    const deltas = files.filter((name) => name.endsWith('.delta'));
+    expect(deltas).toHaveLength(7);
+    const sizes = await Promise.all(deltas.map((name) => stat(join(store.dir, name))));
+    expect(sizes.reduce((sum, info) => sum + info.size, 0)).toBeLessThan(2048);
+    for (const { ref, body } of requests) {
+      expect(Buffer.from(await store.get(ref)).toString()).toBe(JSON.stringify(body));
+    }
   });
 
   it('refuses to append after close', async () => {

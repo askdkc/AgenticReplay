@@ -452,499 +452,471 @@ async function runRecording(
     if (fs) await appendSnapshot(fs, writer, out, requestTurn ?? 0);
   }
 
-  await writer.append({
-    type: 'run.start',
-    actor: 'agenticreplay',
-    turn: 0,
-    attrs: { adapter: adapter.id, cwd, proxy: proxy.url },
-  });
-
-  // The source path, written down because a replay needs it and can get it nowhere else:
-  // `manifest.argv` holds the agent's own arguments, and `--mcp-config` is agenticreplay's. Without this a
-  // replay of an MCP-using run either loses the layer or cannot start the harness at all. Deferred
-  // to here so `run.start` keeps seq 0 — see the note at the setup site.
-  if (mcp && mcpConfigPath) {
+  let proxyClosing: Promise<void> | undefined;
+  try {
     await writer.append({
-      type: 'note',
+      type: 'run.start',
       actor: 'agenticreplay',
       turn: 0,
-      attrs: {
-        rule: 'mcp_instrumented',
-        source: resolve(cwd, mcpConfigPath),
-        servers: mcp.rewritten.join(',') || undefined,
-        skipped: mcp.skipped.join(',') || undefined,
-      },
-      operationalPathAttrs: ['source'],
+      attrs: { adapter: adapter.id, cwd, proxy: proxy.url },
     });
-  }
 
-  if (fs) await appendSnapshot(fs, writer, out, 0, { initial: true });
+    // The source path, written down because a replay needs it and can get it nowhere else:
+    // `manifest.argv` holds the agent's own arguments, and `--mcp-config` is agenticreplay's. Without this a
+    // replay of an MCP-using run either loses the layer or cannot start the harness at all. Deferred
+    // to here so `run.start` keeps seq 0 — see the note at the setup site.
+    if (mcp && mcpConfigPath) {
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn: 0,
+        attrs: {
+          rule: 'mcp_instrumented',
+          source: resolve(cwd, mcpConfigPath),
+          servers: mcp.rewritten.join(',') || undefined,
+          skipped: mcp.skipped.join(',') || undefined,
+        },
+        operationalPathAttrs: ['source'],
+      });
+    }
 
-  /**
-   * Give up on a run that has already started, then re-throw.
-   *
-   * Two failures share this path, and both were silent in their own way.
-   *
-   * A listening proxy keeps Node's event loop alive, so a throw printed the error and then hung
-   * — `agenticreplay record generic-openai -- /nonexistent` never exited, and mistyping an agent name is
-   * the first thing a new user does. And an unsealed trace has no `ended_at`, `counts` or
-   * `integrity`, so everything the agent did is on disk while `verifyIntegrity` reports the run as
-   * *tampered* rather than as unfinished.
-   *
-   * Sealing rather than discarding: a run that died is often the run you most want to read, and
-   * the exit code is unknown rather than zero, so it is left absent.
-   */
-  async function abandon(err: unknown): Promise<never> {
+    if (fs) await appendSnapshot(fs, writer, out, 0, { initial: true });
+
+    const ctx: RecordContext = {
+      runId: writer.runId,
+      cwd,
+      proxyUrl: proxy.url,
+      runDir: writer.runDir,
+      userArgs: args.passthrough,
+      env: process.env,
+    };
+    const launch = await adapter.prepare(ctx);
+
+    // Listed before the agent starts, so the file it writes can be told from the ones already
+    // there. The harness's transcript is the only record of what the person typed; without it an
+    // interactive run is captured but its API exchanges remain the primary conversation record.
+    const sessionBefore = await snapshotDir(adapter.session?.dir(cwd, process.env));
+
+    if (shell) {
+      launch.env.PATH = `${shell.dir}${delimiter}${process.env.PATH ?? ''}`;
+    }
+    if (agentSpans) {
+      // Both, or neither works: PYTHONPATH is how Python finds the bootstrap, and the variable is
+      // what tells the bootstrap this is a recording rather than an ordinary Python process.
+      launch.env.PYTHONPATH = pythonPathWith(
+        agentSpans.pythonPath,
+        process.env.PYTHONPATH,
+        delimiter,
+      );
+      if (args.bool('agent-spans', true)) launch.env[SPANS_ENV] = agentSpans.spansPath;
+    }
+    if (mcp) {
+      pointAtMcpConfig(launch.env, mcp.configPath);
+      // The variables above are belt and braces for a harness agenticreplay has not met. What actually
+      // reaches Claude Code is this: it takes the path on the command line and reads no
+      // environment variable for it, so without this the instrumented config was written and
+      // never opened.
+      const mcpArgs = adapter.mcpConfigArgs?.(mcp.configPath);
+      if (mcpArgs !== undefined) launch.args = [...mcpArgs, ...launch.args];
+      else
+        out.warn('mcp.not_wired', {
+          adapter: adapter.id,
+          cause: `${adapter.id} has no command-line form for an MCP config, and reads none of the variables agenticreplay sets`,
+          effect:
+            'the instrumented config exists but the agent will not load it, so no MCP frames will be captured',
+        });
+    }
+
+    if (proxy.tls) {
+      await trustRunCa(writer, proxy.tls, proxy.url, launch.env, out);
+    }
+
+    out.phase('recording', {
+      run: writer.runId,
+      adapter: adapter.id,
+      proxy: proxy.url,
+      // `proxy` is agenticreplay's own address, so the line said where the agent would call and never where
+      // the call would go on to. A gateway left behind in `~/.agenticreplay/config.json` redirects every run
+      // on the machine, and the first sign of it used to be an answer from a model nobody asked for.
+      //
+      // Only when something was configured. Left alone, each dialect has its own vendor default and
+      // there is no single value to print — and `upstream=default` on every ordinary run is noise
+      // that would teach people to stop reading the line. The trace records the origin either way,
+      // per exchange, because that is where it is actually decided.
+      ...(distinctOrigins(plan.upstream).length > 0
+        ? { upstream: distinctOrigins(plan.upstream).join(',') }
+        : {}),
+      fs: fs ? 'on' : 'off',
+      shell: shell ? 'on' : 'off',
+    });
+
+    let childResult: ChildResult;
+    const restoreOutput = out.deferTerminal();
+    try {
+      childResult = await runChild(
+        launch.command,
+        launch.args,
+        { ...process.env, ...launch.env },
+        launch.cwd ?? cwd,
+        // Under --json, stdout is the result document. The agent's own output must not land in it.
+        args.bool('json'),
+      );
+    } finally {
+      restoreOutput();
+    }
+    const { exitCode, interrupted } = childResult;
+
+    await writes.drain().catch((err: unknown) => {
+      writer.markCaptureIncomplete('storage_failure');
+      out.warn('capture.storage_failure', { detail: String(err) });
+    });
+
+    /** The turn an out-of-band frame belongs to: the last one that had begun when it happened. */
+    function turnAt(at: number): number {
+      let found = 0;
+      for (const mark of turnStartedAt) {
+        if (mark.at > at) break;
+        found = mark.turn;
+      }
+      return found;
+    }
+
+    if (shell) {
+      // Timestamped from the frame, not from now. These are read off disk after the agent has
+      // exited, so stamping them at write time put every shell command at the end of the run with
+      // the final turn number — which makes `mono_us` describe the drain rather than the command,
+      // and leaves the commands unable to interleave with the model turns they happened between.
+      const frames = await readShellFrames(shell.framesPath);
+      // Read, then gone, for the same reason the spans transport is: every frame is about to be
+      // appended through `writer.append`, which redacts, and what is left on disk afterwards is a
+      // verbatim copy of every command line the agent ran that nothing reads and `agenticreplay scrub` never
+      // rewrites. Before the appends rather than after, so an append that throws still takes it.
+      const framesLeft =
+        shell.transportDir === undefined ? undefined : await discardShellFrames(shell.transportDir);
+      if (framesLeft !== undefined) out.warn('shell_frames.not_removed', { reason: framesLeft });
+      shellFrames = frames.length;
+      for (const frame of frames) {
+        const startedAt = Date.parse(frame.startedAt);
+        const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
+        const frameTurn = at === undefined ? turn : turnAt(startedAt);
+        const exec = await writer.append({
+          type: 'shell.exec',
+          actor: 'harness',
+          turn: frameTurn,
+          ...(at === undefined ? {} : { occurredAt: at }),
+          attrs: { argv: [frame.name, ...frame.argv], cwd: frame.cwd },
+        });
+        await writer.append({
+          type: 'shell.result',
+          actor: 'harness',
+          turn: frameTurn,
+          causes: [exec.seq],
+          // The result happened when the command finished, which is what its duration measures.
+          ...(at === undefined ? {} : { occurredAt: new Date(startedAt + frame.durationMs) }),
+          attrs: {
+            exit_code: frame.exitCode,
+            signal: frame.signal,
+            duration_ms: frame.durationMs,
+            stdout_bytes: frame.stdoutBytes,
+            stderr_bytes: frame.stderrBytes,
+          },
+        });
+      }
+    }
+
+    if (agentSpans) {
+      // Timestamped from the span, like the shell frames above and for the same reason: these are
+      // read off disk after the agent exited, so stamping them now would file every handoff at the
+      // end of the run rather than between the turns it happened between.
+      const spans = await readAgentSpans(agentSpans.spansPath);
+      // Read, then gone. Everything the trace keeps from this file is about to be appended through
+      // `writer.append`, which redacts; what is left on disk afterwards is a copy nothing reads and
+      // nothing scrubs. Before the appends rather than after, so an append that throws still takes
+      // the transport with it.
+      const spansLeft = await discardAgentSpanTransport(agentSpans.transportDir);
+      if (spansLeft !== undefined) out.warn('agent_spans.not_removed', { reason: spansLeft });
+      // Before the events, because both say the trace is about to be less complete than it looks,
+      // and the operator reads the top of the drain rather than the bottom.
+      const losses = agentSpanLosses(spans);
+      // The second gate. The bootstrap now applies the first one itself — it reports a package only
+      // once the agent actually imports the framework — so what is left here is the case where a run
+      // captured no model traffic at all. `capture.empty` below already says that larger thing, and
+      // naming a missing package on top of it would send someone to `pip install` over a problem
+      // that is not about a package.
+      for (const pkg of modelExchanges > 0 ? losses.unavailable : []) {
+        // The prose comes from the adapter table, so a package cannot be reported with another
+        // package's explanation — which is exactly what happened when this text was a constant and a
+        // second adapter arrived.
+        const adapter = PYTHON_ADAPTERS.find((entry) => entry.package === pkg);
+        out.warn('agent_spans.unavailable', {
+          package: pkg,
+          // What was actually observed, rather than what it suggests. The bootstrap saw the
+          // framework's own module being imported and confirmed with `importlib.metadata` that a
+          // distribution provides that name; it does not know what the agent then did with it.
+          cause: `${adapter?.distribution ?? 'the framework'} was imported and this package is not installed`,
+          effect: `the run is recorded, without ${adapter?.lost ?? 'the structure only it can see'}`,
+          next: `pip install ${pkg}`,
+        });
+      }
+      if (losses.dropped > 0) {
+        out.warn('agent_spans.dropped', {
+          count: losses.dropped,
+          // Which adapter, where it said. Several write to one transport, so the total on its own
+          // says how much was lost and nothing about where to look.
+          ...(losses.droppedBy.length > 0 ? { package: losses.droppedBy.join(', ') } : {}),
+          cause: 'the adapter could not serialise or could not write these records',
+        });
+      }
+      for (const span of spans) {
+        const derived = eventForSpan(span);
+        if (derived === undefined) continue;
+        // When the span happened, from whichever end it carries. A record that closes something has
+        // only `ended_at`, and reading `started_at` alone stamped every one of them from the drain's
+        // own clock — which runs after the agent has exited. Measured on a three-node graph: all
+        // three `graph.node.end` events landed at the same instant, 600ms after the run, so the
+        // first node appeared to finish after the second had started and the timeline said the
+        // opposite of what happened. `occurredAt` is also what `turnAt` reads, so the same mistake
+        // filed them under the wrong turn.
+        const startedAt = Date.parse(String(span.started_at ?? span.ended_at ?? ''));
+        const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
+        await writer.append({
+          type: derived.type as 'agent.start',
+          // `harness`, not `agenticreplay`: we did not observe this, we were told it.
+          actor: 'harness',
+          turn: at === undefined ? turn : turnAt(startedAt),
+          ...(at === undefined ? {} : { occurredAt: at }),
+          attrs: derived.attrs,
+        });
+      }
+    }
+
+    if (mcp) await drainMcpFrames(mcp, writer, turnAt, turn);
+
+    const orphans = deriver.unresolved();
+    if (orphans.length > 0) {
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn,
+        attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
+      });
+    }
+
+    // Before the trace is sealed, not after. A tunnel's record is only complete when its socket
+    // closes, and closing the proxy is what closes the ones an exiting agent left open — so a
+    // `proxy.close()` after `writer.close()` produced tunnel records with nowhere to go.
+    await (proxyClosing = proxy.close());
+    await writes.drain().catch((err: unknown) => {
+      writer.markCaptureIncomplete('storage_failure');
+      out.warn('capture.storage_failure', { detail: String(err) });
+    });
+    // The CA dies with the run. `dispose` is idempotent and best-effort: failing to delete a key is
+    // worth a warning, never worth losing the trace the user was recording.
+    if (ca) {
+      try {
+        await ca.dispose();
+      } catch (err) {
+        out.warn('tls.ca_not_removed', { path: ca.dir, reason: String(err) });
+      }
+    }
+
+    /**
+     * The harness's own transcript, and with it the prompts nothing on the wire carries.
+     *
+     * Written before `run.end` so it is part of the run rather than an appendix, and stored as a compact action note so interactive prompts that never reached the API remain visible.
+     */
+    let session: Awaited<ReturnType<typeof captureSession>>;
+    if (adapter.session) {
+      try {
+        session = await captureSession(adapter.session, cwd, process.env, sessionBefore);
+      } catch (err) {
+        out.warn('session.unavailable', { reason: String(err) });
+      }
+    }
+    if (session) {
+      await writer.append({
+        type: 'note',
+        actor: 'harness',
+        turn,
+        attrs: {
+          rule: 'session_prompts',
+          harness: adapter.id,
+          prompts: session.prompts.length,
+        },
+        payload: { prompts: session.prompts },
+      });
+    }
+
+    const observed = networkExchanges;
+    if (requestTurns.size !== networkExchanges) writer.markCaptureIncomplete('unfinalized_request');
+    writer.setCaptureSummary({
+      status: observed > 0 ? 'complete' : 'incomplete',
+      issues: observed > 0 ? [] : ['no_requests_observed'],
+      body_limit_bytes: captureLimits(args).maxCapturedBytes,
+      requests: requestTurns.size,
+      responses: networkExchanges,
+    });
+    await writer.append({
+      type: 'run.end',
+      actor: 'agenticreplay',
+      turn,
+      attrs: { exit_code: exitCode },
+    });
+    const manifest = await writer.close(exitCode);
+
+    if (reviewScope && !interrupted) {
+      try {
+        if (!reviewScope.repository || (await reviewRepository(cwd)) !== reviewScope.repository)
+          throw new Error('The recording has no stable Git repository scope.');
+        await RecordingReviewStore.enqueue(
+          cwd,
+          writer.runId,
+          writer.runDir,
+          reviewScope.repository,
+        );
+        out.info('memory_review.pending', {
+          run: writer.runId,
+          reason: 'Kiokuko review integration is unavailable',
+          next: `agenticreplay review ${writer.runId}`,
+        });
+      } catch {
+        out.warn('memory_review.queue_failed', {
+          run: writer.runId,
+          reason: 'Could not bind or write the local memory review queue.',
+        });
+      }
+    }
+
+    out.phase('recorded', {
+      run: writer.runId,
+      events: manifest.counts?.events ?? writer.seq,
+      blobs: manifest.counts?.blobs ?? 0,
+      exit: exitCode,
+      capture: manifest.capture?.status ?? 'unverified',
+      dir: writer.runDir,
+    });
+
+    /**
+     * The quietest way agenticreplay can fail, and the most damaging.
+     *
+     * Capture works by pointing a base-URL variable at the proxy, so a harness that reads none of
+     * them is never redirected — and there is nothing to notice. The agent answers, the exit code is
+     * zero, and the trace is empty. An agent with its origin compiled into source is the live
+     * example: it never consults a base-URL variable, so `agenticreplay record` produces exactly this.
+     *
+     * `contract.ts` already names this shape as what the adapter checks exist to prevent. They guard
+     * the adapters; this guards the run, which is where a user actually meets it.
+     */
+    if (modelExchanges === 0 && embeddingExchanges > 0) {
+      out.info('capture.embedding_only', { exchanges: 0, embeddings: embeddingExchanges });
+    }
+    if (modelExchanges === 0 && embeddingExchanges === 0) {
+      const baseUrls = Object.keys(launch.env)
+        .filter((name) => /(?:_BASE_URL|_API_BASE)$/.test(name))
+        .sort();
+      // Which cause is worth naming depends on how this adapter captures at all, and the line
+      // already carries the evidence: `set=none` means there was never a variable to be ignored.
+      // Printing "it may not read a base-URL variable" next to `set=none` contradicts the run's own
+      // output and sends the reader after a route that was never the route -- which is how the
+      // capture bug fixed earlier in this branch stayed hidden through a dozen rounds of debugging.
+      //
+      // The proxy's own counters come first, because they settle the question the other branches
+      // are guessing at. A call agenticreplay forwarded is a call the agent made *to agenticreplay*: the variables
+      // were read and the redirection worked, so "the agent never called the proxy" is false on its
+      // face and costs the reader a search through a configuration that was right all along.
+      const opaque = proxy.stats().passedThrough;
+      const paths = unclaimed.list();
+
+      out.warn('capture.empty', {
+        exchanges: 0,
+        cause:
+          opaque > 0
+            ? `the agent called the proxy ${opaque} time(s), on ${paths.length > 0 ? paths.join(', ') : 'unclassified paths'}; those requests are recorded as network traffic`
+            : baseUrls.length > 0
+              ? 'the agent never called the proxy — it may not read a base-URL variable'
+              : adapter.capture === 'config'
+                ? `${adapter.id} is redirected through its own config, and this run had no configured provider to redirect`
+                : tls.ca
+                  ? 'this adapter captures at the transport, and nothing agenticreplay decrypted looked like a model call'
+                  : 'this adapter captures at the transport, and interception was not on',
+        ...(opaque > 0 ? { passed_through: opaque } : {}),
+        set: baseUrls.join(',') || 'none',
+        next: opaque > 0 ? 'agenticreplay show to read what was forwarded' : 'agenticreplay doctor',
+      });
+    }
+
+    /**
+     * Every model call came back an error.
+     *
+     * `capture.empty` covers the run the proxy never saw. This covers the run it saw all of, where
+     * every answer was a refusal: an expired gateway credential, a model the account cannot reach, a
+     * provider outage. The harness retries, exhausts its attempts, prints its own error and exits 0,
+     * so the summary reads exactly like a successful recording — `recorded events=27 exit=0` — over
+     * a trace that contains no model output at all. Replaying it faithfully reproduces the failures.
+     *
+     * Only when *all* of them failed. A run that retried once and then worked is a run that worked,
+     * and warning about it would train people to ignore the line that matters.
+     */
+    if (modelExchanges > 0 && erroredExchanges === modelExchanges) {
+      const commonest = [...errorStatuses.entries()].sort((a, b) => b[1] - a[1])[0];
+      out.warn('capture.errors', {
+        exchanges: modelExchanges,
+        errors: erroredExchanges,
+        status: commonest ? commonest[0] : 'unknown',
+        cause: 'every model call the proxy forwarded came back an error',
+        effect: 'the trace holds the failures, not any model output — a replay reproduces those',
+        next: 'agenticreplay show to read the errors, then check the upstream credential or model id',
+      });
+    }
+
+    /**
+     * Shell capture that was on and recorded nothing.
+     *
+     * `installShellShim` succeeding means a `sh`, a `bash` and a `zsh` were written into the run
+     * directory and put at the front of PATH. It does not mean the harness went through them, and
+     * on Windows Claude Code does not: it finds its shell without consulting PATH, so the shim sits
+     * unused while `shell=on` is printed and the frames file stays empty. What is lost is precisely
+     * what only the shim can see — the real exit code, the real duration, and which stream each byte
+     * came from — while the commands still appear as tool calls, so nothing looks wrong.
+     *
+     * The condition is evidence, not a platform check: commands demonstrably ran and the layer that
+     * was supposed to see them saw none of them, whatever the reason.
+     */
+    if (shell && shellFrames === 0 && commandToolCalls > 0) {
+      out.warn('shell.ineffective', {
+        commands: commandToolCalls,
+        captured: 0,
+        cause: 'the harness ran its shell without going through the PATH shim',
+        effect: 'exit codes, durations and the stdout/stderr split are not in this trace',
+        next: 'record with --no-shell, which claims nothing rather than claiming this',
+      });
+    }
+
     if (fs) await fs.dispose().catch(() => undefined);
-    await proxy.close().catch(() => undefined);
+
+    out.plain('');
+    out.plain(`  agenticreplay show ${writer.runId}             # inspect the recorded activity`);
+    out.plain(`  agenticreplay ui ${writer.runId}               # open the timeline`);
+
+    return {
+      runId: writer.runId,
+      runDir: writer.runDir,
+      events: manifest.counts?.events ?? writer.seq,
+      modelExchanges,
+      childExitCode: exitCode,
+      exitCode: exitCode !== 0 ? exitCode : manifest.capture?.status === 'incomplete' ? 2 : 0,
+    };
+  } catch (err) {
+    // Stop accepting traffic and finish tunnel capture before draining writes and sealing the trace.
+    await (proxyClosing ?? proxy.close()).catch(() => undefined);
     await writes.drain().catch(() => undefined);
-    if (ca) await ca.dispose().catch(() => undefined);
+    if (fs) await fs.dispose().catch(() => undefined);
     await writer
       .append({ type: 'run.end', actor: 'agenticreplay', turn, attrs: { error: String(err) } })
       .catch(() => undefined);
     await writer.close().catch(() => undefined);
     throw err;
   }
-
-  /*
-   * Everything from here to the child's exit runs with the proxy already listening, so everything
-   * from here to the child's exit has to come back through `abandon`.
-   *
-   * The guard used to start at the spawn, which covered the failure it was written for — an agent
-   * that is not on PATH — and missed the one that happens first. An adapter validates the
-   * invocation in `prepare`, before anything is spawned: `agenticreplay record node agent.mjs`, with the
-   * `--` left out, printed exactly the right message about the `--` and then hung forever. So did
-   * a failure to snapshot the session directory, or to trust the run CA.
-   */
-  const { launch, sessionBefore } = await (async () => {
-    try {
-      const ctx: RecordContext = {
-        runId: writer.runId,
-        cwd,
-        proxyUrl: proxy.url,
-        runDir: writer.runDir,
-        userArgs: args.passthrough,
-        env: process.env,
-      };
-      const prepared = await adapter.prepare(ctx);
-
-      // Listed before the agent starts, so the file it writes can be told from the ones already
-      // there. The harness's transcript is the only record of what the person typed; without it an
-      // interactive run is captured but its API exchanges remain the primary conversation record.
-      const before = await snapshotDir(adapter.session?.dir(cwd, process.env));
-
-      if (shell) {
-        prepared.env.PATH = `${shell.dir}${delimiter}${process.env.PATH ?? ''}`;
-      }
-      if (agentSpans) {
-        // Both, or neither works: PYTHONPATH is how Python finds the bootstrap, and the variable is
-        // what tells the bootstrap this is a recording rather than an ordinary Python process.
-        prepared.env.PYTHONPATH = pythonPathWith(
-          agentSpans.pythonPath,
-          process.env.PYTHONPATH,
-          delimiter,
-        );
-        if (args.bool('agent-spans', true)) prepared.env[SPANS_ENV] = agentSpans.spansPath;
-      }
-      if (mcp) {
-        pointAtMcpConfig(prepared.env, mcp.configPath);
-        // The variables above are belt and braces for a harness agenticreplay has not met. What actually
-        // reaches Claude Code is this: it takes the path on the command line and reads no
-        // environment variable for it, so without this the instrumented config was written and
-        // never opened.
-        const mcpArgs = adapter.mcpConfigArgs?.(mcp.configPath);
-        if (mcpArgs !== undefined) prepared.args = [...mcpArgs, ...prepared.args];
-        else
-          out.warn('mcp.not_wired', {
-            adapter: adapter.id,
-            cause: `${adapter.id} has no command-line form for an MCP config, and reads none of the variables agenticreplay sets`,
-            effect:
-              'the instrumented config exists but the agent will not load it, so no MCP frames will be captured',
-          });
-      }
-
-      if (proxy.tls) {
-        await trustRunCa(writer, proxy.tls, proxy.url, prepared.env, out);
-      }
-
-      return { launch: prepared, sessionBefore: before };
-    } catch (err) {
-      return abandon(err);
-    }
-  })();
-
-  out.phase('recording', {
-    run: writer.runId,
-    adapter: adapter.id,
-    proxy: proxy.url,
-    // `proxy` is agenticreplay's own address, so the line said where the agent would call and never where
-    // the call would go on to. A gateway left behind in `~/.agenticreplay/config.json` redirects every run
-    // on the machine, and the first sign of it used to be an answer from a model nobody asked for.
-    //
-    // Only when something was configured. Left alone, each dialect has its own vendor default and
-    // there is no single value to print — and `upstream=default` on every ordinary run is noise
-    // that would teach people to stop reading the line. The trace records the origin either way,
-    // per exchange, because that is where it is actually decided.
-    ...(distinctOrigins(plan.upstream).length > 0
-      ? { upstream: distinctOrigins(plan.upstream).join(',') }
-      : {}),
-    fs: fs ? 'on' : 'off',
-    shell: shell ? 'on' : 'off',
-  });
-
-  let childResult: ChildResult;
-  const restoreOutput = out.deferTerminal();
-  try {
-    childResult = await runChild(
-      launch.command,
-      launch.args,
-      { ...process.env, ...launch.env },
-      launch.cwd ?? cwd,
-      // Under --json, stdout is the result document. The agent's own output must not land in it.
-      args.bool('json'),
-    );
-  } catch (err) {
-    return abandon(err);
-  } finally {
-    restoreOutput();
-  }
-  const { exitCode, interrupted } = childResult;
-
-  await writes.drain().catch((err: unknown) => {
-    writer.markCaptureIncomplete('storage_failure');
-    out.warn('capture.storage_failure', { detail: String(err) });
-  });
-
-  /** The turn an out-of-band frame belongs to: the last one that had begun when it happened. */
-  function turnAt(at: number): number {
-    let found = 0;
-    for (const mark of turnStartedAt) {
-      if (mark.at > at) break;
-      found = mark.turn;
-    }
-    return found;
-  }
-
-  if (shell) {
-    // Timestamped from the frame, not from now. These are read off disk after the agent has
-    // exited, so stamping them at write time put every shell command at the end of the run with
-    // the final turn number — which makes `mono_us` describe the drain rather than the command,
-    // and leaves the commands unable to interleave with the model turns they happened between.
-    const frames = await readShellFrames(shell.framesPath);
-    // Read, then gone, for the same reason the spans transport is: every frame is about to be
-    // appended through `writer.append`, which redacts, and what is left on disk afterwards is a
-    // verbatim copy of every command line the agent ran that nothing reads and `agenticreplay scrub` never
-    // rewrites. Before the appends rather than after, so an append that throws still takes it.
-    const framesLeft =
-      shell.transportDir === undefined ? undefined : await discardShellFrames(shell.transportDir);
-    if (framesLeft !== undefined) out.warn('shell_frames.not_removed', { reason: framesLeft });
-    shellFrames = frames.length;
-    for (const frame of frames) {
-      const startedAt = Date.parse(frame.startedAt);
-      const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
-      const frameTurn = at === undefined ? turn : turnAt(startedAt);
-      const exec = await writer.append({
-        type: 'shell.exec',
-        actor: 'harness',
-        turn: frameTurn,
-        ...(at === undefined ? {} : { occurredAt: at }),
-        attrs: { argv: [frame.name, ...frame.argv], cwd: frame.cwd },
-      });
-      await writer.append({
-        type: 'shell.result',
-        actor: 'harness',
-        turn: frameTurn,
-        causes: [exec.seq],
-        // The result happened when the command finished, which is what its duration measures.
-        ...(at === undefined ? {} : { occurredAt: new Date(startedAt + frame.durationMs) }),
-        attrs: {
-          exit_code: frame.exitCode,
-          signal: frame.signal,
-          duration_ms: frame.durationMs,
-          stdout_bytes: frame.stdoutBytes,
-          stderr_bytes: frame.stderrBytes,
-        },
-      });
-    }
-  }
-
-  if (agentSpans) {
-    // Timestamped from the span, like the shell frames above and for the same reason: these are
-    // read off disk after the agent exited, so stamping them now would file every handoff at the
-    // end of the run rather than between the turns it happened between.
-    const spans = await readAgentSpans(agentSpans.spansPath);
-    // Read, then gone. Everything the trace keeps from this file is about to be appended through
-    // `writer.append`, which redacts; what is left on disk afterwards is a copy nothing reads and
-    // nothing scrubs. Before the appends rather than after, so an append that throws still takes
-    // the transport with it.
-    const spansLeft = await discardAgentSpanTransport(agentSpans.transportDir);
-    if (spansLeft !== undefined) out.warn('agent_spans.not_removed', { reason: spansLeft });
-    // Before the events, because both say the trace is about to be less complete than it looks,
-    // and the operator reads the top of the drain rather than the bottom.
-    const losses = agentSpanLosses(spans);
-    // The second gate. The bootstrap now applies the first one itself — it reports a package only
-    // once the agent actually imports the framework — so what is left here is the case where a run
-    // captured no model traffic at all. `capture.empty` below already says that larger thing, and
-    // naming a missing package on top of it would send someone to `pip install` over a problem
-    // that is not about a package.
-    for (const pkg of modelExchanges > 0 ? losses.unavailable : []) {
-      // The prose comes from the adapter table, so a package cannot be reported with another
-      // package's explanation — which is exactly what happened when this text was a constant and a
-      // second adapter arrived.
-      const adapter = PYTHON_ADAPTERS.find((entry) => entry.package === pkg);
-      out.warn('agent_spans.unavailable', {
-        package: pkg,
-        // What was actually observed, rather than what it suggests. The bootstrap saw the
-        // framework's own module being imported and confirmed with `importlib.metadata` that a
-        // distribution provides that name; it does not know what the agent then did with it.
-        cause: `${adapter?.distribution ?? 'the framework'} was imported and this package is not installed`,
-        effect: `the run is recorded, without ${adapter?.lost ?? 'the structure only it can see'}`,
-        next: `pip install ${pkg}`,
-      });
-    }
-    if (losses.dropped > 0) {
-      out.warn('agent_spans.dropped', {
-        count: losses.dropped,
-        // Which adapter, where it said. Several write to one transport, so the total on its own
-        // says how much was lost and nothing about where to look.
-        ...(losses.droppedBy.length > 0 ? { package: losses.droppedBy.join(', ') } : {}),
-        cause: 'the adapter could not serialise or could not write these records',
-      });
-    }
-    for (const span of spans) {
-      const derived = eventForSpan(span);
-      if (derived === undefined) continue;
-      // When the span happened, from whichever end it carries. A record that closes something has
-      // only `ended_at`, and reading `started_at` alone stamped every one of them from the drain's
-      // own clock — which runs after the agent has exited. Measured on a three-node graph: all
-      // three `graph.node.end` events landed at the same instant, 600ms after the run, so the
-      // first node appeared to finish after the second had started and the timeline said the
-      // opposite of what happened. `occurredAt` is also what `turnAt` reads, so the same mistake
-      // filed them under the wrong turn.
-      const startedAt = Date.parse(String(span.started_at ?? span.ended_at ?? ''));
-      const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
-      await writer.append({
-        type: derived.type as 'agent.start',
-        // `harness`, not `agenticreplay`: we did not observe this, we were told it.
-        actor: 'harness',
-        turn: at === undefined ? turn : turnAt(startedAt),
-        ...(at === undefined ? {} : { occurredAt: at }),
-        attrs: derived.attrs,
-      });
-    }
-  }
-
-  if (mcp) await drainMcpFrames(mcp, writer, turnAt, turn);
-
-  const orphans = deriver.unresolved();
-  if (orphans.length > 0) {
-    await writer.append({
-      type: 'note',
-      actor: 'agenticreplay',
-      turn,
-      attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
-    });
-  }
-
-  // Before the trace is sealed, not after. A tunnel's record is only complete when its socket
-  // closes, and closing the proxy is what closes the ones an exiting agent left open — so a
-  // `proxy.close()` after `writer.close()` produced tunnel records with nowhere to go.
-  await proxy.close();
-  await writes.drain().catch((err: unknown) => {
-    writer.markCaptureIncomplete('storage_failure');
-    out.warn('capture.storage_failure', { detail: String(err) });
-  });
-  // The CA dies with the run. `dispose` is idempotent and best-effort: failing to delete a key is
-  // worth a warning, never worth losing the trace the user was recording.
-  if (ca) {
-    try {
-      await ca.dispose();
-    } catch (err) {
-      out.warn('tls.ca_not_removed', { path: ca.dir, reason: String(err) });
-    }
-  }
-
-  /**
-   * The harness's own transcript, and with it the prompts nothing on the wire carries.
-   *
-   * Written before `run.end` so it is part of the run rather than an appendix, and stored as a compact action note so interactive prompts that never reached the API remain visible.
-   */
-  let session: Awaited<ReturnType<typeof captureSession>>;
-  if (adapter.session) {
-    try {
-      session = await captureSession(adapter.session, cwd, process.env, sessionBefore);
-    } catch (err) {
-      out.warn('session.unavailable', { reason: String(err) });
-    }
-  }
-  if (session) {
-    await writer.append({
-      type: 'note',
-      actor: 'harness',
-      turn,
-      attrs: {
-        rule: 'session_prompts',
-        harness: adapter.id,
-        prompts: session.prompts.length,
-      },
-      payload: { prompts: session.prompts },
-    });
-  }
-
-  const observed = networkExchanges;
-  if (requestTurns.size !== networkExchanges) writer.markCaptureIncomplete('unfinalized_request');
-  writer.setCaptureSummary({
-    status: observed > 0 ? 'complete' : 'incomplete',
-    issues: observed > 0 ? [] : ['no_requests_observed'],
-    body_limit_bytes: captureLimits(args).maxCapturedBytes,
-    requests: requestTurns.size,
-    responses: networkExchanges,
-  });
-  await writer.append({
-    type: 'run.end',
-    actor: 'agenticreplay',
-    turn,
-    attrs: { exit_code: exitCode },
-  });
-  const manifest = await writer.close(exitCode);
-
-  if (reviewScope && !interrupted) {
-    try {
-      if (!reviewScope.repository || (await reviewRepository(cwd)) !== reviewScope.repository)
-        throw new Error('The recording has no stable Git repository scope.');
-      await RecordingReviewStore.enqueue(cwd, writer.runId, writer.runDir, reviewScope.repository);
-      out.info('memory_review.pending', {
-        run: writer.runId,
-        reason: 'Kiokuko review integration is unavailable',
-        next: `agenticreplay review ${writer.runId}`,
-      });
-    } catch {
-      out.warn('memory_review.queue_failed', {
-        run: writer.runId,
-        reason: 'Could not bind or write the local memory review queue.',
-      });
-    }
-  }
-
-  out.phase('recorded', {
-    run: writer.runId,
-    events: manifest.counts?.events ?? writer.seq,
-    blobs: manifest.counts?.blobs ?? 0,
-    exit: exitCode,
-    capture: manifest.capture?.status ?? 'unverified',
-    dir: writer.runDir,
-  });
-
-  /**
-   * The quietest way agenticreplay can fail, and the most damaging.
-   *
-   * Capture works by pointing a base-URL variable at the proxy, so a harness that reads none of
-   * them is never redirected — and there is nothing to notice. The agent answers, the exit code is
-   * zero, and the trace is empty. An agent with its origin compiled into source is the live
-   * example: it never consults a base-URL variable, so `agenticreplay record` produces exactly this.
-   *
-   * `contract.ts` already names this shape as what the adapter checks exist to prevent. They guard
-   * the adapters; this guards the run, which is where a user actually meets it.
-   */
-  if (modelExchanges === 0 && embeddingExchanges > 0) {
-    out.info('capture.embedding_only', { exchanges: 0, embeddings: embeddingExchanges });
-  }
-  if (modelExchanges === 0 && embeddingExchanges === 0) {
-    const baseUrls = Object.keys(launch.env)
-      .filter((name) => /(?:_BASE_URL|_API_BASE)$/.test(name))
-      .sort();
-    // Which cause is worth naming depends on how this adapter captures at all, and the line
-    // already carries the evidence: `set=none` means there was never a variable to be ignored.
-    // Printing "it may not read a base-URL variable" next to `set=none` contradicts the run's own
-    // output and sends the reader after a route that was never the route -- which is how the
-    // capture bug fixed earlier in this branch stayed hidden through a dozen rounds of debugging.
-    //
-    // The proxy's own counters come first, because they settle the question the other branches
-    // are guessing at. A call agenticreplay forwarded is a call the agent made *to agenticreplay*: the variables
-    // were read and the redirection worked, so "the agent never called the proxy" is false on its
-    // face and costs the reader a search through a configuration that was right all along.
-    const opaque = proxy.stats().passedThrough;
-    const paths = unclaimed.list();
-
-    out.warn('capture.empty', {
-      exchanges: 0,
-      cause:
-        opaque > 0
-          ? `the agent called the proxy ${opaque} time(s), on ${paths.length > 0 ? paths.join(', ') : 'unclassified paths'}; those requests are recorded as network traffic`
-          : baseUrls.length > 0
-            ? 'the agent never called the proxy — it may not read a base-URL variable'
-            : adapter.capture === 'config'
-              ? `${adapter.id} is redirected through its own config, and this run had no configured provider to redirect`
-              : tls.ca
-                ? 'this adapter captures at the transport, and nothing agenticreplay decrypted looked like a model call'
-                : 'this adapter captures at the transport, and interception was not on',
-      ...(opaque > 0 ? { passed_through: opaque } : {}),
-      set: baseUrls.join(',') || 'none',
-      next: opaque > 0 ? 'agenticreplay show to read what was forwarded' : 'agenticreplay doctor',
-    });
-  }
-
-  /**
-   * Every model call came back an error.
-   *
-   * `capture.empty` covers the run the proxy never saw. This covers the run it saw all of, where
-   * every answer was a refusal: an expired gateway credential, a model the account cannot reach, a
-   * provider outage. The harness retries, exhausts its attempts, prints its own error and exits 0,
-   * so the summary reads exactly like a successful recording — `recorded events=27 exit=0` — over
-   * a trace that contains no model output at all. Replaying it faithfully reproduces the failures.
-   *
-   * Only when *all* of them failed. A run that retried once and then worked is a run that worked,
-   * and warning about it would train people to ignore the line that matters.
-   */
-  if (modelExchanges > 0 && erroredExchanges === modelExchanges) {
-    const commonest = [...errorStatuses.entries()].sort((a, b) => b[1] - a[1])[0];
-    out.warn('capture.errors', {
-      exchanges: modelExchanges,
-      errors: erroredExchanges,
-      status: commonest ? commonest[0] : 'unknown',
-      cause: 'every model call the proxy forwarded came back an error',
-      effect: 'the trace holds the failures, not any model output — a replay reproduces those',
-      next: 'agenticreplay show to read the errors, then check the upstream credential or model id',
-    });
-  }
-
-  /**
-   * Shell capture that was on and recorded nothing.
-   *
-   * `installShellShim` succeeding means a `sh`, a `bash` and a `zsh` were written into the run
-   * directory and put at the front of PATH. It does not mean the harness went through them, and
-   * on Windows Claude Code does not: it finds its shell without consulting PATH, so the shim sits
-   * unused while `shell=on` is printed and the frames file stays empty. What is lost is precisely
-   * what only the shim can see — the real exit code, the real duration, and which stream each byte
-   * came from — while the commands still appear as tool calls, so nothing looks wrong.
-   *
-   * The condition is evidence, not a platform check: commands demonstrably ran and the layer that
-   * was supposed to see them saw none of them, whatever the reason.
-   */
-  if (shell && shellFrames === 0 && commandToolCalls > 0) {
-    out.warn('shell.ineffective', {
-      commands: commandToolCalls,
-      captured: 0,
-      cause: 'the harness ran its shell without going through the PATH shim',
-      effect: 'exit codes, durations and the stdout/stderr split are not in this trace',
-      next: 'record with --no-shell, which claims nothing rather than claiming this',
-    });
-  }
-
-  if (fs) await fs.dispose().catch(() => undefined);
-
-  out.plain('');
-  out.plain(`  agenticreplay show ${writer.runId}             # inspect the recorded activity`);
-  out.plain(`  agenticreplay ui ${writer.runId}               # open the timeline`);
-
-  return {
-    runId: writer.runId,
-    runDir: writer.runDir,
-    events: manifest.counts?.events ?? writer.seq,
-    modelExchanges,
-    childExitCode: exitCode,
-    exitCode: exitCode !== 0 ? exitCode : manifest.capture?.status === 'incomplete' ? 2 : 0,
-  };
 }
 
 /**

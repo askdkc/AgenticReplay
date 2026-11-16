@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+import { BlobStore } from '@agenticreplay/core';
 import { createServer, type Server } from 'node:http';
 import {
   mkdtemp,
@@ -968,6 +970,30 @@ describe('push and pull', () => {
   reproduce — but as a decision the pusher makes rather than a default they inherit, because
   `agenticreplay scrub` cannot rewrite the store and says as much itself.
   */
+  it('sends a delta-backed request in an independently decodable blob', async () => {
+    await seedRun();
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
+    const store = new BlobStore(join(dir, 'blobs'));
+    const history = 'shared history '.repeat(5000);
+    await store.prepare(history, 'text/plain', true).publish();
+    const request = store.prepare(history + ' next', 'text/plain', true);
+    await request.publish();
+    const digest = request.ref.$blob.slice('sha256:'.length);
+    const relative = `blobs/${digest.slice(0, 2)}/${digest}`;
+    expect(await readFile(join(dir, relative + '.delta'))).toBeDefined();
+    await writeFile(join(dir, relative + '.delta.deadbeef.tmp'), 'unpublished delta');
+
+    await pushCommand(parseArgs(['push', runId, '--gateway', url]), out, workspace, env());
+
+    const sent = received.find((entry) => entry.method === 'POST')!;
+    const start = sent.body.indexOf('PK');
+    const end = sent.body.lastIndexOf('\r\n--');
+    const entries = await readArchive(new Uint8Array(sent.body.subarray(start, end)));
+    expect(entries.some((entry) => entry.name.includes('.delta'))).toBe(false);
+    const blob = entries.find((entry) => entry.name === `${runId}/${relative}.gz`);
+    expect(gunzipSync(blob!.bytes).toString()).toBe(history + ' next');
+  });
+
   it('ships the workspace snapshots only when --fs asks, and warns when it does', async () => {
     await seedRun();
     const dir = join(workspace, '.agenticreplay', 'runs', runId);

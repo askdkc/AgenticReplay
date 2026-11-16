@@ -16,7 +16,7 @@ Licensed CC BY 4.0 so that other implementations may quote it freely.
 ├── events.jsonl       # append-only, totally ordered event log
 ├── blobs/<ab>/<sha256>  # content-addressed payloads
 ├── fs/                # shadow git object store (optional)
-└── redactions.json    # what was removed, by rule, with stable placeholders
+└── redactions.json    # what was removed, by rule and identifier
 ```
 
 `run_id` MUST match `^run_[0-9a-f]{6,32}$`.
@@ -95,8 +95,8 @@ Writers MUST spill any payload whose serialized form exceeds **4096 bytes** to a
 `events.jsonl` stays readable with `jq` and `rg`. Blobs are stored at
 `blobs/<first two hex chars>/<full hex digest>` (raw) or the same path with `.gz`
 (gzip). Both forms are immutable. The digest and `BlobRef.bytes` describe the **uncompressed**
-bytes, after redaction. Readers try the raw path first, then `.gz` only when the raw path is
-absent. Writers compress blobs of at least 4096 bytes only when this reduces size and reuse an
+bytes, after redaction. Readers try the raw path first, then `.gz`, then the local request
+delta format described below when neither full representation exists. Writers compress blobs of at least 4096 bytes only when this reduces size and reuse an
 existing blob in either representation. Readers must limit expanded bytes, not just stored bytes.
 AgenticReplay readers enforce a 256 MiB per-blob ceiling; the Viewer can apply a smaller aggregate
 expanded-byte budget. Older readers that only support raw files must be upgraded before reading
@@ -111,8 +111,15 @@ marked incomplete. Once diagnostic space is exhausted, further nonterminal appen
 and filesystem block overhead. They do not reserve physical disk blocks or guarantee writes when
 the filesystem is full.
 
-Content addressing deduplicates identical blobs; it does not deduplicate shared prefixes between
-different model requests. Implementations MUST NOT store duplicate logical blobs.
+Content addressing deduplicates identical blobs. Local AgenticReplay recorders may also store a
+request as `<digest>.delta` when it shares a prefix or suffix with an earlier full request and the
+delta is smaller than the full encoding. The 41-byte header holds the 32-byte SHA-256 of the base,
+the retained prefix and suffix lengths as two big-endian unsigned 32-bit integers, and a compression
+flag (0 for raw, 1 for gzip). The remainder is the replacement middle. The base must be stored as
+raw or gzip, and readers verify the reconstructed digest. The reference continues to describe
+the complete reconstructed bytes. Reading local delta files requires a delta-aware reader.
+AgenticReplay push materializes them as raw or gzip for interchange. Implementations MUST NOT
+store duplicate logical blobs.
 
 Completed historical runs can be compacted explicitly with `agenticreplay compact [run]`
 (`--dry-run` only estimates savings). Ordinary local CLI startup and embedded `ensureRunsDir()`
@@ -216,6 +223,9 @@ Redaction happens in the write path, before bytes reach disk. Implementations MU
   substituting a stable placeholder `<secret:kind:hash8>` derived from a per-run salt, so that
   replay still matches structurally and repeat occurrences remain equal;
 - record removals in `redactions.json` by rule and identifier, never by value.
+  Implementations can aggregate occurrences by context and rule. An aggregate uses
+  `<secret:kind:*>` in the record's `placeholder` field, while redacted content retains
+  its per-value placeholders.
 
 High-entropy detection MUST additionally require a **mixed alphabet** — the token must contain
 both a digit and a letter. Shannon entropy alone has false positives on ordinary source code

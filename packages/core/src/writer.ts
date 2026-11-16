@@ -218,9 +218,7 @@ export class TraceWriter {
       throw new Error(`not a valid run id: ${JSON.stringify(runId)}`);
     // One redactor for the whole run: the salt stays constant, so a secret seen in the environment
     // and again in a payload gets the same placeholder, and every removal lands in redactions.json.
-    const redactor = new Redactor(
-      init.envAllowlist === undefined ? {} : { envAllowlist: init.envAllowlist },
-    );
+    const redactor = new Redactor({ envAllowlist: init.envAllowlist, summarizeHits: true });
     const unredactedBase: Manifest = {
       schema_version: SCHEMA_VERSION,
       run_id: runId,
@@ -342,7 +340,7 @@ export class TraceWriter {
       expectedRunId,
       runDir,
       base,
-      new Redactor({ envAllowlist: [] }),
+      new Redactor({ envAllowlist: [], summarizeHits: true }),
       await open(eventsPath, 'a', FILE_MODE),
       limits,
     );
@@ -600,6 +598,7 @@ export class TraceWriter {
       payload = undefined;
       this.markCaptureIncomplete(omission);
     }
+    let blob: ReturnType<BlobStore['prepare']> | undefined;
     let bodyEvidence: { body_bytes: number; body_sha256: string } | undefined;
     if (payload !== undefined) {
       const json = JSON.stringify(payload);
@@ -633,14 +632,12 @@ export class TraceWriter {
         });
       }
       if (Buffer.byteLength(scrubbed.value) > INLINE_PAYLOAD_LIMIT) {
-        try {
-          payload = await this.#blobs.put(scrubbed.value, 'application/json');
-        } catch (error) {
-          if (!(error instanceof BlobLimitError)) throw error;
-          omission = 'blob_storage_limit';
-          this.markCaptureIncomplete(omission);
-          payload = undefined;
-        }
+        blob = this.#blobs.prepare(
+          scrubbed.value,
+          'application/json',
+          init.type === 'model.request' || init.type === 'net.request',
+        );
+        payload = blob.ref;
       } else payload = JSON.parse(scrubbed.value) as Payload;
     }
 
@@ -717,37 +714,59 @@ export class TraceWriter {
       ) as CaptureTransformation[];
     }
 
-    if (omission) out.attrs = { ...out.attrs, payload_omitted: omission };
-    let line = `${JSON.stringify(out)}\n`;
-    if (before + Buffer.byteLength(line) > this.#eventBytes) {
-      this.markCaptureIncomplete('event_storage_limit');
-      // Keep a bounded diagnostic, never the unbounded payload/attrs that filled the store.
-      const attrs: Record<string, unknown> = { payload_omitted: omission ?? 'event_storage_limit' };
-      for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
-        const value = out.attrs?.[key];
-        if (typeof value === 'string') attrs[key] = value.slice(0, 96);
-        else if (typeof value === 'number' || typeof value === 'boolean') attrs[key] = value;
+    const fitEvent = (): string => {
+      if (omission) out.attrs = { ...out.attrs, payload_omitted: omission };
+      let line = `${JSON.stringify(out)}\n`;
+      if (before + Buffer.byteLength(line) > this.#eventBytes) {
+        blob = undefined;
+        this.markCaptureIncomplete('event_storage_limit');
+        // Keep a bounded diagnostic, never the unbounded payload/attrs that filled the store.
+        const attrs: Record<string, unknown> = {
+          payload_omitted: omission ?? 'event_storage_limit',
+        };
+        for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
+          const value = out.attrs?.[key];
+          if (typeof value === 'string') attrs[key] = value.slice(0, 96);
+          else if (typeof value === 'number' || typeof value === 'boolean') attrs[key] = value;
+        }
+        out = { seq, ts, mono_us, turn, type: init.type, actor: init.actor, attrs };
+        line = `${JSON.stringify(out)}\n`;
+        const allowance =
+          init.type === 'run.end'
+            ? DIAGNOSTIC_BYTES
+            : init.type === 'error'
+              ? DIAGNOSTIC_BYTES - END_BYTES
+              : END_BYTES;
+        const limit = this.#eventBytes + allowance;
+        if (before + Buffer.byteLength(line) > limit) {
+          this.markCaptureIncomplete('diagnostic_storage_limit');
+          throw new Error('diagnostic storage limit reached');
+        }
       }
-      out = { seq, ts, mono_us, turn, type: init.type, actor: init.actor, attrs };
-      line = `${JSON.stringify(out)}\n`;
-      const allowance =
-        init.type === 'run.end'
-          ? DIAGNOSTIC_BYTES
-          : init.type === 'error'
-            ? DIAGNOSTIC_BYTES - END_BYTES
-            : END_BYTES;
-      const limit = this.#eventBytes + allowance;
-      if (before + Buffer.byteLength(line) > limit) {
-        this.markCaptureIncomplete('diagnostic_storage_limit');
-        throw new Error('diagnostic storage limit reached');
+      assertEvent(out);
+      return line;
+    };
+    const writeLine = async (line: string): Promise<void> => {
+      try {
+        await this.#handle.writeFile(line);
+      } catch (error) {
+        await this.#handle.truncate(before);
+        throw error;
       }
-    }
-    assertEvent(out);
-    try {
-      await this.#handle.writeFile(line);
-    } catch (error) {
-      await this.#handle.truncate(before);
-      throw error;
+    };
+    const line = fitEvent();
+    if (blob) {
+      try {
+        await blob.publish(() => writeLine(line));
+      } catch (error) {
+        if (!(error instanceof BlobLimitError)) throw error;
+        omission = 'blob_storage_limit';
+        this.markCaptureIncomplete(omission);
+        delete out.payload;
+        await writeLine(fitEvent());
+      }
+    } else {
+      await writeLine(line);
     }
     if (init.type === 'run.start' || init.type === 'session.snapshot') {
       const title = init.attrs?.session_title ?? init.attrs?.title;

@@ -47,6 +47,18 @@ describe('BlobStore.put', () => {
     expect(Buffer.from(await reopened.get(next)).toString()).toBe('after restart');
   });
 
+  it('rolls back a new blob when its reference fails to write and keeps existing blobs', async () => {
+    const fail = async () => {
+      throw new Error('event write failed');
+    };
+    const prepared = store.prepare('payload');
+    await expect(prepared.publish(fail)).rejects.toThrow('event write failed');
+    expect(await allFiles(store.dir)).toEqual([]);
+    await store.put('payload');
+    await expect(prepared.publish(fail)).rejects.toThrow('event write failed');
+    expect(await store.has(prepared.ref)).toBe(true);
+  });
+
   it('returns a spec-shaped ref with the sha256 of the content', async () => {
     const ref = await store.put('hello');
     // sha256('hello')

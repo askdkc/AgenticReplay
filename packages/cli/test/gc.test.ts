@@ -232,6 +232,35 @@ describe('gc', () => {
       expect(await exists(runDir), 'pruning blobs must not remove the run').toBe(true);
     });
 
+    it('retains a full blob reachable only through a request delta', async () => {
+      const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
+        adapter: { id: 'test' },
+        argv: [],
+        cwd,
+        agenticreplayVersion: '0.1.0',
+      });
+      const store = new BlobStore(join(writer.runDir, 'blobs'));
+      const history = 'history '.repeat(10000);
+      const base = store.prepare(history, 'text/plain', true);
+      await base.publish();
+      const delta = store.prepare(history + 'next', 'text/plain', true);
+      await delta.publish();
+      await writer.append({ type: 'model.request', actor: 'agent', payload: delta.ref });
+      const manifest = await writer.close();
+      expect(manifest.counts?.blobs).toBe(2);
+      expect(
+        (await readdir(join(writer.runDir, 'blobs'), { recursive: true })).some((path) =>
+          path.endsWith('.delta'),
+        ),
+      ).toBe(true);
+      const orphan = await new BlobStore(join(writer.runDir, 'blobs')).put('discard me');
+
+      expect((await gcCommand(parseArgs(['gc']), out, cwd)).blobsRemoved).toBe(1);
+      const reader = await TraceReader.open(writer.runDir);
+      expect(await reader.resolvePayload((await reader.events())[0]!)).toBe(history + 'next');
+      expect(await new BlobStore(join(writer.runDir, 'blobs')).has(orphan)).toBe(false);
+    });
+
     it('counts the orphan bytes it reclaimed', async () => {
       const runDir = await makeRun();
       const store = new BlobStore(join(runDir, 'blobs'));

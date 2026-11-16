@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -343,6 +344,102 @@ describe('end to end: record and inspect', () => {
     const manifest = (await TraceReader.open(runs[0]!.dir)).manifest();
     expect(manifest.ended_at, 'a failed run must still be sealed').toBeDefined();
     expect(manifest.integrity?.events_sha256).toBeDefined();
+  });
+
+  const writeFailureEvents =
+    process.platform === 'win32' ? ['run.start'] : ['run.start', 'shell.exec'];
+  it.each(writeFailureEvents)('exits when recording %s fails with the proxy open', async (type) => {
+    const preload = join(workspace, 'fail-write.mjs');
+    const core = new URL('../../core/dist/index.js', import.meta.url);
+    await writeFile(
+      preload,
+      `
+      import { TraceWriter } from ${JSON.stringify(core.href)};
+      const append = TraceWriter.prototype.append;
+      TraceWriter.prototype.append = function (event) {
+        if (event.type === ${JSON.stringify(type)})
+          return Promise.reject(new Error('injected recording failure'));
+        return append.call(this, event);
+      };
+    `,
+    );
+    const cli = fileURLToPath(new URL('../../../bin/agenticreplay.js', import.meta.url));
+    const agent = join(workspace, 'shelling-agent.mjs');
+    await writeFile(
+      agent,
+      `
+        import { execFileSync } from 'node:child_process';
+        execFileSync('sh', ['-c', 'printf hello']);
+      `,
+    );
+    await expect(
+      run(
+        process.execPath,
+        [
+          '--import',
+          preload,
+          cli,
+          'record',
+          'generic-openai',
+          '--no-agent-spans',
+          '--',
+          process.execPath,
+          agent,
+        ],
+        { cwd: workspace, timeout: 4000 },
+      ),
+    ).rejects.toMatchObject({
+      killed: false,
+      code: 1,
+      stdout: expect.stringContaining('injected recording failure'),
+    });
+  });
+
+  it('records growing conversations in deltas and reads back intact request bodies', async () => {
+    const bodyHistory = Array.from({ length: 2000 }, (_, index) =>
+      createHash('sha256').update(String(index)).digest('hex').slice(0, 12),
+    ).join(' ');
+    await writeFile(join(workspace, 'history.txt'), bodyHistory);
+    const cli = fileURLToPath(new URL('../../../bin/agenticreplay.js', import.meta.url));
+    await run(
+      process.execPath,
+      [
+        cli,
+        'record',
+        'generic-openai',
+        '--upstream-anthropic',
+        model.url,
+        '--',
+        process.execPath,
+        FAKE_AGENT,
+      ],
+      {
+        cwd: workspace,
+        env: { ...process.env, FAKE_AGENT_READ: 'history.txt', FAKE_AGENT_TURNS: '2' },
+      },
+    );
+    const [recorded] = await listRuns(workspace);
+    const reader = await TraceReader.open(recorded!.dir);
+    const files = await readdir(join(recorded!.dir, 'blobs'), { recursive: true });
+    const net = (await reader.events()).filter(
+      (event) => event.type === 'net.request' && event.attrs?.phase === 'body',
+    );
+    expect(net).toHaveLength(2);
+    expect(isBlobRef(net[1]!.payload)).toBe(true);
+    if (!isBlobRef(net[1]!.payload)) throw new Error('Missing request blob');
+    const digest = net[1]!.payload.$blob.slice('sha256:'.length);
+    expect(files.some((name) => name.endsWith(digest + '.delta'))).toBe(true);
+    for (const [index, event] of net.entries()) {
+      const body = await reader.resolvePayload(event);
+      expect(typeof body).toBe('string');
+      expect((body as string).includes(bodyHistory)).toBe(true);
+      expect(JSON.parse(body as string)).toEqual(model.calls[index]!.body);
+      expect(
+        createHash('sha256')
+          .update(body as string)
+          .digest('hex'),
+      ).toBe(event.attrs?.body_sha256);
+    }
   });
 
   it('never writes the agent api key into the trace', async () => {

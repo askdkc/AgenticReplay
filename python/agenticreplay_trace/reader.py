@@ -37,6 +37,8 @@ __all__ = [
 _HASH_CHUNK: Final = 1 << 20
 _SHA256_PREFIX: Final = "sha256:"
 _HEX64_LENGTH: Final = 64
+_MAX_BLOB_BYTES: Final = 256 * 1024 * 1024
+_DELTA_HEADER_BYTES: Final = 41
 
 
 class NotATraceError(AgenticReplayTraceError):
@@ -64,6 +66,47 @@ def _bare_digest(ref: BlobRef | str) -> str:
     if len(hexdigest) != _HEX64_LENGTH or any(c not in "0123456789abcdef" for c in hexdigest):
         raise TraceFormatError(f"invalid blob digest: {raw!r}")
     return hexdigest
+
+
+def _bounded_read(handle: Any, limit: int) -> bytes:
+    data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise TraceFormatError("expanded blob exceeds limit")
+    return data
+
+
+def _read_full_blob(path: Path, limit: int) -> bytes:
+    if not path.exists():
+        path = path.with_suffix(".gz")
+    if path.stat().st_size > _MAX_BLOB_BYTES:
+        raise TraceFormatError("stored blob exceeds limit")
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as handle:
+        return _bounded_read(handle, limit)
+
+
+def _read_request_delta(path: Path, limit: int) -> bytes:
+    if path.stat().st_size > _MAX_BLOB_BYTES:
+        raise TraceFormatError("stored blob exceeds limit")
+    with path.open("rb") as handle:
+        header = handle.read(_DELTA_HEADER_BYTES)
+        if len(header) != _DELTA_HEADER_BYTES or header[40] > 1:
+            raise TraceFormatError("invalid request blob delta header")
+        base_digest = header[:32].hex()
+        prefix = int.from_bytes(header[32:36], "big")
+        suffix = int.from_bytes(header[36:40], "big")
+        middle_limit = limit - prefix - suffix
+        if middle_limit < 0:
+            raise TraceFormatError("expanded blob exceeds limit")
+        base = _read_full_blob(path.parent.parent / base_digest[:2] / base_digest, _MAX_BLOB_BYTES)
+        if prefix + suffix > len(base):
+            raise TraceFormatError("invalid request blob delta range")
+        if header[40] == 1:
+            with gzip.GzipFile(fileobj=handle) as packed:
+                middle = _bounded_read(packed, middle_limit)
+        else:
+            middle = _bounded_read(handle, middle_limit)
+    return base[:prefix] + middle + base[len(base) - suffix :]
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,31 +219,25 @@ class TraceReader:
     ) -> bytes:
         """The bytes of a content-addressed payload (spec §2.2).
 
-        `verify` re-hashes the content. It is off by default so that an unverified read returns
-        exactly what the TypeScript reader returns; the spec makes integrity checking a duty for
-        `events.jsonl` (§6) but never states one for blobs, so silently differing here would be
-        a worse failure than a corrupt byte.
+        `verify` also checks the digest of raw or gzip representations. Reconstructed
+        request deltas are always checked.
         """
         hexdigest = _bare_digest(ref)
         path = self._run_dir / "blobs" / hexdigest[:2] / hexdigest
         if not isinstance(max_bytes, int) or max_bytes < 0:
             raise ValueError("invalid blob read limit")
-        max_bytes = min(max_bytes, 256 * 1024 * 1024)
+        limit = min(max_bytes, _MAX_BLOB_BYTES)
         try:
-            if not path.exists():
-                path = path.with_name(path.name + ".gz")
-            if path.stat().st_size > 256 * 1024 * 1024:
-                raise TraceFormatError("stored blob exceeds limit")
-            opener = gzip.open if path.suffix == ".gz" else open
-            with opener(path, "rb") as handle:
-                data = handle.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                raise TraceFormatError("expanded blob exceeds limit")
+            try:
+                data = _read_full_blob(path, limit)
+            except FileNotFoundError:
+                path = path.with_suffix(".delta")
+                data = _read_request_delta(path, limit)
         except FileNotFoundError as exc:
             raise BlobNotFoundError(
                 f"blob not found: {_SHA256_PREFIX}{hexdigest} (looked in {path})"
             ) from exc
-        if verify:
+        if verify or path.suffix == ".delta":
             actual = hashlib.sha256(data).hexdigest()
             if actual != hexdigest:
                 raise BlobIntegrityError(

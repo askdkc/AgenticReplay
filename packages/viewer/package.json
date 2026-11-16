@@ -17,6 +17,7 @@
     "dist"
   ],
   "dependencies": {
+    "@agenticreplay/core": "0.1.25",
     "@agenticreplay/schema": "0.1.25"
   },
   "engines": {

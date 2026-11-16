@@ -13,6 +13,11 @@ import {
 } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import {
+  BLOB_FILE_NAME,
+  TEMPORARY_DELTA_FILE_NAME,
+  blobFileDigest,
+  encodeBlob,
+  readBlobFile,
   ensureRunsDir,
   resolveRunSelector,
   runDirFor,
@@ -502,7 +507,9 @@ async function runEntries(
 ): Promise<ArchiveEntry[]> {
   const entries: ArchiveEntry[] = [];
   const walk = async (dir: string): Promise<void> => {
-    for (const item of await readdir(dir, { withFileTypes: true })) {
+    const items = await readdir(dir, { withFileTypes: true });
+    const names = new Set(items.filter((item) => item.isFile()).map((item) => item.name));
+    for (const item of items) {
       // Top level only — see PUSHED_TOP_LEVEL.
       if (dir === runDir) {
         const allowed =
@@ -517,7 +524,20 @@ async function runEntries(
       if (!item.isFile()) continue;
       // Zip names are '/'-separated whatever the host uses.
       const rel = relative(runDir, full).split(sep).join('/');
-      entries.push({ name: `${runId}/${rel}`, bytes: new Uint8Array(await readFile(full)) });
+      const blobShard = /^blobs\/[0-9a-f]{2}\//.test(rel);
+      if (blobShard && TEMPORARY_DELTA_FILE_NAME.test(item.name)) continue;
+      if (blobShard && BLOB_FILE_NAME.test(item.name) && item.name.endsWith('.delta')) {
+        const digest = blobFileDigest(item.name);
+        if (names.has(digest) || names.has(`${digest}.gz`)) continue;
+        // Sharing keeps the archive readable by receivers that understand only raw/gzip blobs.
+        const encoded = await encodeBlob(await readBlobFile(full));
+        entries.push({
+          name: `${runId}/${rel.slice(0, -'.delta'.length)}${encoded.suffix}`,
+          bytes: encoded.bytes,
+        });
+      } else {
+        entries.push({ name: `${runId}/${rel}`, bytes: new Uint8Array(await readFile(full)) });
+      }
     }
   };
   await walk(runDir);

@@ -125,7 +125,8 @@ Apache-2.0.
 
 ### Compressed recordings
 
-The reader supports both legacy raw blobs and `.gz` blobs using the standard library. Digests
+The reader supports raw, `.gz`, and request `.delta` blobs using the standard library. Digests
 and byte counts refer to expanded content. `reader.blob(ref, max_bytes=...)` can lower the default
 256 MiB per-blob expansion limit. Corrupt gzip raises an error rather than returning compressed
-bytes as payload data. No additional dependencies are needed.
+bytes as payload data. Request deltas are verified against the digest after reconstruction. No
+additional dependencies are needed.

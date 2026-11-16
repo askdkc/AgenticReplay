@@ -2,7 +2,13 @@ import { createReadStream } from 'node:fs';
 import { readFile, readdir, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { BLOB_FILE_NAME, listRuns, runsDir } from '@agenticreplay/core';
+import {
+  BLOB_FILE_NAME,
+  blobFileDigest,
+  listRuns,
+  readBlobDeltaBase,
+  runsDir,
+} from '@agenticreplay/core';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 
@@ -275,18 +281,28 @@ function forkParentOf(line: string): string | undefined {
 }
 
 async function orphanBlobs(blobsRoot: string, referenced: Set<string>): Promise<OrphanBlob[]> {
-  const orphans: OrphanBlob[] = [];
+  const candidates: { path: string; shard: string; name: string }[] = [];
   for (const shard of await readdir(blobsRoot, { withFileTypes: true }).catch(() => [])) {
     if (!shard.isDirectory()) continue;
     const shardDir = join(blobsRoot, shard.name);
     for (const name of await readdir(shardDir).catch(() => [])) {
-      // Only files named as a digest: a half-written `.tmp` belongs to whoever is writing it.
-      if (!BLOB_FILE_NAME.test(name) || referenced.has(name.replace(/\.gz$/, ''))) continue;
-      const path = join(shardDir, name);
-      const info = await stat(path).catch(() => null);
-      if (!info?.isFile()) continue;
-      orphans.push({ path, shard: shardDir, bytes: info.size });
+      // A half-written `.tmp` belongs to whoever is writing it.
+      if (!BLOB_FILE_NAME.test(name)) continue;
+      candidates.push({ path: join(shardDir, name), shard: shardDir, name });
     }
+  }
+  const reachable = new Set(referenced);
+  for (const { name, path } of candidates) {
+    if (!name.endsWith('.delta') || !referenced.has(blobFileDigest(name))) continue;
+    const base = await readBlobDeltaBase(path).catch(() => undefined);
+    if (base === undefined) return []; // Preserve possible bases of unreadable references.
+    reachable.add(base);
+  }
+  const orphans: OrphanBlob[] = [];
+  for (const { name, path, shard } of candidates) {
+    if (reachable.has(blobFileDigest(name))) continue;
+    const info = await stat(path).catch(() => null);
+    if (info?.isFile()) orphans.push({ path, shard, bytes: info.size });
   }
   return orphans;
 }

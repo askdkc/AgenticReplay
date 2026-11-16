@@ -443,3 +443,30 @@ class TestCompressedBlobs:
         # Old raw files take precedence, including in mixed-format stores.
         path.write_bytes(data)
         assert reader.blob(digest, verify=True) == data
+
+    def test_request_delta_limits_and_corruption(self, tmp_path: Path) -> None:
+        import gzip
+
+        prefix, suffix = b'{"messages":["shared"]', b'}'
+        base = prefix + suffix
+        middle = b',"stream":true'
+        body = prefix + middle + suffix
+        digest = hashlib.sha256(body).hexdigest()
+        base_digest = hashlib.sha256(base).hexdigest()
+        write_trace(tmp_path, [], blobs={base_digest: base})
+        path = tmp_path / "blobs" / digest[:2] / (digest + ".delta")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            bytes.fromhex(base_digest)
+            + len(prefix).to_bytes(4, "big")
+            + len(suffix).to_bytes(4, "big")
+            + b"\x01"
+        )
+        path.write_bytes(header + gzip.compress(middle))
+        reader = TraceReader.open(tmp_path)
+        assert reader.blob(digest, max_bytes=len(body)) == body
+        with pytest.raises(TraceFormatError, match="expanded blob"):
+            reader.blob(digest, max_bytes=len(body) - 1)
+        path.write_bytes(header + gzip.compress(b"corrupt"))
+        with pytest.raises(BlobIntegrityError):
+            reader.blob(digest)

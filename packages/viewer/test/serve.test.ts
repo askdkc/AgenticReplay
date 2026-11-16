@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { rm, writeFile } from 'node:fs/promises';
+import { readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { BlobStore } from '@agenticreplay/core';
 import { serveViewer } from '../src/serve.js';
 import { ev, manifest, resetSeq, tempRunDir, writeRun } from './fixtures.js';
 
@@ -113,6 +114,31 @@ describe('serveViewer', () => {
     const server = await serveViewer({ runDir: dir });
     try {
       expect(await (await fetch(`${server.url}blobs/cafe`)).text()).toBe(body);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('downloads a request whose body is stored as a delta', async () => {
+    resetSeq();
+    const dir = await tempRunDir('serve-delta');
+    scratch.push(dir);
+    const store = new BlobStore(join(dir, 'blobs'));
+    const history = 'shared history '.repeat(5000);
+    await store.prepare(JSON.stringify(history), 'application/json', true).publish();
+    const body = history + ' next';
+    const request = store.prepare(JSON.stringify(body), 'application/json', true);
+    await request.publish();
+    expect(
+      (await readdir(store.dir, { recursive: true })).some((path) => path.endsWith('.delta')),
+    ).toBe(true);
+    await writeRun(dir, { events: [ev({ type: 'net.request', payload: request.ref })] });
+    const server = await serveViewer({ runDir: dir });
+    try {
+      const digest = request.ref.$blob.slice('sha256:'.length);
+      const response = await fetch(`${server.url}blobs/${digest}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(body);
     } finally {
       await server.close();
     }
