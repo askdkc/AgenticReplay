@@ -617,7 +617,7 @@ export class TraceWriter {
         (init.type === 'net.request' || init.type === 'net.response') &&
         typeof payload === 'string'
       ) {
-        const body = JSON.parse(scrubbed.value) as string;
+        const body = scrubbed.value === json ? payload : (JSON.parse(scrubbed.value) as string);
         bodyEvidence = {
           body_bytes: Buffer.byteLength(body),
           body_sha256: createHash('sha256').update(body).digest('hex'),

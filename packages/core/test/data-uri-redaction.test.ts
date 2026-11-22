@@ -137,6 +137,34 @@ describe('a whole PNG is excluded from the entropy sweep', () => {
 
   const swept = (v: string) => v.includes('<secret:high_entropy');
 
+  it('preserves payloads and per-event redactions when a large PNG is seen again', () => {
+    const stride = 1 + 192 * 3;
+    const raw = fixedNoise(192 * stride);
+    for (let row = 0; row < 192; row++) raw[row * stride] = 0;
+    const image = Buffer.concat([
+      SIG,
+      chunk('IHDR', ihdrOf(192, 192, 8, 2, 0)),
+      chunk('IDAT', deflateSync(raw, { level: 0 })),
+      chunk('IEND', Buffer.alloc(0)),
+    ]).toString('base64');
+    const input = JSON.stringify({ image, note: 'sk-0123456789abcdefgh' });
+    const options = { salt: 'repeat-image-test' };
+    const recorder = new Redactor(options);
+    for (const location of ['first', 'second']) {
+      const result = recorder.redactString(input, location);
+      expect(JSON.parse(result.value)).toEqual({
+        image,
+        note: expect.stringMatching(/^<secret:sk_api_key:[0-9a-f]{8}>$/),
+      });
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0]).toMatchObject({
+        rule: 'sk_api_key',
+        identifier: expect.stringMatching(new RegExp(`^${location}:`)),
+        count: 1,
+      });
+    }
+  });
+
   it('leaves a PNG byte for byte, and records nothing for it', () => {
     const image = png();
     const redactor = new Redactor({});

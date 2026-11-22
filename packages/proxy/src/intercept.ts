@@ -15,6 +15,7 @@ import { Agent, request as httpsRequest } from 'node:https';
 import { connect as netConnect, isIP, type Socket } from 'node:net';
 import { createSecureContext, rootCertificates, TLSSocket, type SecureContext } from 'node:tls';
 import { randomUUID } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import * as zlib from 'node:zlib';
 import {
   AUTH_REQUEST_HEADERS,
@@ -288,8 +289,7 @@ function headersWithoutEncoding(headers: Record<string, HeaderValue>): Record<st
 
 /** Text when the bytes are text, base64 behind a marker when they are not. */
 function recordableBody(bytes: Buffer): string {
-  const asText = bytes.toString('utf8');
-  if (Buffer.compare(Buffer.from(asText, 'utf8'), bytes) === 0) return asText;
+  if (isUtf8(bytes)) return bytes.toString('utf8');
   return `${BINARY_BODY_PREFIX}${bytes.toString('base64')}`;
 }
 
@@ -1431,8 +1431,7 @@ class Capture {
    * Text when the bytes are text, and base64 behind a marker when they are not. `toString('utf8')`
    * on a binary body replaces every invalid sequence with U+FFFD and is not reversible: a Connect
    * protobuf body came back with 974 replacement characters in 8,459 bytes, which is enough to
-   * make the payload undecodable while still looking like it was captured. The round-trip test is
-   * what tells the two cases apart.
+   * make the payload undecodable while still looking like it was captured. Validate the bytes before decoding.
    */
   text(): string {
     return recordableBody(Buffer.concat(this.#chunks));

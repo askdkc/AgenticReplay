@@ -335,7 +335,7 @@ function isWholePng(b: Buffer): boolean {
     if (!hasValidCrc(b, at, len)) return false;
 
     if (type === 'IDAT') {
-      idat.push(Buffer.from(b.subarray(at + 8, at + 8 + len)));
+      idat.push(b.subarray(at + 8, at + 8 + len));
     } else if (type === 'IEND') {
       if (len !== 0 || next !== b.length || idat.length === 0) return false;
       sawEnd = true;
@@ -358,7 +358,7 @@ function isWholePng(b: Buffer): boolean {
   const expected = pngRawLength(width, height, channels, depth, interlace === 1);
   if (expected > MAX_RASTER_RAW_BYTES) return false;
 
-  const stream = Buffer.concat(idat);
+  const stream = idat.length === 1 ? idat[0]! : Buffer.concat(idat);
   let raw: Buffer;
   try {
     // `info: true` for `bytesWritten`, which is the input the stream actually consumed. Without it
@@ -393,7 +393,7 @@ function isWholeRasterImage(b: Buffer): boolean {
  * six characters rather than a decode — which matters because this runs over every string a trace
  * writes.
  */
-function rasterSpans(value: string): [number, number][] {
+function rasterSpans(value: string, verifiedPngs: Set<string>): [number, number][] {
   const spans: [number, number][] = [];
   let at = 0;
   while (at < value.length) {
@@ -433,6 +433,16 @@ function rasterSpans(value: string): [number, number][] {
     // `\/` and `\\` stand for payload characters; they are stripped before decoding and the span
     // still covers them, or the sweep would resume inside the image.
     const payload = value.slice(start, end).replace(/\\(.)/g, '$1');
+    // Only reuse a successful validation of the exact base64 text. Keep digests,
+    // never the attachment or its enclosing request. Small images cost little to validate.
+    const digest =
+      payload.length >= 64 * 1024
+        ? createHash('sha256').update(payload, 'ascii').digest('hex')
+        : undefined;
+    if (digest && verifiedPngs.has(digest)) {
+      spans.push([start, end]);
+      continue;
+    }
     let bytes: Buffer;
     try {
       bytes = Buffer.from(payload, 'base64');
@@ -440,6 +450,10 @@ function rasterSpans(value: string): [number, number][] {
       continue;
     }
     if (!isWholeRasterImage(bytes)) continue;
+    if (digest) {
+      if (verifiedPngs.size >= 64) verifiedPngs.delete(verifiedPngs.values().next().value!);
+      verifiedPngs.add(digest);
+    }
     spans.push([start, end]);
   }
   return spans;
@@ -529,7 +543,7 @@ const PROTOCOL_SIGNATURE_VALUE = /(\\*")signature\1\s*:\s*\1[A-Za-z0-9+/=_-]*\1/
  * `RangeError: Maximum call stack size exceeded` from here, out through `redactString`, with
  * nothing on the write path to catch it.
  */
-function spansOf(value: string): [number, number][] {
+function spansOf(value: string, verifiedPngs: Set<string>): [number, number][] {
   const spans: [number, number][] = [];
   // Public directory prefix plus mkdtemp's six characters; this is a recorder-generated
   // transport location, not a credential. Named credential rules still run first.
@@ -541,8 +555,28 @@ function spansOf(value: string): [number, number][] {
   for (const m of value.matchAll(PROTOCOL_SIGNATURE_VALUE)) {
     spans.push([m.index, m.index + m[0].length]);
   }
-  for (const span of rasterSpans(value)) spans.push(span);
+  for (const span of rasterSpans(value, verifiedPngs)) spans.push(span);
   return spans.sort((a, b) => a[0] - b[0]);
+}
+
+/** Yield only candidates not wholly contained in a verified or reserved span. */
+function* entropyCandidates(value: string, verifiedPngs: Set<string>) {
+  const spans = spansOf(value, verifiedPngs);
+  const tokens = new RegExp(TOKEN);
+  let cursor = 0;
+  let reach = -1;
+  for (let match = tokens.exec(value); match; match = tokens.exec(value)) {
+    while (cursor < spans.length && spans[cursor]![0] <= match.index) {
+      reach = Math.max(reach, spans[cursor++]![1]);
+    }
+    if (tokens.lastIndex > reach) {
+      yield match;
+    } else if (reach === value.length || !/[A-Za-z0-9_-]/.test(value[reach]!)) {
+      // No token can straddle this end. Avoid allocating a match for every
+      // base64 fragment of an image whose entire span has already been checked.
+      tokens.lastIndex = reach;
+    }
+  }
 }
 
 /**
@@ -637,6 +671,7 @@ export class Redactor {
   readonly #salt: string;
   readonly #envAllowlist: Set<string>;
   readonly #summarizeHits: boolean;
+  readonly #verifiedPngs = new Set<string>();
   readonly #records = new Map<string, RedactionRecord>();
 
   constructor(opts: RedactionOptions = {}) {
@@ -735,17 +770,9 @@ export class Redactor {
     }
     if (sweep) {
       // The raw sweep's own filters, over the view: placeholders and protocol values stay exempt.
-      const spans = spansOf(view.text);
-      let cursor = 0;
-      let reach = -1;
-      for (const m of view.text.matchAll(TOKEN)) {
+      for (const m of entropyCandidates(view.text, this.#verifiedPngs)) {
         const token = m[0];
         const start = m.index;
-        while (cursor < spans.length && spans[cursor]![0] <= start) {
-          if (spans[cursor]![1] > reach) reach = spans[cursor]![1];
-          cursor += 1;
-        }
-        if (start + token.length <= reach) continue;
         if (token.length < MIN_ENTROPY_LENGTH || !looksRandom(token)) continue;
         if (entropy(token) <= ENTROPY_BITS_PER_CHAR) continue;
         found.push({ a: start, b: start + token.length, kind: 'high_entropy', secret: token });
@@ -779,30 +806,11 @@ export class Redactor {
     context: string | undefined,
     hits: Map<string, RedactionRecord>,
   ): string {
-    // Placeholders already written by the pattern rules must not be rescanned as tokens.
-    const spans = spansOf(value);
     let out = '';
     let cut = 0;
-    // `spans.some(...)` per token walked the whole list every time, which is quadratic once a value
-    // holds many images — measured, 40k small PNGs cost 2.7 s against 0.14 s before the exemption
-    // existed. Spans arrive sorted by start and `matchAll` yields tokens the same way, so one
-    // cursor carrying the furthest end seen so far answers the same question in a single pass:
-    // `reach` is max(b) over every span with a <= start, and a token is inside one of them exactly
-    // when it ends at or before that.
-    let cursor = 0;
-    let reach = -1;
-    for (const m of value.matchAll(TOKEN)) {
+    for (const m of entropyCandidates(value, this.#verifiedPngs)) {
       const token = m[0];
       const start = m.index;
-      while (cursor < spans.length && spans[cursor]![0] <= start) {
-        if (spans[cursor]![1] > reach) reach = spans[cursor]![1];
-        cursor += 1;
-      }
-      // Wholly inside, not merely starting inside. A TOKEN is `[A-Za-z0-9_-]+`, which runs on
-      // past an image payload through a `_` or `-` that base64 has no use for — so a token that
-      // began in the image and ended in a credential was skipped entire, and the credential with
-      // it. Overlap would be wrong the other way: it would exempt text outside the image.
-      if (start + token.length <= reach) continue;
       if (token.length < MIN_ENTROPY_LENGTH || !looksRandom(token)) continue;
       if (entropy(token) <= ENTROPY_BITS_PER_CHAR) continue;
       // A serialized newline followed by a token matches as `nTOKEN`. Replacing the `n`

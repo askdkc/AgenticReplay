@@ -146,10 +146,6 @@ function bareDigest(ref: BlobRef | string): string {
   return hex;
 }
 
-function toBytes(data: Uint8Array | string): Uint8Array {
-  return typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
-}
-
 /**
  * Content-addressed blob store, laid out as `<dir>/<first two hex>/<full hex>` (spec §2.2).
  *
@@ -193,15 +189,17 @@ export class BlobStore {
     ref: BlobRef;
     publish: (commit?: () => Promise<void>) => Promise<void>;
   } {
-    const bytes = toBytes(data);
-    const hex = createHash('sha256').update(bytes).digest('hex');
-    const ref: BlobRef = { $blob: `${PREFIX}${hex}`, bytes: bytes.byteLength };
+    // Snapshot mutable input now. Strings can stay as-is until a new blob needs writing.
+    const snapshot = typeof data === 'string' ? data : Buffer.from(data);
+    const size = Buffer.byteLength(snapshot);
+    const hex = createHash('sha256').update(snapshot).digest('hex');
+    const ref: BlobRef = { $blob: `${PREFIX}${hex}`, bytes: size };
     if (mediaType !== undefined) ref.media_type = mediaType;
     return {
       ref,
       publish: (commit) => {
         const result = this.#tail.then(() =>
-          this.#publish(bytes, hex, shareRequestHistory, commit),
+          this.#publish(snapshot, size, hex, shareRequestHistory, commit),
         );
         this.#tail = result.catch(() => undefined);
         return result;
@@ -210,18 +208,20 @@ export class BlobStore {
   }
 
   async #publish(
-    bytes: Uint8Array,
+    snapshot: Buffer | string,
+    size: number,
     hex: string,
     shareRequestHistory: boolean,
     commit?: () => Promise<void>,
   ): Promise<void> {
-    if (bytes.byteLength > MAX_BLOB_BYTES) throw new BlobLimitError('expanded blob too large');
+    if (size > MAX_BLOB_BYTES) throw new BlobLimitError('expanded blob too large');
     const shard = join(this.#dir, hex.slice(0, 2));
     let path = join(shard, hex);
     if (await this.has(hex)) {
       await commit?.();
       return;
     }
+    const bytes = typeof snapshot === 'string' ? Buffer.from(snapshot, 'utf8') : snapshot;
     let encoded = await encodeBlob(bytes);
     if (shareRequestHistory && this.#requestBase !== undefined) {
       const baseHex = this.#requestBase;

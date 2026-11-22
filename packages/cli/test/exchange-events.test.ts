@@ -421,3 +421,45 @@ describe('ExchangeEventDeriver causal references', () => {
     for (const call of calls) expect(call.causesIndex).toEqual([responseAt]);
   });
 });
+
+it('releases a known OpenAI call when a separate image observation follows its result', async () => {
+  const deriver = new ExchangeEventDeriver();
+  const events: Array<{ type: string; causes?: number[] }> = [];
+  const writer = {
+    append: async (event: { type: string; causes?: number[] }) => ({
+      seq: events.push(event) - 1,
+    }),
+  };
+  const call = exchange({
+    dialect: 'openai',
+    canonicalResponse: {
+      ...exchange().canonicalResponse!,
+      content: [
+        { type: 'tool_use', id: 'frame', name: 'view_image', input: { path: 'frame.png' } },
+      ],
+    },
+  });
+  await appendDerivedEvents(writer as never, deriver, call, 1);
+  const callSeq = deriver.seqOf('frame');
+  const reply = exchange({
+    dialect: 'openai',
+    canonicalRequest: {
+      model: 'fixture',
+      messages: [
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old', content: 'old' }] },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'frame', content: 'frame.png' }],
+        },
+        { role: 'user', content: [{ type: 'image', media_type: 'image/png', data: 'AA==' }] },
+      ],
+    },
+  });
+  await appendDerivedEvents(writer as never, deriver, reply, 2);
+  await appendDerivedEvents(writer as never, deriver, reply, 3);
+  expect(
+    events.filter((event) => event.type === 'tool.result').map((event) => event.causes),
+  ).toEqual([[callSeq]]);
+  expect(deriver.seqOf('frame')).toBeUndefined();
+  expect(deriver.unresolved()).toEqual([]);
+});

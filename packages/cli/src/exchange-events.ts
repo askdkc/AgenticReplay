@@ -117,7 +117,9 @@ export class ExchangeEventDeriver {
       exchange.canonicalRequest,
       exchange.dialect === 'codex' || exchange.dialect === 'openai-responses'
         ? 'known-or-trailing'
-        : 'trailing',
+        : exchange.dialect === 'openai'
+          ? 'trailing-users'
+          : 'trailing',
     );
     for (const result of toolResults) {
       resultsAt.push(events.length);
@@ -213,14 +215,20 @@ export class ExchangeEventDeriver {
 
   deriveToolResults(
     request: CanonicalRequest,
-    scope: 'known' | 'known-or-trailing' | 'trailing',
+    scope: 'known' | 'known-or-trailing' | 'trailing' | 'trailing-users',
   ): DerivedEvent[] {
     const trailing = request.messages.at(-1);
-    const messages = scope === 'trailing' ? request.messages.slice(-1) : request.messages;
+    let start = scope === 'trailing' ? Math.max(0, request.messages.length - 1) : 0;
+    if (scope === 'trailing-users') {
+      // Chat Completions can follow tool receipts with a separate user image observation.
+      start = request.messages.length;
+      while (start > 0 && request.messages[start - 1]?.role === 'user') start--;
+    }
     const events: DerivedEvent[] = [];
     // Responses sends each result as a separate input item, sometimes followed by
     // compaction or reasoning. Scan earlier items only for calls this run observed.
-    for (const message of messages) {
+    for (let index = start; index < request.messages.length; index++) {
+      const message = request.messages[index]!;
       if (message.role !== 'user') continue;
       for (const result of message.content) {
         if (
