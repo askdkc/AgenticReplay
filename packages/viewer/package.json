@@ -1,6 +1,6 @@
 {
   "name": "@agenticreplay/viewer",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -17,8 +17,8 @@
     "dist"
   ],
   "dependencies": {
-    "@agenticreplay/core": "0.1.27",
-    "@agenticreplay/schema": "0.1.27"
+    "@agenticreplay/core": "0.1.28",
+    "@agenticreplay/schema": "0.1.28"
   },
   "engines": {
     "node": ">=24.0.0"
