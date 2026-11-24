@@ -14,7 +14,13 @@ import {
   resolveRunSelector,
 } from '@agenticreplay/core';
 import { runGit, runGitRaw } from '@agenticreplay/fs-capture';
-import { validateEvent, validateManifest, type Manifest } from '@agenticreplay/schema';
+import {
+  EVENT_LOG_FILE,
+  eventSegmentIndex,
+  validateEvent,
+  validateManifest,
+  type Manifest,
+} from '@agenticreplay/schema';
 import type { ParsedArgs } from '../args.js';
 import { removeDirCommand, type Output } from '../out.js';
 
@@ -215,50 +221,57 @@ export async function scrubCommand(
   // the one being written, and the name it is written under may be some other blob's old name.
   for (const write of pending) stale.delete(write.path);
 
-  // events.jsonl, line by line, so a truncated final line stays tolerable.
-  const eventsPath = join(runDir, 'events.jsonl');
-  const original = await readFile(eventsPath, 'utf8');
-  const scrubbedLines: string[] = [];
+  // Every event file, line by line, so a truncated final line stays tolerable. A rotated run keeps
+  // its later events in the next segments, and a scrub that only reached `events.jsonl` would report
+  // a clean run over the half of it it never opened.
+  const segmentNames = await scrubSegmentNames(runDir, manifest);
+  /** Each file's rewritten text, in `seq` order; concatenated, they are the run's new event log. */
+  const nextSegments: { name: string; text: string }[] = [];
+  let eventsRewritten = false;
   let lineNumber = 0;
-  for (const line of original.split('\n')) {
-    lineNumber += 1;
-    if (line.trim() === '') continue;
-    const scrubbed = scrubText(line);
-    let kept = line;
-    if (scrubbed.value !== line) {
-      // Never write a line that would no longer parse or validate: a scrub that corrupts the trace
-      // is worse than one that leaves something behind, because it destroys the evidence too. But
-      // putting the original back means the match is still on disk, so it is reported rather than
-      // swallowed — and it is not counted, or `removed=N` would name removals that never happened.
-      const reason = rejectionReason(scrubbed.value);
-      if (reason === undefined) {
-        removals += scrubbed.removals;
-        kept = scrubbed.value;
-      } else {
-        reverted += 1;
-        const seq = seqOf(line);
-        out.warn(
-          'scrub_reverted',
-          seq === undefined ? { line: lineNumber, reason } : { seq, reason },
-        );
+  for (const name of segmentNames) {
+    const original = await readFile(join(runDir, name), 'utf8');
+    const scrubbedLines: string[] = [];
+    for (const line of original.split('\n')) {
+      lineNumber += 1;
+      if (line.trim() === '') continue;
+      const scrubbed = scrubText(line);
+      let kept = line;
+      if (scrubbed.value !== line) {
+        // Never write a line that would no longer parse or validate: a scrub that corrupts the trace
+        // is worse than one that leaves something behind, because it destroys the evidence too. But
+        // putting the original back means the match is still on disk, so it is reported rather than
+        // swallowed — and it is not counted, or `removed=N` would name removals that never happened.
+        const reason = rejectionReason(scrubbed.value);
+        if (reason === undefined) {
+          removals += scrubbed.removals;
+          kept = scrubbed.value;
+        } else {
+          reverted += 1;
+          const seq = seqOf(line);
+          out.warn(
+            'scrub_reverted',
+            seq === undefined ? { file: name, line: lineNumber, reason } : { seq, reason },
+          );
+        }
       }
+      // Applied to whichever text won, a reverted line included: the blob has moved either way, and
+      // a reference left pointing at the old name is a reference to a file that is about to be gone.
+      // It has no revert of its own because it cannot invalidate a line — a digest is replaced by a
+      // digest of the same shape.
+      scrubbedLines.push(moved.size === 0 ? kept : retargetLine(kept, moved));
     }
-    // Applied to whichever text won, a reverted line included: the blob has moved either way, and
-    // a reference left pointing at the old name is a reference to a file that is about to be gone.
-    // It has no revert of its own because it cannot invalidate a line — a digest is replaced by a
-    // digest of the same shape.
-    scrubbedLines.push(moved.size === 0 ? kept : retargetLine(kept, moved));
+    const rewritten = `${scrubbedLines.join('\n')}\n`;
+    nextSegments.push({ name, text: rewritten });
+    if (rewritten !== original) {
+      eventsRewritten = true;
+      pending.push({ path: join(runDir, name), contents: rewritten });
+      filesChanged += 1;
+    }
   }
   if (reverted > 0) {
     out.plain(`  ${reverted} event(s) were put back unchanged — what they matched is STILL here`);
     out.plain('  next: widen the match, or delete the run outright');
-  }
-
-  const nextEvents = `${scrubbedLines.join('\n')}\n`;
-  const eventsRewritten = nextEvents !== original;
-  if (eventsRewritten) {
-    pending.push({ path: eventsPath, contents: nextEvents });
-    filesChanged += 1;
   }
 
   const matches = (text: string): boolean => scrubText(text).value !== text;
@@ -275,17 +288,40 @@ export async function scrubCommand(
 
   const integrity = manifest.integrity;
   if (isRecord(integrity) && (eventsRewritten || moved.size > 0)) {
-    // Refresh the digest so `verifyIntegrity` still passes over the scrubbed file. Only when the
-    // file was actually rewritten: recomputing it unconditionally would quietly repair a digest
-    // that never matched, which is exactly the tampering the digest exists to expose.
+    // Refresh the digest so `verifyIntegrity` still passes over the scrubbed files. Only when
+    // something was actually rewritten: recomputing it unconditionally would quietly repair a
+    // digest that never matched, which is exactly the tampering the digest exists to expose.
     //
     // Hashed from the bytes about to be written rather than re-read from disk, because under
     // `--dry-run` nothing is written — and a digest that depends on the write having happened is
-    // a digest that silently means two different things.
+    // a digest that silently means two different things. Concatenating in `seq` order is what makes
+    // it the same root for a rotated run: the digest covers the log, not its first file.
     manifest.integrity = {
       ...integrity,
       ...(eventsRewritten
-        ? { events_sha256: createHash('sha256').update(nextEvents, 'utf8').digest('hex') }
+        ? {
+            events_sha256: nextSegments
+              .reduce((hash, segment) => hash.update(segment.text, 'utf8'), createHash('sha256'))
+              .digest('hex'),
+          }
+        : {}),
+      // Each segment's own identity changes with its bytes. Leaving the recorded sizes and hashes
+      // describing the pre-scrub files is the same false claim as a stale root: a reader that walks
+      // the list would verify the run against content that is no longer there.
+      ...(eventsRewritten && Array.isArray(integrity['segments'])
+        ? {
+            segments: (integrity['segments'] as unknown[]).map((entry) => {
+              if (!isRecord(entry) || typeof entry['name'] !== 'string') return entry;
+              const next = nextSegments.find((segment) => segment.name === entry['name']);
+              if (next === undefined) return entry;
+              const bytes = Buffer.byteLength(next.text, 'utf8');
+              return {
+                ...entry,
+                bytes,
+                sha256: createHash('sha256').update(next.text, 'utf8').digest('hex'),
+              };
+            }),
+          }
         : {}),
       // The store changes shape when a blob moves, and not only by renaming: two blobs whose one
       // difference was the material being removed scrub to the same content and become one file.
@@ -596,8 +632,42 @@ function manifestAdvice(runDir: string): string {
  * Defined from the spec rather than as a list of the sidecars that exist today, so a file added
  * later is reported by default instead of being silently uncovered until somebody remembers.
  */
-const SCRUBBED_FILES = new Set(['manifest.json', 'events.jsonl', 'redactions.json']);
+const SCRUBBED_FILES = new Set(['manifest.json', 'redactions.json']);
 const SCRUBBED_DIRS = new Set(['blobs', 'fs']);
+
+/**
+ * The event files of a run, in `seq` order, from the manifest or the directory.
+ *
+ * The manifest is authoritative — only it can say a rotated run is short a file — and the listing
+ * is the fallback for a run sealed before rotation existed. Sorted by numeric index rather than by
+ * name so `events.000010.jsonl` follows `events.000009.jsonl` rather than `events.000002.jsonl`.
+ */
+async function scrubSegmentNames(
+  runDir: string,
+  manifest: Record<string, unknown>,
+): Promise<string[]> {
+  const integrity = manifest['integrity'];
+  const recorded = isRecord(integrity) ? integrity['segments'] : undefined;
+  if (Array.isArray(recorded) && recorded.length > 0) {
+    const names = recorded
+      .map((entry) =>
+        isRecord(entry) && typeof entry['name'] === 'string' ? entry['name'] : undefined,
+      )
+      .filter((name): name is string => name !== undefined);
+    if (names.length > 0) return names;
+  }
+  const found = (await readdir(runDir))
+    .map((name) => ({ name, index: eventSegmentIndex(name) }))
+    .filter((entry): entry is { name: string; index: number } => entry.index !== undefined);
+  if (found.length === 0) return [EVENT_LOG_FILE];
+  return found.sort((a, b) => a.index - b.index).map((entry) => entry.name);
+}
+
+/** Whether a top-level directory entry is part of what scrub rewrites. */
+function isScrubbedEntry(entry: { name: string; isDirectory(): boolean }): boolean {
+  if (entry.isDirectory()) return SCRUBBED_DIRS.has(entry.name);
+  return SCRUBBED_FILES.has(entry.name) || eventSegmentIndex(entry.name) !== undefined;
+}
 
 /** What a run directory holds that scrub did not rewrite, and what could not be looked at. */
 interface UnscrubbedStatus {
@@ -647,12 +717,7 @@ async function scanUnscrubbed(
     }
     for (const entry of entries) {
       const path = join(dir, entry.name);
-      if (
-        dir === runDir &&
-        (entry.isDirectory() ? SCRUBBED_DIRS : SCRUBBED_FILES).has(entry.name)
-      ) {
-        continue;
-      }
+      if (dir === runDir && isScrubbedEntry(entry)) continue;
       if (entry.isDirectory()) {
         await visit(path);
         continue;

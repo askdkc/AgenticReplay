@@ -429,3 +429,66 @@ describe('gc', () => {
     });
   });
 });
+
+/**
+ * gc decides what is unreferenced by reading the event log. A rotated run keeps its later events
+ * in later files, and collecting a blob that only those files name is the one mistake this command
+ * cannot take back.
+ */
+describe('gc on a rotated run', () => {
+  it('keeps blobs referenced only from a later segment', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agenticreplay-gc-rot-'));
+    const out = new Output({ write: () => {}, isTTY: false });
+    const writer = await TraceWriter.create(join(root, '.agenticreplay', 'runs'), {
+      adapter: { id: 'test' },
+      argv: ['test'],
+      cwd: root,
+      agenticreplayVersion: '0.1.0',
+      storageLimits: { eventBytes: 700, runEventBytes: 64 * 1024 },
+    });
+    try {
+      await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+      for (let i = 0; i < 6; i++) {
+        await writer.append({
+          type: 'note',
+          actor: 'agenticreplay',
+          attrs: { pad: 'g'.repeat(150) },
+        });
+      }
+      // Spilled to a blob, and only this later segment names its digest.
+      const referenced = await writer.append({
+        type: 'model.response',
+        actor: 'model',
+        payload: 'blob referenced only past the boundary '.repeat(400),
+      });
+      await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+      await writer.close(0);
+
+      const names = (await readdir(writer.runDir)).filter((n) =>
+        /^events(\.\d{6})?\.jsonl$/.test(n),
+      );
+      expect(names.length).toBeGreaterThan(1);
+      const blobsBefore = await readdir(join(writer.runDir, 'blobs'), { recursive: true });
+      expect(blobsBefore.length).toBeGreaterThan(0);
+      const digest = isBlobRef(referenced.payload)
+        ? referenced.payload.$blob.slice('sha256:'.length)
+        : undefined;
+      expect(digest, 'the payload should have spilled').toBeDefined();
+
+      await gcCommand(parseArgs(['gc']), out, root);
+
+      const blobsAfter = await readdir(join(writer.runDir, 'blobs'), { recursive: true });
+      expect(blobsAfter).toEqual(blobsBefore);
+      expect(
+        blobsAfter.some((name) => String(name).includes(digest!)),
+        'gc deleted a blob that a later segment references',
+      ).toBe(true);
+      // And the run still reads back whole, so nothing was silently pruned from the log either.
+      const reader = await TraceReader.open(writer.runDir);
+      expect(reader.problems()).toEqual([]);
+      expect(await reader.verifyIntegrity().then((r) => r.ok)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

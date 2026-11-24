@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TraceReader, listRuns, resolveRunSelector, runGraph, chainTo } from '@agenticreplay/core';
+import { AgenticReplay } from '../src/api.js';
 import { isBlobRef, validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
 import { Output } from '../src/out.js';
@@ -134,6 +135,67 @@ describe('end to end: record and inspect', () => {
   it('verifies its own integrity digest', async () => {
     const result = await record();
     expect((await (await TraceReader.open(result.runDir)).verifyIntegrity()).ok).toBe(true);
+  });
+
+  /**
+   * The acceptance case the rotation change exists for: a run that outgrows one event file keeps
+   * recording, and everything past the boundary is still readable from the trace — including the
+   * model response text, which is what an operator goes back for.
+   *
+   * Driven through the real recorder and a real child process with a small file target, because the
+   * seq, the turn and the `causes` edges are assigned by the recorder. A unit test of the writer
+   * cannot see whether the boundary broke the conversation between them.
+   */
+  it('keeps recording across an event-file boundary and reads the whole run back', async () => {
+    // Small enough to rotate several times inside one short session, large enough that no single
+    // event is forced into the bounded diagnostic record.
+    const previous = process.env.AGENTICREPLAY_EVENT_FILE_BYTES;
+    process.env.AGENTICREPLAY_EVENT_FILE_BYTES = '3000';
+    try {
+      const result = await record(4);
+      const reader = await TraceReader.open(result.runDir);
+      const manifest = reader.manifest();
+      const segments = manifest.integrity?.segments ?? [];
+      expect(segments.length).toBeGreaterThan(1);
+      expect(segments[0]?.name).toBe('events.jsonl');
+      expect(manifest.capture?.status).toBe('complete');
+      expect(manifest.capture?.issues ?? []).toEqual([]);
+
+      const events = await reader.events();
+      expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
+      expect(reader.problems()).toEqual([]);
+      expect(events[0]?.type).toBe('run.start');
+      expect(events.at(-1)?.type).toBe('run.end');
+      expect(events.filter((e) => e.type === 'run.start')).toHaveLength(1);
+      expect(events.filter((e) => e.type === 'run.end')).toHaveLength(1);
+
+      // The conversation survives the boundary: the response text is still recoverable, and every
+      // request/response pair still names its counterpart across whatever seam it landed on.
+      const responses = events.filter((event) => event.type === 'net.response');
+      expect(responses.length).toBeGreaterThan(0);
+      const bodies = await Promise.all(
+        responses.map((event) => reader.resolvePayload(event).catch(() => undefined)),
+      );
+      expect(bodies.some((body) => typeof body === 'string' && body.includes('tool_use'))).toBe(
+        true,
+      );
+      const bySeq = new Map(events.map((e) => [e.seq, e]));
+      for (const response of responses) {
+        for (const cause of response.causes ?? []) {
+          expect(bySeq.has(cause), `dangling cause ${cause}`).toBe(true);
+          expect(cause).toBeLessThan(response.seq);
+        }
+      }
+
+      // `show` and `graph` walk the same log, so the seam is not visible to either.
+      const shown = await new AgenticReplay({ cwd: workspace }).show(result.runId);
+      expect(shown.eventCount).toBe(events.length);
+      const graph = await new AgenticReplay({ cwd: workspace }).graph(result.runId);
+      expect(graph.nodes.length).toBeGreaterThan(0);
+    } finally {
+      if (previous === undefined) delete process.env.AGENTICREPLAY_EVENT_FILE_BYTES;
+      else process.env.AGENTICREPLAY_EVENT_FILE_BYTES = previous;
+    }
   });
 
   /**

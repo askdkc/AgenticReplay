@@ -1,7 +1,13 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { delimiter, resolve } from 'node:path';
-import { TraceWriter, ensureRunsDir } from '@agenticreplay/core';
+import {
+  DEFAULT_RUN_EVENT_BYTES,
+  DiagnosticStorageLimitError,
+  TraceWriter,
+  ensureRunsDir,
+} from '@agenticreplay/core';
+import type { StorageLimits } from '@agenticreplay/core';
 import { FsCapture } from '@agenticreplay/fs-capture';
 import {
   createProxy,
@@ -127,6 +133,35 @@ export async function recordCommand(
   }
 }
 
+/**
+ * Event storage limits for a recording, from the environment.
+ *
+ * The defaults live in the writer: a 64 MiB file target, and a whole-run budget so a runaway run
+ * is bounded rather than filling the volume. These knobs exist for the tests that have to cross the
+ * boundary without writing gigabytes, and for an operator whose workspace is on a small disk.
+ *
+ * A file target given here means the operator wants rotation: without an explicit run budget the
+ * writer would read `eventBytes` as the old whole-run cap, which is right for every other caller of
+ * that option and wrong for this one.
+ */
+function recordStorageLimits(): StorageLimits | undefined {
+  const positive = (name: string): number | undefined => {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') return undefined;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new Error(`${name} must be a whole number of bytes`);
+    return value;
+  };
+  const fileBytes = positive('AGENTICREPLAY_EVENT_FILE_BYTES');
+  const runBytes = positive('AGENTICREPLAY_RUN_EVENT_BYTES');
+  if (fileBytes === undefined && runBytes === undefined) return undefined;
+  return {
+    ...(fileBytes === undefined ? {} : { eventBytes: fileBytes }),
+    runEventBytes: runBytes ?? DEFAULT_RUN_EVENT_BYTES,
+  };
+}
+
 async function runRecording(
   args: ParsedArgs,
   out: Output,
@@ -196,8 +231,8 @@ async function runRecording(
     argv: [agentName ?? adapter.id, ...args.passthrough],
     cwd,
     agenticreplayVersion: AGENTICREPLAY_VERSION,
+    ...(recordStorageLimits() === undefined ? {} : { storageLimits: recordStorageLimits()! }),
   });
-
   const captureFs = args.bool('fs', true);
   let fs: FsCapture | undefined;
   if (captureFs) {
@@ -276,6 +311,29 @@ async function runRecording(
   // Serial, not parallel: each persist snapshots the workspace, and two overlapping `git add`
   // calls collide on index.lock. It also keeps seq in the order exchanges actually happened.
   const writes = new SerialQueue();
+  const continueOnLimit = process.env.AGENTICREPLAY_CONTINUE_ON_STORAGE_LIMIT === '1';
+  let captureStopped = false;
+
+  /**
+   * Persist something the run does not have to persist.
+   *
+   * The diagnostic reserve running out is the one case that stops optional capture: the run keeps
+   * sending and receiving, the trace keeps what it has, and the operator is told once — a warning
+   * per event would bury the conversation the recorder exists to sit beside. Everything else is a
+   * real failure that still propagates.
+   */
+  async function captureOptional(task: () => Promise<unknown>): Promise<void> {
+    if (captureStopped) return;
+    try {
+      await task();
+    } catch (error) {
+      if (!continueOnLimit || !(error instanceof DiagnosticStorageLimitError)) throw error;
+      out.warn('capture.storage_limit', {
+        effect: 'further traffic is forwarded without recording',
+      });
+      captureStopped = true;
+    }
+  }
 
   /**
    * TLS interception, off unless the flag is present.
@@ -307,7 +365,7 @@ async function runRecording(
     queuedBodyBytes += bytes;
     writes.push(async () => {
       try {
-        await task();
+        await captureOptional(task);
       } finally {
         queuedBodyBytes -= bytes;
       }
@@ -315,12 +373,14 @@ async function runRecording(
     return true;
   }
   async function startRequest(request: NetRequest): Promise<void> {
+    if (captureStopped) return;
     const requestTurn = ++turn;
     requestTurns.set(request.requestId, requestTurn);
     turnStartedAt.push({ turn: requestTurn, at: request.requestStartedAt });
-    await persistNetRequestStart(writer, requestTurn, request);
+    await captureOptional(() => persistNetRequestStart(writer, requestTurn, request));
   }
   function finishRequest(exchange: NetExchange): void {
+    if (captureStopped) return;
     networkExchanges += 1;
     if (/\/embeddings(?:\?|$)/.test(exchange.path)) embeddingExchanges += 1;
     unclaimed.note(out, exchange);
@@ -353,10 +413,13 @@ async function runRecording(
           },
         ],
       };
-      writes.push(() => persistNetExchange(writer, requestTurn ?? 0, omitted));
+      writes.push(() =>
+        captureOptional(() => persistNetExchange(writer, requestTurn ?? 0, omitted)),
+      );
     }
   }
   const tls = await setupTlsCapture({
+    captureOptional,
     args,
     out,
     writer,
@@ -423,6 +486,7 @@ async function runRecording(
     upstreamHeadersOrigin: plan.headersOrigin,
     onRequestStart: startRequest,
     onExchange: (exchange: RecordedExchange) => {
+      if (captureStopped) return;
       modelExchanges += 1;
       if (exchange.status >= 400) {
         erroredExchanges += 1;
@@ -599,27 +663,29 @@ async function runRecording(
         const startedAt = Date.parse(frame.startedAt);
         const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
         const frameTurn = at === undefined ? turn : turnAt(startedAt);
-        const exec = await writer.append({
-          type: 'shell.exec',
-          actor: 'harness',
-          turn: frameTurn,
-          ...(at === undefined ? {} : { occurredAt: at }),
-          attrs: { argv: [frame.name, ...frame.argv], cwd: frame.cwd },
-        });
-        await writer.append({
-          type: 'shell.result',
-          actor: 'harness',
-          turn: frameTurn,
-          causes: [exec.seq],
-          // The result happened when the command finished, which is what its duration measures.
-          ...(at === undefined ? {} : { occurredAt: new Date(startedAt + frame.durationMs) }),
-          attrs: {
-            exit_code: frame.exitCode,
-            signal: frame.signal,
-            duration_ms: frame.durationMs,
-            stdout_bytes: frame.stdoutBytes,
-            stderr_bytes: frame.stderrBytes,
-          },
+        await captureOptional(async () => {
+          const exec = await writer.append({
+            type: 'shell.exec',
+            actor: 'harness',
+            turn: frameTurn,
+            ...(at === undefined ? {} : { occurredAt: at }),
+            attrs: { argv: [frame.name, ...frame.argv], cwd: frame.cwd },
+          });
+          await writer.append({
+            type: 'shell.result',
+            actor: 'harness',
+            turn: frameTurn,
+            causes: [exec.seq],
+            // The result happened when the command finished, which is what its duration measures.
+            ...(at === undefined ? {} : { occurredAt: new Date(startedAt + frame.durationMs) }),
+            attrs: {
+              exit_code: frame.exitCode,
+              signal: frame.signal,
+              duration_ms: frame.durationMs,
+              stdout_bytes: frame.stdoutBytes,
+              stderr_bytes: frame.stderrBytes,
+            },
+          });
         });
       }
     }
@@ -679,27 +745,31 @@ async function runRecording(
         // filed them under the wrong turn.
         const startedAt = Date.parse(String(span.started_at ?? span.ended_at ?? ''));
         const at = Number.isNaN(startedAt) ? undefined : new Date(startedAt);
-        await writer.append({
-          type: derived.type as 'agent.start',
-          // `harness`, not `agenticreplay`: we did not observe this, we were told it.
-          actor: 'harness',
-          turn: at === undefined ? turn : turnAt(startedAt),
-          ...(at === undefined ? {} : { occurredAt: at }),
-          attrs: derived.attrs,
-        });
+        await captureOptional(() =>
+          writer.append({
+            type: derived.type as 'agent.start',
+            // `harness`, not `agenticreplay`: we did not observe this, we were told it.
+            actor: 'harness',
+            turn: at === undefined ? turn : turnAt(startedAt),
+            ...(at === undefined ? {} : { occurredAt: at }),
+            attrs: derived.attrs,
+          }),
+        );
       }
     }
 
-    if (mcp) await drainMcpFrames(mcp, writer, turnAt, turn);
+    if (mcp) await captureOptional(() => drainMcpFrames(mcp!, writer, turnAt, turn));
 
     const orphans = deriver.unresolved();
     if (orphans.length > 0) {
-      await writer.append({
-        type: 'note',
-        actor: 'agenticreplay',
-        turn,
-        attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
-      });
+      await captureOptional(() =>
+        writer.append({
+          type: 'note',
+          actor: 'agenticreplay',
+          turn,
+          attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
+        }),
+      );
     }
 
     // Before the trace is sealed, not after. A tunnel's record is only complete when its socket
@@ -734,17 +804,20 @@ async function runRecording(
       }
     }
     if (session) {
-      await writer.append({
-        type: 'note',
-        actor: 'harness',
-        turn,
-        attrs: {
-          rule: 'session_prompts',
-          harness: adapter.id,
-          prompts: session.prompts.length,
-        },
-        payload: { prompts: session.prompts },
-      });
+      const { prompts } = session;
+      await captureOptional(() =>
+        writer.append({
+          type: 'note',
+          actor: 'harness',
+          turn,
+          attrs: {
+            rule: 'session_prompts',
+            harness: adapter.id,
+            prompts: prompts.length,
+          },
+          payload: { prompts },
+        }),
+      );
     }
 
     const observed = networkExchanges;
@@ -794,6 +867,10 @@ async function runRecording(
       exit: exitCode,
       capture: manifest.capture?.status ?? 'unverified',
       dir: writer.runDir,
+      // Stated only when it happened, so the ordinary one-file run reads exactly as it always did.
+      ...(manifest.integrity?.segments === undefined
+        ? {}
+        : { segments: manifest.integrity.segments.length }),
     });
 
     /**

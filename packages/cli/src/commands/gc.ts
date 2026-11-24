@@ -5,10 +5,12 @@ import { createInterface } from 'node:readline';
 import {
   BLOB_FILE_NAME,
   blobFileDigest,
+  eventLogLayout,
   listRuns,
   readBlobDeltaBase,
   runsDir,
 } from '@agenticreplay/core';
+import type { Manifest } from '@agenticreplay/schema';
 import type { ParsedArgs } from '../args.js';
 import type { Output } from '../out.js';
 
@@ -230,25 +232,33 @@ async function inspectRun(runId: string, dir: string, createdAt: string): Promis
     // proven finished, so the guards below leave its blobs alone.
   }
 
-  const eventsPath = join(dir, 'events.jsonl');
   const referenced = new Set<string>();
   let readable = false;
   try {
-    const lines = createInterface({
-      input: createReadStream(eventsPath),
-      crlfDelay: Number.POSITIVE_INFINITY,
-    });
-    try {
-      for await (const line of lines) {
-        // Match digests in the raw line rather than walking parsed payloads: a blob referenced
-        // from somewhere this build does not know about must still count as referenced.
-        for (const digest of line.match(DIGEST_IN_LINE) ?? []) referenced.add(digest);
-        if (facts.parentRun === undefined && line.includes('"fork"')) {
-          facts.parentRun = forkParentOf(line);
+    // Every event file of the run: a blob referenced only from a later segment would otherwise be
+    // collected as an orphan, which is the one mistake this command cannot take back.
+    const manifestForLayout = await readFile(join(dir, 'manifest.json'), 'utf8')
+      .then((raw) => JSON.parse(raw) as Manifest)
+      .catch(() => undefined);
+    const layout = await eventLogLayout(dir, manifestForLayout);
+    if (layout.segments.length === 0) throw new Error('no event log');
+    for (const segment of layout.segments) {
+      const lines = createInterface({
+        input: createReadStream(segment.path),
+        crlfDelay: Number.POSITIVE_INFINITY,
+      });
+      try {
+        for await (const line of lines) {
+          // Match digests in the raw line rather than walking parsed payloads: a blob referenced
+          // from somewhere this build does not know about must still count as referenced.
+          for (const digest of line.match(DIGEST_IN_LINE) ?? []) referenced.add(digest);
+          if (facts.parentRun === undefined && line.includes('"fork"')) {
+            facts.parentRun = forkParentOf(line);
+          }
         }
+      } finally {
+        lines.close();
       }
-    } finally {
-      lines.close();
     }
     readable = true;
   } catch {
@@ -260,7 +270,7 @@ async function inspectRun(runId: string, dir: string, createdAt: string): Promis
     return facts;
   }
   if (!readable) {
-    facts.skippedReason = 'events.jsonl is unreadable, so every blob would look unreferenced';
+    facts.skippedReason = 'the event log is unreadable, so every blob would look unreferenced';
     return facts;
   }
 

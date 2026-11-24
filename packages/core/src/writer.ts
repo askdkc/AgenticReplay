@@ -12,17 +12,21 @@ import type {
   Manifest,
   Payload,
   TraceEvent,
+  TraceSegment,
   CaptureSummary,
   CaptureTransformation,
 } from '@agenticreplay/schema';
 import {
+  EVENT_LOG_FILE,
   INLINE_PAYLOAD_LIMIT,
   RUN_ID_PATTERN,
   SCHEMA_VERSION,
   assertEvent,
   assertManifest,
+  eventSegmentFileName,
 } from '@agenticreplay/schema';
 import { BlobLimitError, BlobStore, sha256File } from './blobs.js';
+import { eventLogLayout, hashEventLog } from './event-log.js';
 import { REDACTION_POLICY_VERSION, Redactor } from './redaction.js';
 import { captureDirectoryName, firstUserPrompt } from './run-names.js';
 
@@ -109,11 +113,39 @@ export function redactManifest(redactor: Redactor, manifest: Manifest): Manifest
 export interface StorageLimits {
   /** Optional cumulative physical blob budget, after compression. No budget by default. */
   blobBytes?: number;
-  /** events.jsonl budget; defaults to 64 MiB with a separate 64 KiB diagnostic reserve. */
+  /**
+   * Target size of one event file. A run that outgrows it continues in the next file rather than
+   * stopping: rotation is a layout decision, not a capture failure (spec §1.1).
+   *
+   * Defaults to 64 MiB. Passing this without `runEventBytes` keeps the old single-file meaning:
+   * that argument was the whole-run cap before rotation existed, and reinterpreting it as a
+   * per-file target would turn a bounded diagnostic trace into as many files as it has events.
+   */
   eventBytes?: number;
+  /** Whole-run event budget across every segment. Defaults to 2 GiB when rotation is on. */
+  runEventBytes?: number;
+  /** Maximum number of event files in one run; rotation stops rather than filling the disk. */
+  eventSegments?: number;
 }
+export class DiagnosticStorageLimitError extends Error {
+  constructor() {
+    super('diagnostic storage limit reached');
+  }
+}
+
 const DIAGNOSTIC_BYTES = 64 * 1024;
 const END_BYTES = 4096;
+/**
+ * How much event content one run may keep in total, across every file.
+ *
+ * Rotation is what makes a long reasoning stream recordable, not a licence to fill the disk: a run
+ * that reaches this stops rotating and says so, and the events it already has stay readable. 2 GiB
+ * is 32 files at the 64 MiB target, which is far more than any single session produces and small
+ * enough that a runaway loop is noticed rather than discovered when a volume fills.
+ */
+export const DEFAULT_RUN_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
+/** Files a run may rotate through. A structural bound; the byte budget normally binds first. */
+export const DEFAULT_EVENT_SEGMENTS = 1024;
 
 export interface TraceWriterInit {
   storageLimits?: StorageLimits;
@@ -165,11 +197,22 @@ export class TraceWriter {
   #sessionTitle = '';
   #titlePriority = 0;
   readonly #runId: string;
-  readonly #eventsPath: string;
   readonly #blobs: BlobStore;
+  /** Target size of the file being written; the single-file cap when rotation is off. */
   readonly #eventBytes: number;
+  /** Whole-run event budget across every segment. */
+  readonly #runEventBytes: number;
+  /**
+   * Whether the run may continue into another file.
+   *
+   * Off for a caller that passed `eventBytes` and no run budget: that argument was the whole-run
+   * cap before rotation existed, and reinterpreting it as a per-file target would turn a bounded
+   * diagnostic trace into as many files as it has events. The default path, and any caller that
+   * states a run budget, rotate.
+   */
+  readonly #rotating: boolean;
+  readonly #maxSegments: number;
   readonly #redactor: Redactor;
-  readonly #handle: FileHandle;
   readonly #base: Manifest;
   readonly #started = process.hrtime.bigint();
   readonly #startedAtMs = Date.now();
@@ -186,6 +229,22 @@ export class TraceWriter {
   #sealed: Manifest | undefined;
   #capture: CaptureSummary | undefined;
   readonly #captureIssues = new Set<string>();
+  /** The file events are being appended to, and its 1-based index within the run. */
+  #handle: FileHandle;
+  #segmentIndex: number;
+  #segmentName: string;
+  #segmentFirstSeq: number;
+  #segmentEvents: number;
+  /** The live file's size, tracked so it does not have to be stat'ed per event. */
+  #segmentBytes: number;
+  /** Every closed file of this run, in order. The live file is appended on seal. */
+  #closedSegments: { name: string; firstSeq: number; lastSeq: number; bytes: number }[] = [];
+  /**
+   * Set once opening the next file has failed, so the same disk full or read-only mount is not
+   * retried for every event that follows. The trace already holds what it recorded; repeating a
+   * failing create is how a recorder turns one bad write into a stalled session.
+   */
+  #rotationStopped: 'run_event_limit' | 'segment_limit' | 'rotation_failed' | undefined;
 
   private constructor(
     runId: string,
@@ -194,15 +253,44 @@ export class TraceWriter {
     redactor: Redactor,
     handle: FileHandle,
     limits: StorageLimits = {},
+    live?: {
+      index: number;
+      name: string;
+      firstSeq: number;
+      events: number;
+      bytes: number;
+      closed: { name: string; firstSeq: number; lastSeq: number; bytes: number }[];
+    },
   ) {
     this.#runId = runId;
     this.#runDir = runDir;
-    this.#eventsPath = join(runDir, 'events.jsonl');
     this.#blobs = new BlobStore(join(runDir, 'blobs'), limits.blobBytes);
     this.#eventBytes = limits.eventBytes ?? 64 * 1024 * 1024;
+    this.#runEventBytes = limits.runEventBytes ?? DEFAULT_RUN_EVENT_BYTES;
+    this.#rotating = limits.runEventBytes !== undefined || limits.eventBytes === undefined;
+    this.#maxSegments = limits.eventSegments ?? DEFAULT_EVENT_SEGMENTS;
     this.#redactor = redactor;
     this.#handle = handle;
     this.#base = base;
+    this.#segmentIndex = live?.index ?? 1;
+    this.#segmentName = live?.name ?? EVENT_LOG_FILE;
+    this.#segmentFirstSeq = live?.firstSeq ?? 0;
+    this.#segmentEvents = live?.events ?? 0;
+    this.#segmentBytes = live?.bytes ?? 0;
+    this.#closedSegments = [...(live?.closed ?? [])];
+  }
+
+  /** The file events are appended to now. Rotation changes it; every segment is still this run. */
+  get eventsPath(): string {
+    return join(this.#runDir, this.#segmentName);
+  }
+
+  /** Every file this run's events are in, in `seq` order, the live one last. */
+  get eventPaths(): string[] {
+    return [
+      ...this.#closedSegments.map((segment) => join(this.#runDir, segment.name)),
+      this.eventsPath,
+    ];
   }
 
   static async create(
@@ -296,8 +384,10 @@ export class TraceWriter {
     // Publish the initial manifest atomically too: a failed creation must remain retryable.
     await atomicTraceFile(join(runDir, 'manifest.json'), `${JSON.stringify(base, null, 2)}\n`);
 
-    const handle = await open(join(runDir, 'events.jsonl'), 'a', FILE_MODE);
+    const handle = await open(join(runDir, EVENT_LOG_FILE), 'a', FILE_MODE);
     const writer = new TraceWriter(runId, runDir, base, redactor, handle, init.storageLimits);
+    const live = await handle.stat();
+    writer.#segmentBytes = live.size;
     writer.#sessionTitle = title;
     writer.#titlePriority = title.trim() ? 3 : 0;
     return writer;
@@ -322,46 +412,88 @@ export class TraceWriter {
     const base: Manifest = JSON.parse(await readFile(join(runDir, 'manifest.json'), 'utf8'));
     assertManifest(base);
     if (base.run_id !== expectedRunId) throw new Error('recovery identity mismatch');
-    const eventsPath = join(runDir, 'events.jsonl');
-    const eventInfo = await lstat(eventsPath);
-    if (!eventInfo.isFile() || eventInfo.isSymbolicLink())
-      throw new Error('unsafe recovery events');
-    const check = await open(eventsPath, 'r');
-    try {
-      if (eventInfo.size > 0) {
+
+    // Every file of the run, not just `events.jsonl`: a rotated run's later events live in the
+    // next segment, and resuming from the first one would append at the wrong seq into the wrong
+    // file. Discovery falls back to the directory when the manifest never recorded a segment list.
+    const layout = await eventLogLayout(runDir, base);
+    if (layout.segments.length === 0) throw new Error('unsafe recovery events');
+    for (const [position, segment] of layout.segments.entries()) {
+      const segmentInfo = await lstat(segment.path);
+      if (!segmentInfo.isFile() || segmentInfo.isSymbolicLink())
+        throw new Error('unsafe recovery events');
+      if (segmentInfo.size === 0) continue;
+      const check = await open(segment.path, 'r');
+      try {
         const last = Buffer.alloc(1);
-        await check.read(last, 0, 1, eventInfo.size - 1);
+        await check.read(last, 0, 1, segmentInfo.size - 1);
+        // A partial line anywhere is corruption to resume over: appending behind it would bury a
+        // torn event inside the log instead of leaving it at the end where a reader can see it.
         if (last[0] !== 10) throw new Error('partial recovery event');
+      } finally {
+        await check.close();
       }
-    } finally {
-      await check.close();
+      // Only the last file may be short of events; an empty one before it is a rotation that wrote
+      // no event, which is not an event log this writer can continue either.
+      if (position < layout.segments.length - 1 && segmentInfo.size === 0)
+        throw new Error('empty recovery segment');
     }
+
+    const last = layout.segments.at(-1)!;
     const writer = new TraceWriter(
       expectedRunId,
       runDir,
       base,
       new Redactor({ envAllowlist: [], summarizeHits: true }),
-      await open(eventsPath, 'a', FILE_MODE),
+      await open(last.path, 'a', FILE_MODE),
       limits,
+      {
+        index: last.index,
+        name: last.name,
+        firstSeq: 0,
+        events: 0,
+        bytes: (await lstat(last.path)).size,
+        closed: [],
+      },
     );
     try {
-      for await (const line of createInterface({
-        input: createReadStream(eventsPath),
-        crlfDelay: Infinity,
-      })) {
-        const event: TraceEvent = JSON.parse(line);
-        assertEvent(event);
-        if (event.seq !== writer.#seq || writer.#closedEvent)
-          throw new Error('invalid recovery sequence');
-        if (event.type === 'run.start') {
-          if (event.seq !== 0) throw new Error('duplicate recovery start');
-          writer.#opened = true;
+      /** Per-file extent rebuilt from the bytes, not from a manifest that may predate rotation. */
+      const extents: { name: string; firstSeq: number; lastSeq: number }[] = [];
+      for (const segment of layout.segments) {
+        const isLive = segment.name === last.name;
+        const firstSeq = writer.#seq;
+        for await (const line of createInterface({
+          input: createReadStream(segment.path),
+          crlfDelay: Infinity,
+        })) {
+          const event: TraceEvent = JSON.parse(line);
+          assertEvent(event);
+          if (event.seq !== writer.#seq || writer.#closedEvent)
+            throw new Error('invalid recovery sequence');
+          if (event.type === 'run.start') {
+            if (event.seq !== 0) throw new Error('duplicate recovery start');
+            writer.#opened = true;
+          }
+          if (event.type === 'run.end') writer.#closedEvent = true;
+          writer.#seq++;
+          writer.#turn = event.turn;
+          writer.#monoOffset = Math.max(writer.#monoOffset, event.mono_us);
+          onEvent?.(event);
         }
-        if (event.type === 'run.end') writer.#closedEvent = true;
-        writer.#seq++;
-        writer.#turn = event.turn;
-        writer.#monoOffset = Math.max(writer.#monoOffset, event.mono_us);
-        onEvent?.(event);
+        const events = writer.#seq - firstSeq;
+        if (isLive) {
+          writer.#segmentFirstSeq = firstSeq;
+          writer.#segmentEvents = events;
+        } else {
+          extents.push({ name: segment.name, firstSeq, lastSeq: writer.#seq - 1 });
+        }
+      }
+      writer.#closedSegments = [];
+      for (const extent of extents) {
+        writer.#closedSegments.push({
+          ...extent,
+          bytes: (await lstat(join(runDir, extent.name))).size,
+        });
       }
       try {
         writer.#previousRedactions = JSON.parse(
@@ -376,7 +508,7 @@ export class TraceWriter {
       if (
         writer.#closedEvent &&
         base.ended_at &&
-        base.integrity?.events_sha256 === (await sha256File(eventsPath))
+        base.integrity?.events_sha256 === (await hashEventLog(layout.segments.map((s) => s.path)))
       ) {
         writer.#sealed = base;
         await writer.#handle.close();
@@ -526,6 +658,12 @@ export class TraceWriter {
     }
 
     const blobs = await this.#blobs.count();
+    // Every file of the run, described as it now stands. One file keeps the manifest
+    // byte-identical to what it always was; a rotation records the order a reader must follow.
+    const segments = await this.#sealSegments();
+    const eventsSha256 = await hashEventLog(
+      segments.map((segment) => join(this.#runDir, segment.name)),
+    );
     const rawManifest: Manifest = {
       ...this.#base,
       ended_at: new Date().toISOString(),
@@ -539,7 +677,11 @@ export class TraceWriter {
           return counts;
         }, {}),
       },
-      integrity: { events_sha256: await sha256File(this.#eventsPath), blob_count: blobs },
+      integrity: {
+        events_sha256: eventsSha256,
+        blob_count: blobs,
+        ...(segments.length > 1 ? { segments } : {}),
+      },
       // Conditional for the same reason the fork keys are: the schema forbids unknown keys, and a
       // run outside a repository should carry no git block rather than three empty fields.
       ...(this.#git === undefined || Object.keys(this.#git).length === 0 ? {} : { git: this.#git }),
@@ -586,17 +728,166 @@ export class TraceWriter {
     return manifest;
   }
 
+  /** Bytes already closed into earlier files, which the whole-run budget counts too. */
+  #closedBytes(): number {
+    return this.#closedSegments.reduce((total, segment) => total + segment.bytes, 0);
+  }
+
+  /** Whether another file may be opened, ignoring what it would contain. */
+  #mayOpenNext(): boolean {
+    if (!this.#rotating) return false;
+    if (this.#rotationStopped !== undefined) return false;
+    if (this.#segmentIndex >= this.#maxSegments) return false;
+    return this.#closedBytes() + this.#segmentBytes < this.#runEventBytes;
+  }
+
+  /** Why rotation cannot continue, as the issue a trace records when it stops. */
+  #exhaustedReason():
+    'event_storage_limit' | 'run_event_limit' | 'segment_limit' | 'event_segment_unwritable' {
+    if (!this.#rotating) return 'event_storage_limit';
+    if (this.#rotationStopped === 'rotation_failed') return 'event_segment_unwritable';
+    if (this.#rotationStopped === 'run_event_limit') return 'run_event_limit';
+    if (this.#rotationStopped === 'segment_limit' || this.#segmentIndex >= this.#maxSegments)
+      return 'segment_limit';
+    return 'run_event_limit';
+  }
+
+  /**
+   * Open the next event file and make it the live one.
+   *
+   * The failed file is closed first and its size recorded, so what the run already wrote stays
+   * readable whatever happens next. Creation is exclusive (`wx`): a file already there is either
+   * this writer's abandoned rotation from a crash — which the resume path reuses — or another
+   * process's, and neither should be appended to by guessing.
+   *
+   * Returns false when nothing was opened. This never throws: a recording that cannot continue
+   * into a new file still has to be able to write `run.end` into the file it has, and the caller
+   * has a diagnostic path for exactly that.
+   */
+  async #rotate(): Promise<boolean> {
+    if (!this.#mayOpenNext()) {
+      // Once rotation has stopped, the reason is the record of WHY. Re-deriving it here overwrote
+      // `event_segment_conflict` with `segment_limit` on the very next event, so a trace could name
+      // a bound nobody reached instead of the disk it could not write to.
+      if (this.#rotationStopped !== undefined) return false;
+      const reason = this.#exhaustedReason();
+      if (reason !== 'event_storage_limit') {
+        this.#rotationStopped = reason === 'run_event_limit' ? 'run_event_limit' : 'segment_limit';
+        this.markCaptureIncomplete(reason);
+      }
+      return false;
+    }
+    const nextIndex = this.#segmentIndex + 1;
+    const nextName = eventSegmentFileName(nextIndex);
+    const closedName = this.#segmentName;
+    const closedFirst = this.#segmentFirstSeq;
+    const closedEvents = this.#segmentEvents;
+    let next: FileHandle;
+    try {
+      next = await open(join(this.#runDir, nextName), 'wx', FILE_MODE);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        // Another writer, or this run's own abandoned rotation. Reusing it is only safe when it is
+        // empty; a file with bytes in it means two recorders are interleaving one run.
+        const info = await lstat(join(this.#runDir, nextName)).catch(() => undefined);
+        if (info?.isFile() && info.size === 0) {
+          next = await open(join(this.#runDir, nextName), 'a', FILE_MODE);
+        } else {
+          this.#rotationStopped = 'rotation_failed';
+          this.markCaptureIncomplete('event_segment_conflict');
+          return false;
+        }
+      } else {
+        // A full disk, a read-only mount, a permission the recorder does not have, or a directory
+        // that cannot be written at all: none of them improve by being asked again per event, and
+        // the run that already recorded something must stay usable.
+        this.#rotationStopped = 'rotation_failed';
+        this.markCaptureIncomplete(`event_segment_unwritable:${code ?? 'unknown'}`);
+        return false;
+      }
+    }
+    // Close the finished file before the new one becomes live: the handle is the writer's notion
+    // of "where events go", and two of them at once would let a queued write land in the wrong one.
+    const closedBytes = (await this.#handle.stat()).size;
+    try {
+      // A failed flush is not a reason to keep the old file open; the bytes are in the page cache
+      // and the file stays readable either way.
+      await this.#handle.sync().catch(() => undefined);
+      await this.#handle.close();
+    } catch (error) {
+      // The new handle would be unreachable from here, and a leaked descriptor per failed rotation
+      // is a slow exhaustion of the process. Drop it and stop rotating: the old handle may or may
+      // not still be open, so the next append finds out and says so, which beats guessing here.
+      await next.close().catch(() => undefined);
+      this.#rotationStopped = 'rotation_failed';
+      this.markCaptureIncomplete('event_segment_unwritable');
+      throw error;
+    }
+    if (closedEvents > 0) {
+      this.#closedSegments.push({
+        name: closedName,
+        firstSeq: closedFirst,
+        lastSeq: closedFirst + closedEvents - 1,
+        bytes: closedBytes,
+      });
+    }
+    this.#handle = next;
+    this.#segmentIndex = nextIndex;
+    this.#segmentName = nextName;
+    this.#segmentFirstSeq = this.#seq;
+    this.#segmentEvents = 0;
+    this.#segmentBytes = 0;
+    return true;
+  }
+
+  /**
+   * Every file of the run with its identity, for the manifest.
+   *
+   * The live file is included as it stands. A run that never rotated returns exactly one entry and
+   * the caller leaves it out of the manifest: one file is the format that already existed, and a
+   * reader that predates rotation must keep opening those runs unchanged.
+   */
+  async #sealSegments(): Promise<TraceSegment[]> {
+    const live = {
+      name: this.#segmentName,
+      firstSeq: this.#segmentFirstSeq,
+      lastSeq: this.#seq - 1,
+      bytes: (await lstat(this.eventsPath)).size,
+    };
+    const all = [...this.#closedSegments, live];
+    const out: TraceSegment[] = [];
+    for (const segment of all) {
+      // An empty file is not evidence, and recording it would claim a range no event occupies.
+      if (segment.lastSeq < segment.firstSeq) continue;
+      out.push({
+        name: segment.name,
+        first_seq: segment.firstSeq,
+        last_seq: segment.lastSeq,
+        bytes: segment.bytes,
+        sha256: await sha256File(join(this.#runDir, segment.name)),
+      });
+    }
+    return out;
+  }
+
   async #write(ts: string, mono_us: number, turn: number, init: EventInit): Promise<TraceEvent> {
     const seq = this.#seq;
     const removed: string[] = [];
     const transformations: CaptureTransformation[] = [...(init.transformations ?? [])];
-    const before = (await this.#handle.stat()).size;
+    let before = (await this.#handle.stat()).size;
     let omission: string | undefined;
     let payload = init.payload;
-    if (before >= this.#eventBytes) {
-      omission = 'event_storage_limit';
+    // Omit early only when nothing can take the payload: a full file is not a reason on its own,
+    // because the event may simply belong to the next file. Spilling a body to a blob and then
+    // discarding the reference is the waste this check exists to avoid. A run that has decided it
+    // cannot record further is the case where the file really is all there is.
+    const stuck = this.#rotationStopped !== undefined || !this.#rotating;
+    if (before >= this.#eventBytes && stuck) {
+      // A run that stopped rotating keeps its diagnostic space: the payload goes, the event stays,
+      // and the issue saying why is written once by whatever stopped it — not once per event here.
+      omission = this.#exhaustedReason();
       payload = undefined;
-      this.markCaptureIncomplete(omission);
     }
     let blob: ReturnType<BlobStore['prepare']> | undefined;
     let bodyEvidence: { body_bytes: number; body_sha256: string } | undefined;
@@ -715,15 +1006,37 @@ export class TraceWriter {
     }
 
     const fitEvent = (): string => {
-      if (omission) out.attrs = { ...out.attrs, payload_omitted: omission };
+      // A write that does not fit is not a storage failure when the run can continue in the next
+      // file: the omission is this event's only, and the run's own budget is what decides whether
+      // the event exists at all. Recording an issue here is what made a healthy rotated run report
+      // `event_storage_limit` for the single event that straddled a boundary.
+      let omitted = omission;
+      if (omitted) out.attrs = { ...out.attrs, payload_omitted: omitted };
       let line = `${JSON.stringify(out)}\n`;
-      if (before + Buffer.byteLength(line) > this.#eventBytes) {
+      const closed = this.#closedBytes();
+      const endsInFile = before + Buffer.byteLength(line) <= this.#eventBytes;
+      // The run budget only applies to a run that can continue into another file. For a caller
+      // that asked for one bounded file, `eventBytes` is the whole bound and adding a second one
+      // the caller never mentioned would reject writes it used to accept.
+      const endsInRun =
+        !this.#rotating || closed + before + Buffer.byteLength(line) <= this.#runEventBytes;
+      if (!endsInFile || !endsInRun) {
         blob = undefined;
-        this.markCaptureIncomplete('event_storage_limit');
+        // Which budget ran out decides the issue, and whether it is an issue at all. An event that
+        // overflows one file the run is about to leave is recorded whole in the next one, and
+        // nothing is wrong. An event the whole run has no room for is a real loss, and so is one
+        // that cannot move because rotation stopped.
+        const exhausted = !endsInRun
+          ? this.#rotating
+            ? 'run_event_limit'
+            : 'event_storage_limit'
+          : this.#rotating && this.#rotationStopped === undefined
+            ? undefined
+            : this.#exhaustedReason();
+        omitted ??= exhausted ?? 'event_storage_limit';
+        if (exhausted !== undefined) this.markCaptureIncomplete(exhausted);
         // Keep a bounded diagnostic, never the unbounded payload/attrs that filled the store.
-        const attrs: Record<string, unknown> = {
-          payload_omitted: omission ?? 'event_storage_limit',
-        };
+        const attrs: Record<string, unknown> = { payload_omitted: omitted };
         for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
           const value = out.attrs?.[key];
           if (typeof value === 'string') attrs[key] = value.slice(0, 96);
@@ -737,22 +1050,44 @@ export class TraceWriter {
             : init.type === 'error'
               ? DIAGNOSTIC_BYTES - END_BYTES
               : END_BYTES;
-        const limit = this.#eventBytes + allowance;
-        if (before + Buffer.byteLength(line) > limit) {
+        // The bounded record has to fit whatever bounded the write: the file, the run, or both.
+        // Checking both is what keeps `run.end` writable at a run-level cap whose reservation was
+        // never spent, rather than throwing because a file cap it does not count against is full.
+        const tooBig =
+          before + Buffer.byteLength(line) > this.#eventBytes + allowance ||
+          (this.#rotating &&
+            closed + before + Buffer.byteLength(line) > this.#runEventBytes + allowance);
+        if (tooBig) {
           this.markCaptureIncomplete('diagnostic_storage_limit');
-          throw new Error('diagnostic storage limit reached');
+          throw new DiagnosticStorageLimitError();
         }
       }
       assertEvent(out);
       return line;
     };
+    // Rotate before writing, never after: the event belongs to the next file, and a file boundary
+    // has to fall between two lines rather than inside one. Decided on the event's FULL size, before
+    // any omission rule runs: a full file is a reason to continue in the next one, not a reason to
+    // throw away a payload the rest of the run has room for. `before > 0` is what keeps an event
+    // larger than a whole file from being followed by an endless run of empty ones — the omission
+    // path below then writes its bounded record into the file that was just opened.
+    const plannedBytes = Buffer.byteLength(`${JSON.stringify(out)}\n`);
+    if (before > 0 && before + plannedBytes > this.#eventBytes && (await this.#rotate())) {
+      before = 0;
+    }
     const writeLine = async (line: string): Promise<void> => {
       try {
         await this.#handle.writeFile(line);
       } catch (error) {
+        // Truncate to this file's offset: the failed write must not leave half a line for the
+        // next event to be appended behind.
         await this.#handle.truncate(before);
         throw error;
       }
+      // Tracked from the bytes written rather than stat'ed again: the next event's decision needs
+      // this file's size, and one syscall per event is the difference between a recorder that keeps
+      // up with a stream and one that does not.
+      this.#segmentBytes = before + Buffer.byteLength(line);
     };
     const line = fitEvent();
     if (blob) {
@@ -768,6 +1103,7 @@ export class TraceWriter {
     } else {
       await writeLine(line);
     }
+    this.#segmentEvents += 1;
     if (init.type === 'run.start' || init.type === 'session.snapshot') {
       const title = init.attrs?.session_title ?? init.attrs?.title;
       if (typeof title === 'string' && title.trim() && this.#titlePriority < 2) {

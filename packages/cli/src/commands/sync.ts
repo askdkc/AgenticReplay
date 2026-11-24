@@ -17,6 +17,8 @@ import {
   TEMPORARY_DELTA_FILE_NAME,
   blobFileDigest,
   encodeBlob,
+  eventLogLayout,
+  hashEventLog,
   readBlobFile,
   ensureRunsDir,
   resolveRunSelector,
@@ -25,6 +27,7 @@ import {
   runsDir,
   sha256File,
 } from '@agenticreplay/core';
+import { eventSegmentIndex, type Manifest } from '@agenticreplay/schema';
 import type { ParsedArgs } from '../args.js';
 import { tame, type Output } from '../out.js';
 import {
@@ -472,6 +475,21 @@ export async function listGatewayRuns(
 const PUSHED_TOP_LEVEL = new Set(['manifest.json', 'events.jsonl', 'redactions.json', 'blobs']);
 
 /**
+ * Whether a top-level entry belongs in a push.
+ *
+ * Event files are matched by pattern rather than by name: a rotated run continues in
+ * `events.NNNNNN.jsonl`, and a fixed list would ship `events.jsonl` alone — a push that silently
+ * carries a prefix of the run, which the receiver then verifies against a root covering all of it.
+ */
+function isPushedTopLevel(name: string, includeFs: boolean): boolean {
+  return (
+    PUSHED_TOP_LEVEL.has(name) ||
+    eventSegmentIndex(name) !== undefined ||
+    (includeFs && name === FS_SNAPSHOT_DIR)
+  );
+}
+
+/**
  * The workspace snapshots, which ship only when the user asks for them with `--fs`.
  *
  * THIS WAS ON THE ALLOWLIST AND SHOULD NOT HAVE BEEN (orcacode-review). I kept `fs/` on the
@@ -512,9 +530,7 @@ async function runEntries(
     for (const item of items) {
       // Top level only — see PUSHED_TOP_LEVEL.
       if (dir === runDir) {
-        const allowed =
-          PUSHED_TOP_LEVEL.has(item.name) || (includeFs && item.name === FS_SNAPSHOT_DIR);
-        if (!allowed) continue;
+        if (!isPushedTopLevel(item.name, includeFs)) continue;
       }
       const full = join(dir, item.name);
       if (item.isDirectory()) {
@@ -1219,30 +1235,60 @@ async function verifyStaged(staging: string, runId: string): Promise<string | un
   const raw = await readFile(manifestPath, 'utf8').catch(() => undefined);
   if (raw === undefined) return undefined;
   let expected: unknown;
+  let parsed: unknown;
   try {
-    expected = (JSON.parse(raw) as { integrity?: { events_sha256?: unknown } }).integrity
-      ?.events_sha256;
+    parsed = JSON.parse(raw);
+    expected = (parsed as { integrity?: { events_sha256?: unknown } }).integrity?.events_sha256;
   } catch {
     throw new Error(`${runId}: the manifest that arrived is not JSON`);
   }
   // An unsealed run — one whose recorder crashed — has no root to check. Spec §6 describes the
   // root as written "at the moment the run ended", so its absence is a state, not a failure.
   if (typeof expected !== 'string') return undefined;
-  const actual = await sha256File(join(staging, 'events.jsonl'));
+  // Every segment the arrived manifest names, concatenated in order: that is what its own root
+  // covers, and checking the first file would fail every rotated run as a damaged copy.
+  const actual = await stagedEventRoot(staging, parsed).catch(() => undefined);
+  if (actual === undefined) {
+    throw new Error(
+      `${runId}: the arrived run names event files it does not contain. Nothing was replaced. ` +
+        'Pull it again; if it persists the copy on the gateway is damaged.',
+    );
+  }
   if (actual !== expected) {
     throw new Error(
-      `${runId}: events.jsonl does not match the integrity root in its own manifest ` +
-        `(manifest ${expected.slice(0, 16)}…, file ${actual.slice(0, 16)}…). Nothing was ` +
+      `${runId}: the event log does not match the integrity root in its own manifest ` +
+        `(manifest ${expected.slice(0, 16)}…, files ${actual.slice(0, 16)}…). Nothing was ` +
         'replaced. Pull it again; if it persists the copy on the gateway is damaged.',
     );
   }
   return actual;
 }
 
+/** The integrity root over every event file the arrived manifest describes. */
+async function stagedEventRoot(dir: string, manifest: unknown): Promise<string | undefined> {
+  const layout = await eventLogLayout(dir, manifest as Manifest);
+  // A file the manifest names and the directory lacks makes the concatenation a prefix of the
+  // log, and a prefix can hash to something; returning undefined makes that a named failure
+  // rather than a digest that happens to differ.
+  if (layout.problems.length > 0 || layout.segments.length === 0) return undefined;
+  return hashEventLog(layout.segments.map((segment) => segment.path));
+}
+
 /** Every event, in order, with keys sorted deeply — so two serialisations of one run compare equal. */
 async function canonicalEvents(dir: string): Promise<string | undefined> {
-  const raw = await readFile(join(dir, 'events.jsonl'), 'utf8').catch(() => undefined);
-  if (raw === undefined) return undefined;
+  // Every file of the run, in `seq` order: a comparison over the first segment would call two
+  // different runs identical whenever they agree up to the first rotation.
+  const manifest = await readFile(join(dir, 'manifest.json'), 'utf8')
+    .then((raw) => JSON.parse(raw) as unknown)
+    .catch(() => undefined);
+  const layout = await eventLogLayout(dir, manifest as Manifest | undefined).catch(() => undefined);
+  if (layout === undefined || layout.segments.length === 0) return undefined;
+  const parts: string[] = [];
+  for (const segment of layout.segments) {
+    const raw = await readFile(segment.path, 'utf8').catch(() => undefined);
+    if (raw === undefined) return undefined;
+    parts.push(raw);
+  }
   const sortDeep = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sortDeep);
     if (v === null || typeof v !== 'object') return v;
@@ -1252,7 +1298,8 @@ async function canonicalEvents(dir: string): Promise<string | undefined> {
     return out;
   };
   try {
-    return raw
+    return parts
+      .join('\n')
       .split('\n')
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.stringify(sortDeep(JSON.parse(l))))

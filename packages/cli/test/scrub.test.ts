@@ -850,3 +850,83 @@ describe('scrub — the manifest', () => {
  */
 
 /** A store that is present but unreadable is the one case where "0 matches" proves nothing. */
+
+/**
+ * A rotated run is the case a scrubber must not under-report (spec §1.1).
+ *
+ * The command rewrites the event log; a version of it that only knew `events.jsonl` would report a
+ * clean run having never opened the file the later events are in — and the material the user asked
+ * about would still be on disk, under a heading that said `files=1`.
+ */
+describe('scrubbing a rotated run', () => {
+  let cwd: string;
+  let out: Output;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-scrub-rot-'));
+    out = new Output({ write: () => {}, isTTY: false });
+  });
+
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const SECRET = 'rotate-only-host-7.internal.example.com';
+
+  /** A run whose secret lands in a later segment, not in `events.jsonl`. */
+  async function makeRotatedRun(): Promise<string> {
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
+      adapter: { id: 'test' },
+      argv: ['test'],
+      cwd,
+      agenticreplayVersion: '0.1.0',
+      storageLimits: { eventBytes: 700, runEventBytes: 64 * 1024 },
+    });
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    for (let i = 0; i < 5; i++) {
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        attrs: { pad: 'x'.repeat(150) },
+      });
+    }
+    // Deliberately past any plausible first-file boundary.
+    await writer.append({ type: 'note', actor: 'agenticreplay', payload: { host: SECRET } });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+    await writer.close(0);
+    return writer.runDir;
+  }
+
+  it('rewrites the segment the material is in and refreshes the whole-log digest', async () => {
+    const runDir = await makeRotatedRun();
+    const before = await (await TraceReader.open(runDir)).verifyIntegrity();
+    expect(before.ok).toBe(true);
+
+    await scrubCommand(parseArgs(['scrub', 'last', '--match', SECRET]), out, cwd);
+
+    const segments = (await readdir(runDir)).filter((name) =>
+      /^events(\.\d{6})?\.jsonl$/.test(name),
+    );
+    expect(segments.length).toBeGreaterThan(1);
+    let found = false;
+    for (const name of segments) {
+      const text = await readFile(join(runDir, name), 'utf8');
+      if (text.includes(SECRET)) found = true;
+    }
+    expect(found, 'the literal is still on disk in one of the segments').toBe(false);
+    // The root still describes the run it is in, and the per-segment hashes describe their files.
+    const after = await (await TraceReader.open(runDir)).verifyIntegrity();
+    expect(after).toMatchObject({ ok: true, state: 'verified' });
+    const manifest = (await TraceReader.open(runDir)).manifest();
+    for (const segment of manifest.integrity?.segments ?? []) {
+      expect(segment.sha256).toBe(
+        createHash('sha256')
+          .update(await readFile(join(runDir, segment.name), 'utf8'))
+          .digest('hex'),
+      );
+    }
+    // And it is still a readable log across the seam.
+    const events = await (await TraceReader.open(runDir)).events();
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
+  });
+});

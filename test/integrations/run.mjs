@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { resolveRunSelector } from '../../packages/core/dist/index.js';
+import { resolveRunSelector, eventLogLayout } from '../../packages/core/dist/index.js';
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -254,9 +254,20 @@ const CHECKS = [
   },
 ];
 
+/** Every event a run wrote, in `seq` order — a rotated run continues past its first file. */
+async function eventText(runDir) {
+  const manifest = await readFile(join(runDir, 'manifest.json'), 'utf8')
+    .then((raw) => JSON.parse(raw))
+    .catch(() => undefined);
+  const layout = await eventLogLayout(runDir, manifest);
+  const parts = [];
+  for (const segment of layout.segments) parts.push(await readFile(segment.path, 'utf8'));
+  return parts.join('');
+}
+
 /** Everything a run wrote, events and spilled bodies alike — a large body is not in events.jsonl. */
 async function traceText(runDir) {
-  let text = await readFile(join(runDir, 'events.jsonl'), 'utf8');
+  let text = await eventText(runDir);
   const blobs = join(runDir, 'blobs');
   for (const shard of await readdir(blobs).catch(() => [])) {
     for (const name of await readdir(join(blobs, shard))) {
@@ -457,7 +468,7 @@ async function runCheck(check) {
     const { dir: runDir } = await resolveRunSelector(dir, runId);
 
     // What the trace says it captured, before the origins go down.
-    const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8'))
+    const events = (await eventText(runDir))
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));

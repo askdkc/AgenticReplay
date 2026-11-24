@@ -6,9 +6,10 @@
  */
 
 import { createServer } from 'node:http';
-import { lstat, stat } from 'node:fs/promises';
+import { lstat, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { EVENT_LOG_FILE, eventSegmentIndex } from '@agenticreplay/schema';
 import { readViewerBlob } from './blob-file.js';
 import { CAPTURE_STATUS_FILE } from './capture-diagnostic.js';
 import { renderTraceHtml, type RenderOptions } from './html.js';
@@ -51,8 +52,17 @@ export async function serveViewer(options: ServeOptions): Promise<ViewerServer> 
   let cache: { key: string; html: string } | null = null;
 
   async function stamp(): Promise<string> {
+    // Every event file of the run, not just the first: a live view of a run that has rotated has to
+    // notice the newest segment growing, or the page sits on a prefix while the session continues.
+    // Discovered by listing rather than by reading the manifest, so the check stays one stat pass:
+    // the manifest is written at seal time and would not name the live segment before then.
+    const eventFiles = (await readdir(options.runDir).catch(() => [] as string[]))
+      .filter((name) => eventSegmentIndex(name) !== undefined)
+      .sort((a, b) => (eventSegmentIndex(a) ?? 0) - (eventSegmentIndex(b) ?? 0));
     const files = [
-      stat(join(options.runDir, 'events.jsonl')),
+      ...(eventFiles.length > 0 ? eventFiles : [EVENT_LOG_FILE]).map((name) =>
+        stat(join(options.runDir, name)),
+      ),
       stat(join(options.runDir, 'manifest.json')),
       lstat(join(options.runDir, CAPTURE_STATUS_FILE)),
     ];

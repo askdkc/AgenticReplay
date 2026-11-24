@@ -45,6 +45,8 @@ export interface TlsCaptureRequest {
   defaultHosts?: readonly string[];
   passThroughWebSockets?: boolean;
   writes: SerialQueue;
+  /** Optional recording may stop persisting after its bounded trace fills. */
+  captureOptional?: (task: () => Promise<void>) => Promise<void>;
   /**
    * Snapshot the current turn at request start. The request ID retains that assignment through
    * concurrent completion. Tunnel-only evidence has no HTTP request and uses its observation time.
@@ -90,7 +92,7 @@ export async function planTlsCapture(args: ParsedArgs): Promise<void> {
 }
 
 export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCapture> {
-  const { args, out, writer, writes } = req;
+  const { args, out, writer, writes, captureOptional = (task) => task() } = req;
 
   const tlsHosts = args.list('tls-hosts');
   const interceptTls = args.bool('tls-intercept', req.defaultHosts !== undefined);
@@ -147,7 +149,7 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
             const saved = new Promise<void>((resolve, reject) => {
               writes.push(async () => {
                 try {
-                  await persistWebSocketObservation(writer, observation);
+                  await captureOptional(() => persistWebSocketObservation(writer, observation));
                   resolve();
                 } catch (error) {
                   reject(error);
@@ -159,19 +161,25 @@ export async function setupTlsCapture(req: TlsCaptureRequest): Promise<TlsCaptur
           }
         },
         onTunnel: (tunnel: TunnelRecord) => {
-          if (writer) writes.push(() => persistTunnel(writer, req.turn(), tunnel));
+          if (writer)
+            writes.push(() => captureOptional(() => persistTunnel(writer, req.turn(), tunnel)));
         },
         onFailure: (failure: InterceptFailure) => {
           writer?.markCaptureIncomplete('transport_interception_failed');
           if (writer && shouldEmitCaptureFailure(failure))
-            writes.push(async () => {
-              await writer.append({
-                type: 'note',
-                actor: 'agenticreplay',
-                turn: req.turn(),
-                attrs: { rule: 'transport_interception_failed', ...captureFailureFields(failure) },
-              });
-            });
+            writes.push(() =>
+              captureOptional(async () => {
+                await writer.append({
+                  type: 'note',
+                  actor: 'agenticreplay',
+                  turn: req.turn(),
+                  attrs: {
+                    rule: 'transport_interception_failed',
+                    ...captureFailureFields(failure),
+                  },
+                });
+              }),
+            );
           reportInterceptFailure(out, failure);
         },
       },

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { BlobStore } from '@agenticreplay/core';
+import { BlobStore, TraceReader } from '@agenticreplay/core';
 import { createServer, type Server } from 'node:http';
 import {
   mkdtemp,
@@ -110,6 +110,32 @@ describe('push and pull', () => {
     AGENTICREPLAY_GATEWAY_URL: url,
     AGENTICREPLAY_GATEWAY_KEY: 'sk-replay-test',
     ...extra,
+  });
+
+  it('ships every event file of a rotated run', async () => {
+    await seedRun();
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
+    await writeFile(join(dir, 'events.000002.jsonl'), '{"seq":2,"type":"run.end"}\n');
+    await writeFile(join(dir, 'events.000003.jsonl'), '');
+    await pushCommand(parseArgs(['push', runId]), out, workspace, env());
+
+    const req = received.at(-1)!;
+    const start = req.body.indexOf('PK');
+    const end = req.body.lastIndexOf('\r\n--');
+    const entries = await readArchive(new Uint8Array(req.body.subarray(start, end)));
+    const events = entries
+      .map((entry) => entry.name)
+      .filter((name) => /^[^/]+\/events(\.\d{6})?\.jsonl$/.test(name))
+      .sort();
+    // A fixed allowlist shipped `events.jsonl` alone, which the receiver would verify against a
+    // root covering all of it: a push that silently carries a prefix of the run. An empty trailing
+    // file ships too — push copies the directory, and a receiver deciding what is trace content is
+    // a second place for the format to drift.
+    expect(events).toEqual([
+      `${runId}/events.000002.jsonl`,
+      `${runId}/events.000003.jsonl`,
+      `${runId}/events.jsonl`,
+    ]);
   });
 
   it('pushes the run as a zip the gateway can read back', async () => {
@@ -246,6 +272,120 @@ describe('push and pull', () => {
     await seedRun();
     await pushCommand(parseArgs(['push', runId, '--force']), out, workspace, env());
     expect(received[0]!.path).toBe('/api/replay/runs?force=1');
+  });
+
+  it('pulls a rotated run and verifies it over every segment', async () => {
+    const envelope = (seq: number, type: string): string =>
+      `${JSON.stringify({
+        seq,
+        ts: '2026-01-01T00:00:00.000Z',
+        mono_us: seq * 1000,
+        turn: 0,
+        type,
+        actor: 'agenticreplay',
+      })}\n`;
+    const first = envelope(0, 'run.start');
+    const second = envelope(1, 'run.end');
+    const root = createHash('sha256')
+      .update(first + second)
+      .digest('hex');
+    const segments = [
+      {
+        name: 'events.jsonl',
+        first_seq: 0,
+        last_seq: 0,
+        bytes: first.length,
+        sha256: createHash('sha256').update(first).digest('hex'),
+      },
+      {
+        name: 'events.000002.jsonl',
+        first_seq: 1,
+        last_seq: 1,
+        bytes: second.length,
+        sha256: createHash('sha256').update(second).digest('hex'),
+      },
+    ];
+    const zip = await writeArchive([
+      {
+        name: `${runId}/manifest.json`,
+        bytes: new TextEncoder().encode(
+          `${JSON.stringify({
+            schema_version: '0.4.0',
+            run_id: runId,
+            created_at: '2026-01-01T00:00:00.000Z',
+            agenticreplay_version: '0.1.0',
+            adapter: { id: 'test' },
+            argv: ['test'],
+            cwd: '/work',
+            integrity: { events_sha256: root, blob_count: 0, segments },
+          })}\n`,
+        ),
+      },
+      { name: `${runId}/events.jsonl`, bytes: new TextEncoder().encode(first) },
+      { name: `${runId}/events.000002.jsonl`, bytes: new TextEncoder().encode(second) },
+    ]);
+    reply = { status: 200, body: Buffer.from(zip), headers: { 'content-type': 'application/zip' } };
+
+    await pullCommand(parseArgs(['pull', runId]), out, workspace, env());
+
+    const dir = join(workspace, '.agenticreplay', 'runs', runId);
+    // The root covers the concatenation, so verifying the first file alone would reject every
+    // rotated run as damaged — the failure this check would otherwise report on healthy pulls.
+    expect(await readFile(join(dir, 'events.000002.jsonl'), 'utf8')).toBe(second);
+    const reader = await TraceReader.open(dir);
+    expect(await reader.verifyIntegrity().then((result) => result.ok)).toBe(true);
+    expect(await reader.events().then((events) => events.map((e) => e.seq))).toEqual([0, 1]);
+  });
+
+  it('refuses a pulled rotated run whose segment list names a file the archive lacks', async () => {
+    const first = '{"seq":0,"type":"run.start"}\n';
+    const second = '{"seq":1,"type":"run.end"}\n';
+    const root = createHash('sha256')
+      .update(first + second)
+      .digest('hex');
+    const segments = [
+      {
+        name: 'events.jsonl',
+        first_seq: 0,
+        last_seq: 0,
+        bytes: first.length,
+        sha256: createHash('sha256').update(first).digest('hex'),
+      },
+      {
+        name: 'events.000002.jsonl',
+        first_seq: 1,
+        last_seq: 1,
+        bytes: second.length,
+        sha256: createHash('sha256').update(second).digest('hex'),
+      },
+    ];
+    const zip = await writeArchive([
+      {
+        name: `${runId}/manifest.json`,
+        bytes: new TextEncoder().encode(
+          `${JSON.stringify({
+            schema_version: '0.4.0',
+            run_id: runId,
+            created_at: '2026-01-01T00:00:00.000Z',
+            agenticreplay_version: '0.1.0',
+            adapter: { id: 'test' },
+            argv: ['test'],
+            cwd: '/work',
+            integrity: { events_sha256: root, blob_count: 0, segments },
+          })}\n`,
+        ),
+      },
+      // The second file never arrived: half a trace must not be installed as if it were the run.
+      { name: `${runId}/events.jsonl`, bytes: new TextEncoder().encode(first) },
+    ]);
+    reply = { status: 200, body: Buffer.from(zip), headers: { 'content-type': 'application/zip' } };
+
+    await expect(pullCommand(parseArgs(['pull', runId]), out, workspace, env())).rejects.toThrow(
+      /does not contain|integrity root|damaged/i,
+    );
+    await expect(
+      readFile(join(workspace, '.agenticreplay', 'runs', runId, 'events.jsonl')),
+    ).rejects.toThrow();
   });
 
   it('pulls a run into the local store', async () => {

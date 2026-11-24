@@ -237,3 +237,98 @@ describe('exportTraceHtml', () => {
     expect(await readFile(out, 'utf8')).toContain('payload omitted, 12 bytes');
   });
 });
+
+/**
+ * The viewer reads a run off disk without depending on @agenticreplay/core, so it has its own copy
+ * of the file-walking rule — and this is what holds the two together (spec §1.1).
+ */
+describe('exporting a rotated run', () => {
+  it('includes the events in every segment, in seq order', async () => {
+    const dir = await tempRunDir('rotated');
+    scratch.push(dir);
+    const { writeFile: write, mkdir } = await import('node:fs/promises');
+    const { createHash } = await import('node:crypto');
+    await mkdir(dir, { recursive: true });
+    const bodies = [
+      [ev({ type: 'run.start', seq: 0 })],
+      [ev({ type: 'note', seq: 1, attrs: { where: 'second' } })],
+      [ev({ type: 'run.end', seq: 2 })],
+    ].map((events) => events.map((event) => JSON.stringify(event)).join('\n') + '\n');
+    const names = ['events.jsonl', 'events.000002.jsonl', 'events.000003.jsonl'];
+    await Promise.all(bodies.map((body, i) => write(join(dir, names[i]!), body)));
+    const first = 0;
+    let offset = 0;
+    const segments = names.map((name, i) => {
+      const count = bodies[i]!.split('\n').filter(Boolean).length;
+      const segment = {
+        name,
+        first_seq: first + offset,
+        last_seq: first + offset + count - 1,
+        bytes: Buffer.byteLength(bodies[i]!),
+        sha256: createHash('sha256').update(bodies[i]!).digest('hex'),
+      };
+      offset += count;
+      return segment;
+    });
+    await write(
+      join(dir, 'manifest.json'),
+      JSON.stringify(
+        manifest({
+          integrity: {
+            events_sha256: createHash('sha256').update(bodies.join('')).digest('hex'),
+            blob_count: 0,
+            segments,
+          },
+        }),
+      ),
+    );
+
+    const out = join(dir, 'out.html');
+    await exportTraceHtml(dir, out);
+    const html = await readFile(out, 'utf8');
+    // The event that only exists past the first file is in the document.
+    expect(html).toContain('second');
+    expect(html).toContain('events.000003.jsonl'.slice(0, 0) + 'run ended');
+  });
+
+  it('records a segment the manifest names and the directory lacks as skipped, not as absence', async () => {
+    const dir = await tempRunDir('rotated-missing');
+    scratch.push(dir);
+    const { writeFile: write } = await import('node:fs/promises');
+    const { readTraceDir } = await import('../src/trace-dir.js');
+    const body = `${JSON.stringify(ev({ type: 'run.start', seq: 0 }))}\n`;
+    await write(join(dir, 'events.jsonl'), body);
+    await write(
+      join(dir, 'manifest.json'),
+      JSON.stringify(
+        manifest({
+          integrity: {
+            events_sha256: 'a'.repeat(64),
+            blob_count: 0,
+            segments: [
+              {
+                name: 'events.jsonl',
+                first_seq: 0,
+                last_seq: 0,
+                bytes: body.length,
+                sha256: 'b'.repeat(64),
+              },
+              {
+                name: 'events.000002.jsonl',
+                first_seq: 1,
+                last_seq: 1,
+                bytes: 10,
+                sha256: 'c'.repeat(64),
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const trace = await readTraceDir(dir);
+    // The event that was readable is there, and the file that was not is counted: a viewer that
+    // said nothing would be reporting a complete run over a prefix of one.
+    expect(trace.events.map((event) => event.type)).toEqual(['run.start']);
+    expect(trace.skippedLines).toBeGreaterThan(0);
+  });
+});

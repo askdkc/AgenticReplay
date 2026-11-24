@@ -149,6 +149,38 @@
         "blob_count": {
           "type": "integer",
           "minimum": 0
+        },
+        "segments": {
+          "description": "Every event file of a run that outgrew one file, in seq order. Absent when the run has exactly one file, which is byte-for-byte the older shape.",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["name", "first_seq", "last_seq", "bytes", "sha256"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^(?:events\\.jsonl|events\\.(?!000000|000001)[0-9]{6}\\.jsonl)$"
+              },
+              "first_seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "last_seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
         }
       }
     },

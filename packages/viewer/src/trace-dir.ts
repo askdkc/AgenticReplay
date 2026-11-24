@@ -3,9 +3,17 @@
  * @agenticreplay/core: the format is the contract, and a reader that only knows the spec proves it.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { assertManifest, type Manifest, type TraceEvent } from '@agenticreplay/schema';
+import {
+  EVENT_LOG_FILE,
+  assertManifest,
+  eventSegmentFileName,
+  eventSegmentIndex,
+  type Manifest,
+  type TraceEvent,
+  type TraceSegment,
+} from '@agenticreplay/schema';
 import { readCaptureDiagnostic, type CaptureDiagnostic } from './capture-diagnostic.js';
 import { readViewerBlob } from './blob-file.js';
 import { referencedBlobs } from './render.js';
@@ -43,6 +51,37 @@ export function bodyText(text: string): string {
   }
 }
 
+/**
+ * The event files of a run, in `seq` order.
+ *
+ * The manifest's segment list is authoritative when it is there, because only it can distinguish a
+ * rotated run from one whose later file was deleted. The directory listing is the fallback for a
+ * run whose manifest predates rotation or was never sealed, and it is sorted by the numeric index
+ * rather than by name so a run past segment 9 does not read out of order.
+ */
+export async function eventFileNames(runDir: string, manifest: Manifest): Promise<string[]> {
+  const recorded: TraceSegment[] | undefined = manifest.integrity?.segments;
+  if (recorded !== undefined && recorded.length > 0) return recorded.map((segment) => segment.name);
+  const entries = await readdir(runDir).catch(() => []);
+  const found: { name: string; index: number }[] = [];
+  for (const name of entries) {
+    const index = eventSegmentIndex(name);
+    if (index === undefined) continue;
+    found.push({ name, index });
+  }
+  if (found.length === 0) return [EVENT_LOG_FILE];
+  found.sort((a, b) => a.index - b.index);
+  // A gap is not filled in: the viewer shows what is there, and a run missing its middle file must
+  // not be read as if the later segments were contiguous with the first.
+  return found.map((entry) => entry.name);
+}
+
+/** The last file of a run, which a live view has to watch for changes. */
+export async function liveEventFileName(runDir: string, manifest: Manifest): Promise<string> {
+  const names = await eventFileNames(runDir, manifest);
+  return names.at(-1) ?? eventSegmentFileName(1);
+}
+
 /** Blob text, or null when the bytes are not text we can safely put in an HTML document. */
 function decodeText(bytes: Buffer): string | null {
   if (bytes.includes(0)) return null;
@@ -69,37 +108,42 @@ export async function readTraceDir(
   }
   assertManifest(manifest);
 
-  let eventsText = '';
-  try {
-    eventsText = await readFile(join(runDir, 'events.jsonl'), 'utf8');
-  } catch {
-    eventsText = '';
-  }
-
   const events: TraceEvent[] = [];
   let skippedLines = 0;
-  for (const line of eventsText.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '') continue;
-    let parsed: unknown;
+  for (const name of await eventFileNames(runDir, manifest)) {
+    let eventsText = '';
     try {
-      parsed = JSON.parse(trimmed);
+      eventsText = await readFile(join(runDir, name), 'utf8');
     } catch {
-      // Spec §2: readers MUST tolerate a truncated final line.
+      // A segment the manifest names and the directory lacks stays silent here, exactly as a
+      // missing events.jsonl always did: the viewer renders what it read. `skippedLines` is
+      // incremented so the page does not report a clean read of a run it could not fully open.
       skippedLines += 1;
       continue;
     }
-    const event = parsed as TraceEvent;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      typeof event.seq === 'number' &&
-      typeof event.type === 'string'
-    ) {
-      // Unknown `type` values are kept, not dropped: the viewer renders them generically.
-      events.push(event);
-    } else {
-      skippedLines += 1;
+    for (const line of eventsText.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed === '') continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Spec §2: readers MUST tolerate a truncated final line.
+        skippedLines += 1;
+        continue;
+      }
+      const event = parsed as TraceEvent;
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof event.seq === 'number' &&
+        typeof event.type === 'string'
+      ) {
+        // Unknown `type` values are kept, not dropped: the viewer renders them generically.
+        events.push(event);
+      } else {
+        skippedLines += 1;
+      }
     }
   }
 

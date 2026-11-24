@@ -2,7 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { link, lstat, open, readFile, readdir, realpath, rm, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { assertManifest } from '@agenticreplay/schema';
-import { encodeBlob, MAX_BLOB_BYTES, readBlobFile, sha256File } from './blobs.js';
+import { encodeBlob, MAX_BLOB_BYTES, readBlobFile } from './blobs.js';
+import { eventLogLayout, hashEventLog } from './event-log.js';
 
 export interface CompactResult {
   runDir: string;
@@ -51,9 +52,15 @@ export async function compactRun(
   if (!manifest.ended_at || !manifest.integrity?.events_sha256) {
     return { ...result, reason: 'run is not sealed' };
   }
-  const eventsPath = join(runDir, 'events.jsonl');
-  await ordinary(eventsPath);
-  if ((await sha256File(eventsPath)) !== manifest.integrity.events_sha256)
+  // Every event file of the run, in `seq` order: the root this checks against covers the whole log,
+  // and hashing only the first file would reject every rotated run as tampered with.
+  const layout = await eventLogLayout(runDir, manifest);
+  if (layout.segments.length === 0) throw new Error('cannot compact a run without an event log');
+  for (const segment of layout.segments) await ordinary(segment.path);
+  if (
+    (await hashEventLog(layout.segments.map((segment) => segment.path))) !==
+    manifest.integrity.events_sha256
+  )
     throw new Error('cannot compact a run with invalid event integrity');
   const root = join(runDir, 'blobs');
   try {

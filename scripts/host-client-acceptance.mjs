@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { eventSegmentIndex } from '../packages/schema/dist/index.js';
 
 const timeoutMs = 25_000;
 
@@ -217,7 +218,18 @@ function isolatedEnv(root, extra = {}) {
 }
 
 async function traceBlobText(runDir) {
-  const parts = [await readFile(join(runDir, 'events.jsonl'), 'utf8')];
+  // Every event file, then every blob: a rotated run's later events are in their own files, and a
+  // scan that read only `events.jsonl` would call a run clean over the half it never opened.
+  const manifest = await readFile(join(runDir, 'manifest.json'), 'utf8')
+    .then((raw) => JSON.parse(raw))
+    .catch(() => undefined);
+  const names =
+    Array.isArray(manifest?.integrity?.segments) && manifest.integrity.segments.length > 0
+      ? manifest.integrity.segments.map((segment) => segment.name)
+      : (await readdir(runDir)).filter((name) => eventSegmentIndex(name) !== undefined);
+  if (names.length === 0) names.push('events.jsonl');
+  const parts = [];
+  for (const name of names) parts.push(await readFile(join(runDir, name), 'utf8'));
   const root = join(runDir, 'blobs');
   for (const shard of await readdir(root).catch(() => [])) {
     for (const name of await readdir(join(root, shard)).catch(() => [])) {

@@ -16,7 +16,12 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EVENT_TYPES, validateEvent, validateManifest } from '../packages/schema/dist/index.js';
+import {
+  EVENT_TYPES,
+  eventSegmentIndex,
+  validateEvent,
+  validateManifest,
+} from '../packages/schema/dist/index.js';
 import { TraceWriter } from '../packages/core/dist/index.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -38,29 +43,43 @@ async function checkTrace(dir, label) {
   const mr = validateManifest(manifest);
   if (!mr.valid) fail(`${dir}/manifest.json`, mr.errors);
 
-  const raw = await readFile(join(dir, 'events.jsonl'), 'utf8');
-  const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+  // Every event file of the run, in `seq` order. The manifest's segment list is authoritative when
+  // it is there; the listing is the fallback for a run sealed before rotation existed.
+  const names =
+    Array.isArray(manifest.integrity?.segments) && manifest.integrity.segments.length > 0
+      ? manifest.integrity.segments.map((segment) => segment.name)
+      : (await readdir(dir)).filter((name) => eventSegmentIndex(name) !== undefined);
+  if (names.length === 0) names.push('events.jsonl');
+  names.sort((a, b) => (eventSegmentIndex(a) ?? 1) - (eventSegmentIndex(b) ?? 1));
+
   let expectedSeq = 0;
-  for (const [i, line] of lines.entries()) {
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      // A truncated final line is legal (spec §2); anything earlier is not.
-      if (i === lines.length - 1) continue;
-      fail(`${dir}/events.jsonl:${i + 1}`, ['unparseable line']);
-      continue;
+  let total = 0;
+  for (const name of names) {
+    const raw = await readFile(join(dir, name), 'utf8');
+    const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+    total += lines.length;
+    const isLastFile = name === names.at(-1);
+    for (const [i, line] of lines.entries()) {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        // A truncated final line is legal (spec §2); anything earlier is not.
+        if (isLastFile && i === lines.length - 1) continue;
+        fail(`${dir}/${name}:${i + 1}`, ['unparseable line']);
+        continue;
+      }
+      const r = validateEvent(event);
+      if (!r.valid) fail(`${dir}/${name}:${i + 1}`, r.errors);
+      if (event.seq !== expectedSeq) {
+        fail(`${dir}/${name}:${i + 1}`, [`seq ${event.seq}, expected dense ${expectedSeq}`]);
+      }
+      expectedSeq = event.seq + 1;
+      seen.add(event.type);
+      checked += 1;
     }
-    const r = validateEvent(event);
-    if (!r.valid) fail(`${dir}/events.jsonl:${i + 1}`, r.errors);
-    if (event.seq !== expectedSeq) {
-      fail(`${dir}/events.jsonl:${i + 1}`, [`seq ${event.seq}, expected dense ${expectedSeq}`]);
-    }
-    expectedSeq = event.seq + 1;
-    seen.add(event.type);
-    checked += 1;
   }
-  console.log(`  ${label ?? dir.replace(root, '')}: ${lines.length} events`);
+  console.log(`  ${label ?? dir.replace(root, '')}: ${total} events`);
 }
 
 let entries = [];

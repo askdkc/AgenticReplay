@@ -137,6 +137,17 @@ export async function showCommand(
   const events = await reader.events();
   const summary = summarize(manifest, events);
 
+  // A rotated run can be short a file, and the timeline would then be a prefix presented as the
+  // run. Name what could not be read before the first row, not after the last: a reader who has
+  // already scrolled the timeline has already drawn their conclusion.
+  for (const problem of reader.problems()) {
+    out.warn('trace.incomplete_read', {
+      ...(problem.file === undefined ? {} : { file: problem.file }),
+      reason: problem.reason,
+      effect: 'what follows is what could be read, not the whole run',
+    });
+  }
+
   out.plain(
     // `?? 0` said a run that never reached an exit had exited cleanly — and a run that died before
     // its agent started is sealed with the code deliberately absent, precisely because it is

@@ -58,6 +58,22 @@ export interface GitInfo {
   dirty?: boolean;
 }
 
+/**
+ * One file of a run's event log. Spec §1 and §2.
+ *
+ * A run that outgrows one file continues its dense `seq` order in the next, so the sequence of
+ * these records is the trace: `name` is `events.jsonl` for the first file and
+ * `events.NNNNNN.jsonl` for every later one.
+ */
+export interface TraceSegment {
+  name: string;
+  first_seq: number;
+  last_seq: number;
+  /** Physical size of the file at seal time, in bytes. */
+  bytes: number;
+  sha256: string;
+}
+
 export interface Manifest {
   schema_version: string;
   run_id: string;
@@ -78,7 +94,7 @@ export interface Manifest {
   fork_model?: string;
   exit_code?: number;
   capture?: CaptureSummary;
-  integrity?: { events_sha256: string; blob_count: number };
+  integrity?: { events_sha256: string; blob_count: number; segments?: TraceSegment[] };
 }
 
 export interface RedactionRecord {

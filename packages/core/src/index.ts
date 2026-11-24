@@ -1,4 +1,5 @@
 export * from './blobs.js';
+export * from './event-log.js';
 export * from './fetch.js';
 export * from './graph.js';
 export * from './paths.js';

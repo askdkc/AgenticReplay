@@ -4,17 +4,30 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { BlobRef, Manifest, TraceEvent } from '@agenticreplay/schema';
 import { EVENT_TYPES, assertManifest, isBlobRef, validateEvent } from '@agenticreplay/schema';
-import { BlobStore, sha256File } from './blobs.js';
+import { BlobStore } from './blobs.js';
+import { eventLogLayout, hashRunEventLog } from './event-log.js';
 
 /** A line the reader could not use. Reported, never repaired (spec §6). */
 export interface ReadProblem {
-  /** 1-based line number in events.jsonl; 0 for a problem with the file itself. */
+  /**
+   * 1-based line number within `file`; 0 for a problem with a file or the set of them.
+   *
+   * Kept per file rather than numbered across the log: "line 7" of an unknown file is not a
+   * location anyone can look at, and a rotated run has several line 7s.
+   */
   line: number;
+  /** The segment the line is in, absent for a problem with the run's event log as a whole. */
+  file?: string;
   reason: string;
 }
 
 export interface IntegrityResult {
-  /** True only for a sealed run whose events file still hashes to the digest it was sealed with. */
+  /**
+   * True only for a sealed run whose event files still hash to the digest it was sealed with.
+   *
+   * The digest covers every segment in `seq` order, so a run that rotated is verified as a whole
+   * rather than as its first file.
+   */
   ok: boolean;
   /**
    * Why `ok` is what it is. `unsealed` is not `mismatch`, and collapsing the two is how a run whose
@@ -26,6 +39,8 @@ export interface IntegrityResult {
   /** Absent when the run was never sealed, so there is nothing to check against. */
   expected?: string;
   actual?: string;
+  /** What the log is made of, in order: one file, or the segments of a rotated run. */
+  files: string[];
 }
 
 const KNOWN_TYPES = new Set<string>(EVENT_TYPES);
@@ -37,17 +52,19 @@ const KNOWN_TYPES = new Set<string>(EVENT_TYPES);
  * leaves a partial final line, and a trace written by a newer AgenticReplay may carry event types this
  * build has never heard of. Neither may take down the whole trace — but neither is hidden either,
  * so anything skipped shows up in {@link problems}.
+ *
+ * A run's events may be in more than one file (spec §2.4). Every read here goes through that set,
+ * in order, so `events()`, `stream()`, `verifyIntegrity()` and the blob store all describe the run
+ * rather than its first file.
  */
 export class TraceReader {
   readonly #runDir: string;
-  readonly #eventsPath: string;
   readonly #manifest: Manifest;
   readonly #blobs: BlobStore;
   #problems: ReadProblem[] = [];
 
   private constructor(runDir: string, manifest: Manifest) {
     this.#runDir = runDir;
-    this.#eventsPath = join(runDir, 'events.jsonl');
     this.#manifest = manifest;
     this.#blobs = new BlobStore(join(runDir, 'blobs'));
   }
@@ -78,9 +95,22 @@ export class TraceReader {
     return this.#manifest;
   }
 
-  /** Lines skipped by the most recent read pass. */
+  /** Lines skipped by the most recent read pass, and anything wrong with the log's file set. */
   problems(): ReadProblem[] {
     return [...this.#problems];
+  }
+
+  /**
+   * The event files of this run, in `seq` order.
+   *
+   * Also records what is wrong with the set — a gap, or a file the manifest names and the
+   * directory lacks — without pretending the remainder is the whole record. Callers that must not
+   * show a partial trace as a complete one read {@link problems}.
+   */
+  async files(): Promise<string[]> {
+    const layout = await eventLogLayout(this.#runDir, this.#manifest);
+    this.#problems = layout.problems.map((reason) => ({ line: 0, reason }));
+    return layout.segments.map((segment) => segment.path);
   }
 
   async events(): Promise<TraceEvent[]> {
@@ -90,35 +120,51 @@ export class TraceReader {
   }
 
   async *stream(): AsyncIterableIterator<TraceEvent> {
-    this.#problems = [];
-    if (!(await stat(this.#eventsPath).catch(() => null))) {
-      this.#problems.push({ line: 0, reason: `${this.#eventsPath} is missing` });
-      return;
-    }
-    const rl = createInterface({
-      input: createReadStream(this.#eventsPath),
-      crlfDelay: Number.POSITIVE_INFINITY,
-    });
-    // One line is held back so the last one can be told apart from the rest: only the last may
-    // legitimately be half-written.
-    let held: { line: number; text: string } | undefined;
-    let n = 0;
-    try {
-      for await (const raw of rl) {
-        n += 1;
-        if (raw.trim().length === 0) continue;
+    const layout = await eventLogLayout(this.#runDir, this.#manifest);
+    this.#problems = layout.problems.map((reason) => ({ line: 0, reason }));
+    if (layout.segments.length === 0) return;
+    for (const [position, segment] of layout.segments.entries()) {
+      if (!(await stat(segment.path).catch(() => null))) {
+        this.#problems.push({ line: 0, file: segment.name, reason: `${segment.path} is missing` });
+        continue;
+      }
+      const rl = createInterface({
+        input: createReadStream(segment.path),
+        crlfDelay: Number.POSITIVE_INFINITY,
+      });
+      // One line is held back so the last one can be told apart from the rest: only the last line
+      // of the LAST file may legitimately be half-written. A torn line anywhere earlier is a
+      // malformed line, not a tolerated tail.
+      let held: { line: number; text: string } | undefined;
+      let n = 0;
+      const isLastFile = position === layout.segments.length - 1;
+      try {
+        for await (const raw of rl) {
+          n += 1;
+          if (raw.trim().length === 0) continue;
+          if (held) {
+            const e = this.#parse(segment.name, held, false);
+            if (e) yield e;
+          }
+          held = { line: n, text: raw };
+        }
         if (held) {
-          const e = this.#parse(held, false);
+          const e = this.#parse(segment.name, held, isLastFile);
           if (e) yield e;
         }
-        held = { line: n, text: raw };
+        // A segment with nothing in it is not evidence of anything, and a run that left one behind
+        // a later file is a rotation that was interrupted. Said out loud, because a reader told
+        // "the log is these files" would otherwise take an empty middle as a quiet stretch.
+        if (!isLastFile && n === 0) {
+          this.#problems.push({
+            line: 0,
+            file: segment.name,
+            reason: 'segment is empty but is not the last file',
+          });
+        }
+      } finally {
+        rl.close();
       }
-      if (held) {
-        const e = this.#parse(held, true);
-        if (e) yield e;
-      }
-    } finally {
-      rl.close();
     }
   }
 
@@ -140,34 +186,40 @@ export class TraceReader {
   }
 
   async verifyIntegrity(): Promise<IntegrityResult> {
+    const files = await this.files();
+    const actual = await hashRunEventLog(this.#runDir, this.#manifest);
     const expected = this.#manifest.integrity?.events_sha256;
-    const actual = await sha256File(this.#eventsPath);
-    if (expected === undefined) return { ok: false, state: 'unsealed', actual };
+    if (expected === undefined) return { ok: false, state: 'unsealed', actual, files };
     return expected === actual
-      ? { ok: true, state: 'verified', expected, actual }
-      : { ok: false, state: 'mismatch', expected, actual };
+      ? { ok: true, state: 'verified', expected, actual, files }
+      : { ok: false, state: 'mismatch', expected, actual, files };
   }
 
-  #parse(held: { line: number; text: string }, isLast: boolean): TraceEvent | undefined {
+  #parse(
+    file: string,
+    held: { line: number; text: string },
+    isLast: boolean,
+  ): TraceEvent | undefined {
     let value: unknown;
     try {
       value = JSON.parse(held.text);
     } catch {
       const reason = isLast ? 'truncated final line' : 'malformed JSON';
-      this.#problems.push({ line: held.line, reason });
+      this.#problems.push({ line: held.line, file, reason });
       return undefined;
     }
     const type = (value as { type?: unknown }).type;
     if (typeof type !== 'string' || !KNOWN_TYPES.has(type)) {
       this.#problems.push({
         line: held.line,
+        file,
         reason: `unknown event type ${JSON.stringify(type)}`,
       });
       return undefined;
     }
     const result = validateEvent(value);
     if (!result.valid) {
-      this.#problems.push({ line: held.line, reason: result.errors.join('; ') });
+      this.#problems.push({ line: held.line, file, reason: result.errors.join('; ') });
       return undefined;
     }
     return value as TraceEvent;

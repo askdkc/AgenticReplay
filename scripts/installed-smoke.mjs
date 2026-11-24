@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { eventSegmentIndex } from '../packages/schema/dist/index.js';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -213,9 +214,18 @@ try {
     throw new Error(`installed record did not create a readable session directory: ${runName}`);
   const runDir = join(runStore, runName);
   const manifest = JSON.parse(await readFile(join(runDir, 'manifest.json'), 'utf8'));
-  const eventBytes = await readFile(join(runDir, 'events.jsonl'));
-  const eventLines = eventBytes
-    .toString('utf8')
+  // Every event file of the run, in `seq` order: a rotated run's events continue past the first
+  // file, and the counts check below compares against the whole log.
+  const segmentNames =
+    Array.isArray(manifest.integrity?.segments) && manifest.integrity.segments.length > 0
+      ? manifest.integrity.segments.map((segment) => segment.name)
+      : (await readdir(runDir)).filter((name) => eventSegmentIndex(name) !== undefined);
+  if (segmentNames.length === 0) segmentNames.push('events.jsonl');
+  segmentNames.sort((a, b) => (eventSegmentIndex(a) ?? 1) - (eventSegmentIndex(b) ?? 1));
+  const eventText = (
+    await Promise.all(segmentNames.map((name) => readFile(join(runDir, name), 'utf8')))
+  ).join('');
+  const eventLines = eventText
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));
@@ -233,7 +243,7 @@ try {
     !eventLines.every((event, index) => event.seq === index)
   )
     throw new Error('installed record did not seal a complete run');
-  if (manifest.integrity?.events_sha256 !== createHash('sha256').update(eventBytes).digest('hex'))
+  if (manifest.integrity?.events_sha256 !== createHash('sha256').update(eventText).digest('hex'))
     throw new Error('installed record event integrity mismatch');
   const requestEvent = eventLines.find(
     (event) => event.type === 'net.request' && event.attrs?.phase === 'body',

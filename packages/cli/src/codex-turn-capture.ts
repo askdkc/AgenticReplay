@@ -1,11 +1,10 @@
-import { createReadStream } from 'node:fs';
 import type { TurnReceipt as SharedTurnReceipt } from '@agenticreplay/schema';
 import { createHash, randomBytes } from 'node:crypto';
 import { openTurnStore, type TurnReceipt } from './codex-turn-store.js';
 import { createServer, type Socket } from 'node:net';
 import { chmod, lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, basename } from 'node:path';
-import { TraceWriter, captureDirectoryName } from '@agenticreplay/core';
+import { TraceWriter, captureDirectoryName, hashEventLog } from '@agenticreplay/core';
 import {
   codexDialect,
   type NetExchange,
@@ -237,9 +236,9 @@ async function openCapture(
       }
       const manifest = await writer.close();
       const [sessionId, turnId] = JSON.parse(turn.key) as [string, string];
-      const digest = createHash('sha256');
-      for await (const chunk of createReadStream(join(writer.runDir, 'events.jsonl')))
-        digest.update(chunk);
+      // Every file of the run, in `seq` order: the receipt's digest has to describe the recording
+      // the reader will open, and a rotated run's events continue past its first file.
+      const eventsSha256 = await hashEventLog(writer.eventPaths);
       const shared: SharedTurnReceipt = {
         schemaVersion: 1,
         receiptId: createHash('sha256')
@@ -258,7 +257,7 @@ async function openCapture(
         recording: {
           runId: turn.receipt.runId,
           directory: writer.runDir,
-          eventsSha256: digest.digest('hex'),
+          eventsSha256,
         },
         capture: manifest.capture?.status === 'complete' ? 'complete' : 'incomplete',
       };

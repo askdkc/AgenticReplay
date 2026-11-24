@@ -25,6 +25,7 @@ from .models import (
     AgenticReplayTraceError,
     TraceEvent,
     TraceFormatError,
+    event_segment_index,
 )
 
 __all__ = [
@@ -129,7 +130,9 @@ class TraceReader:
         self._problems: list[str] = []
         self._expected_seq: int | None = 0
         self._has_read = False
-
+        #: Whether the last pass read more than one file, which decides whether a problem has to
+        #: name the file it is in. Set by `stream`; single-file output stays exactly as it was.
+        self._multi_file = False
     @classmethod
     def open(cls, run_dir: str | Path) -> TraceReader:
         """Open `run_dir`, validating its manifest.
@@ -158,7 +161,49 @@ class TraceReader:
 
     @property
     def events_path(self) -> Path:
+        """The first event file.
+
+        Kept for callers written before a run could rotate. A rotated run's events continue in
+        :meth:`events_paths`; a reader that needs all of them must not stop at this one.
+        """
         return self._events_path
+
+    @property
+    def events_paths(self) -> tuple[Path, ...]:
+        """Every event file of this run, in `seq` order."""
+        return self._event_paths()
+
+    def _event_paths(self) -> tuple[Path, ...]:
+        """The event files to read, in order, and a note for each one the manifest names and is not here.
+
+        The manifest is authoritative: only it can say a rotated run is missing its middle file.
+        The directory listing is the fallback for a run that was never sealed, and it is sorted by
+        numeric index so a run past segment 9 is not read out of order.
+        """
+        recorded = self._manifest.segments
+        if recorded:
+            paths: list[Path] = []
+            for segment in recorded:
+                path = self._run_dir / str(segment["name"])
+                if not path.is_file():
+                    self._problems.append(f"{segment['name']}: missing at {path}")
+                    continue
+                paths.append(path)
+            return tuple(paths)
+        found: list[tuple[int, Path]] = []
+        try:
+            entries = list(self._run_dir.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            index = event_segment_index(entry.name)
+            if index is None or not entry.is_file():
+                continue
+            found.append((index, entry))
+        if not found:
+            return (self._events_path,)
+        found.sort(key=lambda item: item[0])
+        return tuple(path for _index, path in found)
 
     @property
     def manifest(self) -> Manifest:
@@ -185,34 +230,43 @@ class TraceReader:
         A trace can be hundreds of megabytes because every model turn resends the conversation,
         so the reader that turns traces into datasets must never need the file resident.
 
-        One line is held back so the last one can be told apart from the rest: only the final
-        line may legitimately be half-written (spec §2). A pass resets :meth:`problems`, so run
-        one pass at a time.
+        One line is held back so the last one can be told apart from the rest: only the final line
+        of the final file may legitimately be half-written (spec §2). A run may rotate into more
+        than one file (§2.4), and this walks all of them in `seq` order. A pass resets
+        :meth:`problems`, so run one pass at a time.
         """
         self._problems = []
         self._expected_seq = 0
         self._has_read = True
 
-        if not self._events_path.is_file():
+        paths = self._event_paths()
+        self._multi_file = len(paths) > 1
+        if not any(path.is_file() for path in paths):
             self._problems.append(f"events.jsonl: missing at {self._events_path}")
             return
 
-        held: _Line | None = None
-        # errors="replace" rather than "strict": a crash can cut a multi-byte character in half,
-        # and that line should be reported like any other bad line instead of ending the read.
-        with self._events_path.open("r", encoding="utf-8", errors="replace") as handle:
-            for number, text in enumerate(handle, start=1):
-                if not text.strip():
-                    continue
+        for position, path in enumerate(paths):
+            if not path.is_file():
+                # Already reported by `_event_paths`; skipping keeps a missing middle file from
+                # reading as if the segments after it were contiguous with the first.
+                continue
+            is_last_file = position == len(paths) - 1
+            held: _Line | None = None
+            # errors="replace" rather than "strict": a crash can cut a multi-byte character in half,
+            # and that line should be reported like any other bad line instead of ending the read.
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for number, text in enumerate(handle, start=1):
+                    if not text.strip():
+                        continue
+                    if held is not None:
+                        event = self._parse(held, last=False, source=path.name)
+                        if event is not None:
+                            yield event
+                    held = _Line(number, text)
                 if held is not None:
-                    event = self._parse(held, last=False)
+                    event = self._parse(held, last=is_last_file, source=path.name)
                     if event is not None:
                         yield event
-                held = _Line(number, text)
-            if held is not None:
-                event = self._parse(held, last=True)
-                if event is not None:
-                    yield event
 
     def blob(
         self, ref: BlobRef | str, *, verify: bool = False, max_bytes: int = 256 * 1024 * 1024
@@ -271,34 +325,49 @@ class TraceReader:
         """
         expected = self._manifest.events_sha256 or ""
         digest = hashlib.sha256()
+        paths = self._event_paths()
         try:
-            with self._events_path.open("rb") as handle:
-                while chunk := handle.read(_HASH_CHUNK):
-                    digest.update(chunk)
+            for path in paths:
+                with path.open("rb") as handle:
+                    while chunk := handle.read(_HASH_CHUNK):
+                        digest.update(chunk)
         except OSError:
+            return False, expected, ""
+        # A file the manifest names and the directory lacks makes this a hash of a prefix, which
+        # is a different claim from the one the root makes. Saying so beats reporting a mismatch
+        # that reads as tampering.
+        if self._manifest.segments and len(paths) != len(self._manifest.segments):
             return False, expected, ""
         actual = digest.hexdigest()
         return bool(expected) and expected == actual, expected, actual
 
-    def _report(self, line: int, reason: str) -> None:
-        self._problems.append(f"line {line}: {reason}")
+    def _report(self, line: int, reason: str, source: str | None = None) -> None:
+        # `line N: …` is what this has always said, and callers match on it. A rotated run needs the
+        # file too — "line 7" exists once per segment — so the file is appended rather than
+        # replacing the prefix, and only when there is more than one to be confused about.
+        where = f"line {line}: {reason}"
+        if source is not None and self._multi_file:
+            where = f"{where} (in {source})"
+        self._problems.append(where)
 
-    def _parse(self, line: _Line, *, last: bool) -> TraceEvent | None:
+    def _parse(self, line: _Line, *, last: bool, source: str | None = None) -> TraceEvent | None:
         try:
             value = json.loads(line.text)
         except ValueError:
-            self._report(line.number, "truncated final line" if last else "malformed JSON")
+            self._report(
+                line.number, "truncated final line" if last else "malformed JSON", source
+            )
             # The lost line's seq is unknowable, so density resynchronises on the next one
             # rather than blaming it for a gap this line already accounts for.
             self._expected_seq = None
             return None
 
         if not isinstance(value, Mapping):
-            self._report(line.number, "not a JSON object")
+            self._report(line.number, "not a JSON object", source)
             self._expected_seq = None
             return None
 
-        self._check_density(line, value)
+        self._check_density(line, value, source)
 
         event_type = value.get("type")
         if not isinstance(event_type, str) or event_type not in EVENT_TYPES:
@@ -307,19 +376,20 @@ class TraceReader:
             self._report(
                 line.number,
                 f"unknown event type {event_type!r} — skipped for forward compatibility",
+                source,
             )
             return None
 
         try:
             event = TraceEvent.from_json(value)
         except TraceFormatError as exc:
-            self._report(line.number, str(exc))
+            self._report(line.number, str(exc), source)
             return None
 
-        self._check_causes(line, event)
+        self._check_causes(line, event, source)
         return event
 
-    def _check_density(self, line: _Line, value: Mapping[str, Any]) -> None:
+    def _check_density(self, line: _Line, value: Mapping[str, Any], source: str | None) -> None:
         """Spec §2.1: seq is a dense total order starting at 0. A hole means a lost event."""
         seq = value.get("seq")
         if isinstance(seq, bool) or not isinstance(seq, int):
@@ -328,10 +398,13 @@ class TraceReader:
             self._report(
                 line.number,
                 f"seq {seq} breaks the dense order — expected {self._expected_seq}",
+                source,
             )
         self._expected_seq = seq + 1
 
-    def _check_causes(self, line: _Line, event: TraceEvent) -> None:
+    def _check_causes(
+        self, line: _Line, event: TraceEvent, source: str | None = None
+    ) -> None:
         """Spec §2.1 requires every cause < seq, but the JSON Schema does not encode it.
 
         Reported rather than enforced: dropping the event would make this reader disagree with
@@ -343,4 +416,5 @@ class TraceReader:
             self._report(
                 line.number,
                 f"causes {forward} do not precede seq {event.seq} (spec §2.1)",
+                source,
             )

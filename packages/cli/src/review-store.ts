@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import {
   agenticreplayDir,
   assertPrivatePathIdentity,
+  hashRunEventLog,
   privatePathIdentity,
   resolveRunSelector,
   restrictToOwner,
@@ -139,9 +140,12 @@ export class RecordingReviewStore {
   }
 
   async verifySource(): Promise<void> {
+    // The whole event log, in `seq` order: `eventsDigest` is the manifest's root, which covers
+    // every segment of a rotated run. Hashing the first file would reject a run that rotated as
+    // having changed under the review, which is the one answer this check must not give wrongly.
     const [manifest, events] = await Promise.all([
       sha256File(join(this.traceDirectory, 'manifest.json')),
-      sha256File(join(this.traceDirectory, 'events.jsonl')),
+      hashRunEventLog(this.traceDirectory),
     ]).catch(() => {
       throw new Error('The source recording is unavailable.');
     });

@@ -13,13 +13,57 @@ Licensed CC BY 4.0 so that other implementations may quote it freely.
 ```
 .agenticreplay/runs/<run_id>/
 ├── manifest.json      # run metadata, integrity root, schema version
-├── events.jsonl       # append-only, totally ordered event log
+├── events.jsonl       # append-only, totally ordered event log (first file)
+├── events.NNNNNN.jsonl # further files of the same log, when a run outgrows one
 ├── blobs/<ab>/<sha256>  # content-addressed payloads
 ├── fs/                # shadow git object store (optional)
 └── redactions.json    # what was removed, by rule and identifier
 ```
 
 `run_id` MUST match `^run_[0-9a-f]{6,32}$`.
+
+### 1.1 Rotated event logs
+
+One run's events MAY be split across several files. The first is always `events.jsonl`; each
+further file is `events.000002.jsonl`, `events.000003.jsonl`, … with a 6-digit 1-based index, so a
+directory listing sorts in `seq` order. `events.000001.jsonl` is not a valid name — there is exactly
+one spelling of each position.
+
+A writer rotates when appending the next event would take the live file past its target size. The
+target is 64 MiB by default. A line is never split: an event that exactly fills a file stays in it,
+and the next one opens the next file. `run_id`, `seq`, `turn` and `causes` continue across the
+boundary, so the event log is the ordered concatenation of the files and nothing else changes for a
+reader that follows §1.1.
+
+Rotation is a layout decision, not a capture failure. A run that rotated is not `incomplete` for
+that reason alone. A writer MUST stop rotating — and report why — rather than fill the volume:
+
+| Condition | Recorded issue |
+|---|---|
+| The run's cumulative event budget is spent | `run_event_limit` |
+| The segment count bound is reached | `segment_limit` |
+| The next file cannot be created (full disk, permissions, conflict) | `event_segment_unwritable`, `event_segment_conflict` |
+
+An event too large for any file is stored as the bounded diagnostic record §2.2 describes, not as
+an endless series of empty files.
+
+`manifest.integrity.segments` records every file of a sealed run that has more than one, in order:
+
+```json
+"integrity": {
+  "events_sha256": "…",
+  "blob_count": 0,
+  "segments": [
+    { "name": "events.jsonl", "first_seq": 0, "last_seq": 811, "bytes": 67103104, "sha256": "…" },
+    { "name": "events.000002.jsonl", "first_seq": 812, "last_seq": 1024, "bytes": 18042881, "sha256": "…" }
+  ]
+}
+```
+
+The field is absent for a run that did not rotate. `events_sha256` is the SHA-256 of the
+concatenation of the files in `seq` order, so a single-file run hashes exactly as it always did and a
+rotated run is verified as a whole. A reader that finds a listed file missing MUST report the gap
+and MUST NOT present what it could read as the complete log.
 
 ## 2. events.jsonl
 
@@ -110,6 +154,12 @@ marked incomplete. Once diagnostic space is exhausted, further nonterminal appen
 `run.end` remains writable. These limits exclude manifests, redaction ledgers, filesystem snapshots
 and filesystem block overhead. They do not reserve physical disk blocks or guarantee writes when
 the filesystem is full.
+
+Since §1.1, a run continues in another file rather than stopping, so the per-file target and the
+per-run budget are separate: `eventBytes` is the file target on the default path, and
+`runEventBytes` bounds the run as a whole (2 GiB by default). A caller that passes `eventBytes`
+without a run budget — which is what every caller did when one file was the whole run — keeps the
+old single-file behaviour, so a bounded diagnostic trace does not silently become unbounded.
 
 Content addressing deduplicates identical blobs. Local AgenticReplay recorders may also store a
 request as `<digest>.delta` when it shares a prefix or suffix with an earlier full request and the
@@ -252,8 +302,11 @@ Redaction is best-effort mitigation, not a guarantee. A trace is sensitive mater
 
 ## 6. Integrity
 
-`manifest.json.integrity.events_sha256` is the SHA-256 of `events.jsonl` at the moment the run
-ended. Readers SHOULD verify it and MUST report, not repair, a mismatch.
+`manifest.json.integrity.events_sha256` is the SHA-256 of the event log at the moment the run
+ended — `events.jsonl` for a run that did not rotate, and the concatenation of every segment in
+`seq` order for one that did (§1.1). Readers SHOULD verify it and MUST report, not repair, a
+mismatch. A reader that can only see the first file of a rotated run MUST fail the check rather than
+pass it over a prefix.
 
 Ordinary overflow events may use only the first 4 KiB of the diagnostic allowance. Errors may
 use the first 60 KiB; only `run.end` may use the final 4 KiB. Repeated normal events therefore

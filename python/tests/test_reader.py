@@ -470,3 +470,69 @@ class TestCompressedBlobs:
         path.write_bytes(header + gzip.compress(b"corrupt"))
         with pytest.raises(BlobIntegrityError):
             reader.blob(digest)
+
+
+class TestRotatedRuns:
+    """One run may span several event files (spec §2.4). Every read here is the whole log."""
+
+    def test_reads_every_segment_in_seq_order(self, tmp_path: Path) -> None:
+        write_trace(tmp_path, [event(i) for i in range(9)], segments=3)
+        assert (tmp_path / "events.000002.jsonl").is_file()
+        assert (tmp_path / "events.000003.jsonl").is_file()
+        reader = TraceReader.open(tmp_path)
+        assert [e.seq for e in reader.events()] == list(range(9))
+        assert reader.problems() == []
+
+    def test_events_paths_names_every_file(self, tmp_path: Path) -> None:
+        write_trace(tmp_path, [event(i) for i in range(6)], segments=2)
+        reader = TraceReader.open(tmp_path)
+        assert [path.name for path in reader.events_paths] == [
+            "events.jsonl",
+            "events.000002.jsonl",
+        ]
+
+    def test_verify_hashes_the_concatenation(self, tmp_path: Path) -> None:
+        write_trace(tmp_path, [event(i) for i in range(6)], segments=2)
+        reader = TraceReader.open(tmp_path)
+        ok, expected, actual = reader.verify_integrity()
+        assert ok is True
+        assert expected == actual
+
+    def test_a_missing_middle_segment_is_reported_not_read_as_complete(
+        self, tmp_path: Path
+    ) -> None:
+        write_trace(tmp_path, [event(i) for i in range(9)], segments=3)
+        (tmp_path / "events.000002.jsonl").unlink()
+        reader = TraceReader.open(tmp_path)
+        seen = [e.seq for e in reader.events()]
+        assert seen == [0, 1, 2, 6, 7, 8]
+        assert any("events.000002.jsonl" in problem for problem in reader.problems())
+        ok, _expected, _actual = reader.verify_integrity()
+        assert ok is False, "a log short a file has no single digest to call verified"
+
+    def test_an_unsealed_run_still_reads_by_listing_the_directory(
+        self, tmp_path: Path
+    ) -> None:
+        write_trace(tmp_path, [event(0), event(1)], seal=False)
+        (tmp_path / "events.000002.jsonl").write_text(
+            json.dumps(event(2), separators=(",", ":")) + "\n", encoding="utf-8"
+        )
+        reader = TraceReader.open(tmp_path)
+        assert [e.seq for e in reader.events()] == [0, 1, 2]
+
+    def test_a_truncated_tail_in_the_middle_file_is_malformed_not_tolerated(
+        self, tmp_path: Path
+    ) -> None:
+        write_trace(tmp_path, [event(i) for i in range(6)], segments=2)
+        path = tmp_path / "events.jsonl"
+        path.write_text(path.read_text(encoding="utf-8")[:40], encoding="utf-8")
+        reader = TraceReader.open(tmp_path)
+        reader.events()
+        assert any("malformed JSON" in problem for problem in reader.problems())
+
+    def test_a_single_file_run_is_unchanged(self, tmp_path: Path) -> None:
+        write_trace(tmp_path, [event(i) for i in range(4)])
+        reader = TraceReader.open(tmp_path)
+        assert reader.events_paths == (tmp_path / "events.jsonl",)
+        assert reader.manifest.segments == ()
+        assert reader.verify_integrity()[0] is True

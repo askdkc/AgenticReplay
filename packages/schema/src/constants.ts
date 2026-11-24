@@ -72,3 +72,35 @@ export const LATEST_TS_MS = 253_402_300_799_999;
 
 export const RUN_ID_PATTERN = /^run_[0-9a-f]{6,32}$/;
 export const BLOB_REF_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * The files one run's event log is split across, in `seq` order. Spec §1 and §2.
+ *
+ * The first file keeps the historical name so a run that never rotates is byte-for-byte what it
+ * always was; every later file carries its 1-based index, zero-padded so a directory listing sorts
+ * the same way a reader walks it. Index 1 is spelled `events.jsonl` and never
+ * `events.000001.jsonl`: two spellings of the same position would make discovery depend on which
+ * one a writer happened to pick.
+ */
+export const EVENT_LOG_FILE = 'events.jsonl';
+const EVENT_SEGMENT_NAME = /^events(?:\.([0-9]{6}))?\.jsonl$/;
+
+/** The file name for segment `index`, which is 1-based. */
+export function eventSegmentFileName(index: number): string {
+  if (!Number.isSafeInteger(index) || index < 1) throw new Error('invalid event segment index');
+  return index === 1 ? EVENT_LOG_FILE : `events.${String(index).padStart(6, '0')}.jsonl`;
+}
+
+/** The 1-based segment index a file name denotes, or undefined for any other name. */
+export function eventSegmentIndex(name: string): number | undefined {
+  const match = EVENT_SEGMENT_NAME.exec(name);
+  if (!match) return undefined;
+  const index = match[1] === undefined ? 1 : Number(match[1]);
+  // `events.000001.jsonl` would be a second name for the first position.
+  if (index < 1 || (match[1] !== undefined && index === 1)) return undefined;
+  return index;
+}
+
+export function isEventSegmentName(name: string): boolean {
+  return eventSegmentIndex(name) !== undefined;
+}

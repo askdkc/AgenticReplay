@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -410,5 +410,50 @@ describe('inspect commands', () => {
         showCommand(parseArgs(['show', '../../etc/passwd']), out, cwd),
       ).rejects.toThrow();
     });
+  });
+});
+
+/**
+ * A rotated run whose middle file is gone is the case `show` must not render as a whole run: the
+ * timeline would open at seq 0 and close at `run.end`, and every row would be true while the answer
+ * to "what happened" was a prefix.
+ */
+describe('show on a damaged rotated run', () => {
+  it('says what could not be read before it shows the timeline', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'agenticreplay-show-rot-'));
+    const lines: string[] = [];
+    const out = new Output({ write: (s) => void lines.push(s), isTTY: false });
+    const writer = await TraceWriter.create(join(cwd, '.agenticreplay', 'runs'), {
+      adapter: { id: 'test' },
+      argv: ['test'],
+      cwd,
+      agenticreplayVersion: '0.1.0',
+      storageLimits: { eventBytes: 700, runEventBytes: 64 * 1024 },
+    });
+    try {
+      await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+      for (let i = 0; i < 8; i++) {
+        await writer.append({
+          type: 'note',
+          actor: 'agenticreplay',
+          attrs: { pad: 's'.repeat(150) },
+        });
+      }
+      await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+      await writer.close(0);
+      const segments = (await readdir(writer.runDir))
+        .filter((name) => /^events(\.\d{6})?\.jsonl$/.test(name))
+        .sort();
+      expect(segments.length).toBeGreaterThan(1);
+      await rm(join(writer.runDir, segments[1]!));
+
+      await showCommand(parseArgs(['show', 'last']), out, cwd);
+      const text = lines.join('');
+      expect(text).toContain('trace.incomplete_read');
+      expect(text).toContain(segments[1]!);
+      expect(text).toContain('not the whole run');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });

@@ -6,8 +6,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns } from '@agenticreplay/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TraceReader, TraceWriter, listRuns } from '@agenticreplay/core';
 import { RunCa } from '@agenticreplay/proxy';
 import { validateEvent } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
@@ -139,6 +139,36 @@ describe('agenticreplay record --tls-intercept', () => {
   function childEnv(): Promise<Record<string, string>> {
     return readFile(envOut, 'utf8').then((raw) => JSON.parse(raw) as Record<string, string>);
   }
+
+  it('forwards each request once after optional recording exhausts its event budget', async () => {
+    vi.stubEnv('AGENTICREPLAY_CONTINUE_ON_STORAGE_LIMIT', '1');
+    const create = TraceWriter.create.bind(TraceWriter);
+    const limited = vi
+      .spyOn(TraceWriter, 'create')
+      .mockImplementation((dir, init) =>
+        create(dir, { ...init, storageLimits: { eventBytes: 0 } }),
+      );
+    const targets = Array.from({ length: 36 }, (_, i) => ({
+      host: '127.0.0.1',
+      port: model.port,
+      path: `/model/${i}`,
+    }));
+    process.env.AGENTICREPLAY_TEST_TARGETS = JSON.stringify(targets);
+    try {
+      const result = await record(['--tls-intercept', '--tls-hosts', '127.0.0.1']);
+      const replies = JSON.parse(await readFile(resultOut, 'utf8')) as { body: string }[];
+      expect(replies.map((reply) => JSON.parse(reply.body).served)).toEqual(
+        targets.map((t) => t.path),
+      );
+      const manifest = JSON.parse(await readFile(join(result.runDir, 'manifest.json'), 'utf8'));
+      expect(manifest.capture.status).toBe('incomplete');
+      expect(manifest.capture.issues).toContain('diagnostic_storage_limit');
+      expect((await (await TraceReader.open(result.runDir)).events()).at(-1)?.type).toBe('run.end');
+    } finally {
+      limited.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 
   it('is off unless it is asked for', async () => {
     const result = await record([]);

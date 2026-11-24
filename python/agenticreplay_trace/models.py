@@ -194,6 +194,66 @@ def _closed(raw: Mapping[str, Any], allowed: frozenset[str], path: str) -> None:
         _fail(path, f"has unexpected propert{'y' if len(extra) == 1 else 'ies'} {', '.join(extra)}")
 
 
+#: The files one run's event log is split across. Spec §1 and §2.4. The first keeps the historical
+#: name; every later one carries its 1-based index, zero-padded so a listing sorts as a reader walks.
+_EVENT_SEGMENT_NAME = re.compile(r"^events(?:\.([0-9]{6}))?\.jsonl$")
+
+
+def event_segment_index(name: str) -> int | None:
+    """The 1-based segment index a file name denotes, or None for any other name."""
+    match = _EVENT_SEGMENT_NAME.match(name)
+    if match is None:
+        return None
+    suffix = match.group(1)
+    index = 1 if suffix is None else int(suffix)
+    # `events.000001.jsonl` would be a second name for the first position.
+    if index < 1 or (suffix is not None and index == 1):
+        return None
+    return index
+
+
+def event_segment_file_name(index: int) -> str:
+    """The file name for segment `index`, which is 1-based."""
+    if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+        raise ValueError("invalid event segment index")
+    return "events.jsonl" if index == 1 else f"events.{index:06d}.jsonl"
+
+
+def _event_segments(value: Any, path: str) -> tuple[dict[str, Any], ...]:
+    """Validate a manifest's `integrity.segments`, which is what makes a rotated run verifiable.
+
+    Reported rather than repaired, like everything else here: a list with a gap is a run whose
+    middle file is gone, and reading it as complete is the failure these records exist to prevent.
+    """
+    items = _sequence(value, path)
+    if len(items) < 2:
+        _fail(path, "has fewer than 2 items; a single file needs no segment list")
+    segments: list[dict[str, Any]] = []
+    expected_first = 0
+    for position, item in enumerate(items):
+        at = f"{path}/{position}"
+        entry = _mapping(item, at)
+        _require(entry, ("name", "first_seq", "last_seq", "bytes", "sha256"), at)
+        _closed(entry, frozenset({"name", "first_seq", "last_seq", "bytes", "sha256"}), at)
+        name = _string(entry["name"], f"{at}/name")
+        if event_segment_index(name) is None:
+            _fail(f"{at}/name", f"is not an event segment name: {name!r}")
+        first = _integer(entry["first_seq"], f"{at}/first_seq", minimum=0)
+        last = _integer(entry["last_seq"], f"{at}/last_seq", minimum=0)
+        if last < first:
+            _fail(f"{at}/last_seq", "is before first_seq")
+        if first != expected_first:
+            _fail(
+                f"{at}/first_seq",
+                f"is {first}, expected {expected_first} — the segments do not cover a dense order",
+            )
+        expected_first = last + 1
+        _integer(entry["bytes"], f"{at}/bytes", minimum=0)
+        _string(entry["sha256"], f"{at}/sha256", pattern=_SHA256_HEX)
+        segments.append(dict(entry))
+    return tuple(dict(entry) for entry in segments)
+
+
 def _require(raw: Mapping[str, Any], names: Sequence[str], path: str) -> None:
     for name in names:
         if name not in raw:
@@ -361,6 +421,18 @@ class Manifest:
         return None if self.integrity is None else str(self.integrity["events_sha256"])
 
     @property
+    def segments(self) -> tuple[dict[str, Any], ...]:
+        """The event files of a rotated run, in `seq` order.
+
+        Empty for a run that never rotated: one file is the format that came before this list, and
+        a reader must keep opening those runs unchanged rather than requiring the field.
+        """
+        if self.integrity is None:
+            return ()
+        recorded = self.integrity.get("segments")
+        return () if recorded is None else tuple(recorded)
+
+    @property
     def is_fork(self) -> bool:
         return self.parent_run is not None
 
@@ -382,13 +454,20 @@ class Manifest:
         if integrity is not None:
             integrity = _mapping(integrity, f"{path}/integrity")
             _require(integrity, ("events_sha256", "blob_count"), f"{path}/integrity")
-            _closed(integrity, frozenset({"events_sha256", "blob_count"}), f"{path}/integrity")
+            _closed(
+                integrity,
+                frozenset({"events_sha256", "blob_count", "segments"}),
+                f"{path}/integrity",
+            )
             _string(
                 integrity["events_sha256"],
                 f"{path}/integrity/events_sha256",
                 pattern=_SHA256_HEX,
             )
             _integer(integrity["blob_count"], f"{path}/integrity/blob_count", minimum=0)
+            segments = integrity.get("segments")
+            if segments is not None:
+                _event_segments(segments, f"{path}/integrity/segments")
 
         env = obj.get("env_allowlisted")
         if env is not None:
