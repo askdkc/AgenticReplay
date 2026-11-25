@@ -54,6 +54,22 @@ export interface DerivedEvent {
   causesIndex?: number[];
 }
 
+// Chat Completions has no tool-error flag. MoDKH puts the execution status in
+// a JSON envelope around stdout; leave arbitrary tool output uninterpreted.
+function hasErrorReceipt(content: string): boolean {
+  if (!content.startsWith('{') || !content.includes('"error"')) return false;
+  try {
+    const receipt = JSON.parse(content);
+    return (
+      receipt.status === 'error' &&
+      typeof receipt.output === 'string' &&
+      Object.keys(receipt).length === 2
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class ExchangeEventDeriver {
   readonly #pending = new Map<string, PendingToolCall>();
   /**
@@ -245,7 +261,7 @@ export class ExchangeEventDeriver {
           attrs: {
             tool_use_id: result.tool_use_id,
             name: pending?.name ?? 'unknown',
-            is_error: result.is_error ?? false,
+            is_error: result.is_error ?? hasErrorReceipt(result.content),
             bytes: result.content.length,
           },
           payload: result.content,

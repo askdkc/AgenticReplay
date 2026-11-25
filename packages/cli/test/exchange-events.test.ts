@@ -182,6 +182,36 @@ describe('ExchangeEventDeriver', () => {
     expect(d.unresolved()).toHaveLength(0);
   });
 
+  it.each([
+    ['{"status":"error","output":"[READ_FAILED] failed"}', undefined, true],
+    ['{"status":"ok","output":"example: error"}', undefined, false],
+    ['{"status":"error","output":"example"}', false, false],
+    ['{"status":"error","data":"application result"}', undefined, false],
+    ['not JSON', undefined, false],
+  ] as const)('classifies a tool receipt %s with provider flag %s', (content, flag, expected) => {
+    const events = new ExchangeEventDeriver().deriveToolResults(
+      {
+        model: 'fixture',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_1',
+                content,
+                ...(flag === undefined ? {} : { is_error: flag }),
+              },
+            ],
+          },
+        ],
+      },
+      'trailing',
+    );
+    expect(events[0]?.attrs.is_error).toBe(expected);
+    expect(events[0]?.payload).toBe(content);
+  });
+
   it('links a tool result back to the call that produced it', () => {
     // `causes` is the only thing that turns a flat event list into a chain you can walk, and it was
     // never set on a `tool.result`: `derive()` dropped the pending entry in the same loop that
