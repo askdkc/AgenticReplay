@@ -1,6 +1,6 @@
 {
   "name": "agenticreplay",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "private": false,
   "type": "module",
   "license": "Apache-2.0",
@@ -61,16 +61,16 @@
   ],
   "bundleDependencies": true,
   "dependencies": {
-    "@agenticreplay/adapters": "0.1.28",
-    "@agenticreplay/core": "0.1.28",
-    "@agenticreplay/fs-capture": "0.1.28",
-    "@agenticreplay/mcp-shim": "0.1.28",
-    "@agenticreplay/node-instrument": "0.1.28",
-    "@agenticreplay/plugin-api": "0.1.28",
-    "@agenticreplay/providers": "0.1.28",
-    "@agenticreplay/proxy": "0.1.28",
-    "@agenticreplay/schema": "0.1.28",
-    "@agenticreplay/shell-shim": "0.1.28",
-    "@agenticreplay/viewer": "0.1.28"
+    "@agenticreplay/adapters": "0.1.29",
+    "@agenticreplay/core": "0.1.29",
+    "@agenticreplay/fs-capture": "0.1.29",
+    "@agenticreplay/mcp-shim": "0.1.29",
+    "@agenticreplay/node-instrument": "0.1.29",
+    "@agenticreplay/plugin-api": "0.1.29",
+    "@agenticreplay/providers": "0.1.29",
+    "@agenticreplay/proxy": "0.1.29",
+    "@agenticreplay/schema": "0.1.29",
+    "@agenticreplay/shell-shim": "0.1.29",
+    "@agenticreplay/viewer": "0.1.29"
   }
 }
