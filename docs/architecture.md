@@ -22,6 +22,12 @@ TLS-intercepted routes it decrypts only the configured hosts and records the HTT
 observe. Unknown paths pass through and are recorded as opaque network traffic. A capture failure
 is reported; it never falls back to a recorded or synthetic answer.
 
+When a VPN switch temporarily prevents a connection to the provider, the base-URL proxy
+keeps a buffered request pending and retries the same destination for up to two minutes.
+Retries start 500 ms apart and back off to five seconds. Disconnecting the client cancels
+the wait. A one-shot upload, an interrupted response, or a socket failure after possible
+delivery ends the request so the provider cannot receive the same POST twice.
+
 The MCP shim tees JSON-RPC messages to the original servers. Shell shims record command, output,
 exit status, and duration. Workspace sampling uses a temporary git index outside the run directory
 to compare successive states, then writes file-change events; temporary snapshots are removed when

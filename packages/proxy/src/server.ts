@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
+import { fetchWithReconnect, transportCodes } from './upstream-reconnect.js';
 import { readRequestBody } from './request-body.js';
 import {
   AUTH_REQUEST_HEADERS,
@@ -505,6 +506,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   //
   // `fetchImpl` stays the seam the tests inject through; only the default moves.
   const doFetch = options.fetchImpl ?? fetchPinned;
+  const shutdown = new AbortController();
   const captured: RecordedExchange[] = [];
   let exchangeSequence = 0;
   function deliverExchange(exchange: RecordedExchange): void {
@@ -682,41 +684,26 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
     try {
-      upstreamRes = await doFetch(`${origin}${upstreamPath}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...headers,
-          ...headersForOrigin(origin),
+      upstreamRes = await fetchWithReconnect(
+        doFetch,
+        `${origin}${upstreamPath}`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...headers,
+            ...headersForOrigin(origin),
+          },
+          body: outboundBody,
         },
-        body: outboundBody,
-      });
+        res,
+        shutdown.signal,
+      );
     } catch (err) {
-      // An upstream that never answered, on the path agenticreplay *does* understand.
-      //
-      // `passThrough` learned this already; this is the same fact one branch over, and it was the
-      // worse half. A call agenticreplay recognised as a model exchange and could not forward left no
-      // event at all: `run.start`, a snapshot, `run.end`. The agent got its 500 and the run then
-      // warned `capture.empty ... "the agent never called the proxy — it may not read a base-URL
-      // variable"` — which is the opposite of what happened, and sends the operator to check
-      // environment variables when the upstream is simply unreachable.
-      //
-      // Recorded as an exchange rather than as network traffic, because that is what it is: the
-      // same call, recorded the same way, whether the upstream answered 503 or never answered at
-      // all. `status: 500` is what the agent receives from the catch-all above, so a replay of
-      // this trace reproduces the failure the way §4 asks — and `>= 400` is what makes
-      // `capture.errors` count it, where `0` would have filed a failed call as a healthy one.
-      //
-      // The body is `reasonFor`'s, not the catch-all's: both name the origin they were given, and
-      // this one is the copy that gets written down. See `scrubOrigin`.
-      //
-      // Answered here rather than rethrown into the catch-all, so the bytes the agent receives
-      // and the bytes the trace holds are the same ones. Rethrowing gave the agent the
-      // catch-all's `TypeError: fetch failed` while the trace held this scrubbed reason, and a
-      // replay then served the trace's version — a recording that did not reproduce itself.
-      // The agent also gets the better of the two messages: one that names agenticreplay and the origin.
+      const reason = reasonFor(err, origin);
+      const abandoned = res.destroyed;
       const body = JSON.stringify({
-        error: { message: `agenticreplay did not forward this call: ${reasonFor(err, origin)}` },
+        error: { message: `agenticreplay did not forward this call: ${reason}` },
       });
       options.onNetExchange?.({
         requestId,
@@ -734,7 +721,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         responseBody: '',
         responseTruncated: false,
         responseComplete: false,
-        responseError: reasonFor(err, origin),
+        responseError: reason,
+        ...(abandoned ? { abandoned: true } : {}),
         responseBytes: 0,
         durationMs: Date.now() - startedAt,
         transformations: [
@@ -745,6 +733,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
           ...binaryBodyTransformation('response.body', body),
         ],
       });
+      if (abandoned) return;
       recordExchange(body, 500, false);
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(body);
@@ -961,7 +950,10 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   function reasonFor(err: unknown, origin: string): string {
-    const scrubbed = String(err).split(origin).join(scrubOrigin(origin));
+    const host = scrubOrigin(origin);
+    const codes = transportCodes(err);
+    const message = codes ? `${String(err)} (${codes}, ${host})` : String(err);
+    const scrubbed = message.split(origin).join(host);
     return redactor.redactString(withoutCredentials(scrubbed)).value;
   }
 
@@ -985,34 +977,29 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
     const origin = passthroughOrigin(headers, forwardBase);
     let upstreamRes: Awaited<ReturnType<typeof doFetch>>;
     try {
-      upstreamRes = await doFetch(`${origin}${uncaptured?.upstreamPath ?? path}`, {
-        method: 'POST',
-        // `upstreamHeaders` too, as `goLive` does. Omitting them sent a gateway the agent's own
-        // credential — often the `agenticreplay-recorded` placeholder — and the call came back 401 for a
-        // reason nothing in the trace explained.
-        headers: {
-          'content-type': 'application/json',
-          ...headers,
-          ...headersForOrigin(origin),
+      upstreamRes = await fetchWithReconnect(
+        doFetch,
+        `${origin}${uncaptured?.upstreamPath ?? path}`,
+        {
+          method: 'POST',
+          // `upstreamHeaders` too, as `goLive` does. Omitting them sent a gateway the agent's own
+          // credential — often the `agenticreplay-recorded` placeholder — and the call came back 401 for a
+          // reason nothing in the trace explained.
+          headers: {
+            'content-type': 'application/json',
+            ...headers,
+            ...headersForOrigin(origin),
+          },
+          body: uncaptured?.body ?? rawBody,
+          ...(uncaptured ? { duplex: 'half' } : {}),
         },
-        body: uncaptured?.body ?? rawBody,
-        ...(uncaptured ? { duplex: 'half' } : {}),
-      });
+        res,
+        shutdown.signal,
+      );
     } catch (err) {
-      // An upstream that never answered is still something the agent asked for, and a trace
-      // that leaves it out says the run made fewer calls than it did. Before this the throw
-      // reached the server's catch-all: the agent got its 500 — which was right — and nothing
-      // else happened. No event, no warning, and the replay later blamed "opaque network
-      // traffic" that had never been captured.
-      //
-      // Not an exotic path. `fetchPinned` refuses every redirect on purpose, and a gateway
-      // behind a CDN answers an unknown path with one: `api.orcarouter.ai` sends `301` to its
-      // own marketing site, and MiniMax Code posts to `/v1/responses/input_tokens` before every
-      // call, so two requests per run went missing and said nothing.
-      //
-      // `status: 0` is the same thing it means for an intercepted exchange: no response header
-      // was ever seen. The reason travels in the body, scrubbed, because the message names the
-      // origin it was given.
+      const reason = reasonFor(err, origin);
+      const message = `agenticreplay did not forward this call: ${reason}`;
+      const abandoned = res.destroyed;
       options.onNetExchange?.({
         requestId,
         requestStartedAt: startedAt,
@@ -1026,14 +1013,16 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         requestTruncated: uncaptured !== undefined,
         status: 0,
         responseHeaders: {},
-        responseBody: `agenticreplay did not forward this call: ${reasonFor(err, origin)}`,
+        responseBody: abandoned ? '' : message,
         responseTruncated: false,
         responseComplete: false,
-        responseError: reasonFor(err, origin),
+        responseError: reason,
+        ...(abandoned ? { abandoned: true } : {}),
         responseBytes: 0,
         durationMs: Date.now() - startedAt,
       });
-      throw err;
+      if (!abandoned) json(res, 500, { error: { message } });
+      return;
     }
 
     const responseEncoding = upstreamRes.headers.get('content-encoding') ?? undefined;
@@ -1745,6 +1734,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
       : {}),
     close: async () => {
+      shutdown.abort();
       await new Promise<void>((resolve, reject) => {
         // Tunnels and decrypted sessions are long-lived by design, and `close` waits for every
         // open connection. Without this a recorded run would hang on exit behind an agent's idle
