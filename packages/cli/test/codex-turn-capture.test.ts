@@ -212,6 +212,9 @@ it.each(['normal', 'compaction', 'interrupted', 'retry'] as const)(
     const { port } = origin.address() as AddressInfo;
     const turns = await openCodexWorktreeCapture(socketPath, new Map([[root, runs]]));
     const disconnected = Promise.withResolvers<void>();
+    const captured = Promise.withResolvers<void>();
+    const expectedExchanges = scenario === 'retry' ? 3 : 2;
+    let finishedExchanges = 0;
     const proxy = await createProxy({
       retainExchanges: false,
       tls: {
@@ -222,6 +225,7 @@ it.each(['normal', 'compaction', 'interrupted', 'retry'] as const)(
         onNetExchange(exchange) {
           turns.finish(exchange);
           if (exchange.captureReasons?.includes('connection_closed')) disconnected.resolve();
+          if (++finishedExchanges === expectedExchanges) captured.resolve();
         },
       },
       onRequestStart: turns.start,
@@ -280,9 +284,8 @@ it.each(['normal', 'compaction', 'interrupted', 'retry'] as const)(
           outcome: scenario === 'interrupted' ? 'interrupted' : 'completed',
         }) + '\n';
       const capture = interrupted ? 'incomplete' : 'complete';
-      await vi.waitFor(async () => {
-        expect(await requestTurn(socketPath, finish)).toEqual({ status: 'finalized', capture });
-      });
+      await captured.promise;
+      expect(await requestTurn(socketPath, finish)).toEqual({ status: 'finalized', capture });
       const [directory] = await readdir(runs);
       const reader = await TraceReader.open(join(runs, directory!));
       const events = await reader.events();

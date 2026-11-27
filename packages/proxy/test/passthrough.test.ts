@@ -143,12 +143,19 @@ describe('an upstream that never answers', () => {
       const proxy = await createProxy({
         mode: 'record',
         upstream: { openai: origin },
+        // Echo the full destination in the error so every case exercises redaction,
+        // including parseable URLs, without depending on the runner's DNS.
+        fetchImpl: async (url) => {
+          throw new TypeError(`Cannot reach ${url}`);
+        },
         onNetExchange: (e) => void seen.push(e),
       });
       closers.push(proxy.close);
 
-      await post(`${proxy.url}/v1/responses/input_tokens`, { input: 'x' });
+      const res = await post(`${proxy.url}/v1/responses/input_tokens`, { input: 'x' });
 
+      expect(res.status).toBe(500);
+      expect(res.text).not.toContain(secret);
       expect(seen).toHaveLength(1);
       expect(seen[0]!.host, `host for ${origin}`).not.toContain(secret);
       // The reason travels in the same event and quotes the request, so it carries the origin too.
