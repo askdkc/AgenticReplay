@@ -1,3 +1,4 @@
+import { openModkhFrames } from '../modkh-frames.js';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { delimiter, resolve } from 'node:path';
@@ -303,6 +304,7 @@ async function runRecording(
     }
   }
 
+  let modkh: Awaited<ReturnType<typeof openModkhFrames>> | undefined;
   const deriver = new ExchangeEventDeriver();
   let turn = 0;
   // When each turn began, so an out-of-band frame can be attributed to the turn it happened during
@@ -508,6 +510,7 @@ async function runRecording(
     const requestTurn = exchange.requestId ? requestTurns.get(exchange.requestId) : undefined;
     if (requestTurn === undefined) writer.markCaptureIncomplete('missing_model_correlation');
     await appendDerivedEvents(writer, deriver, exchange, requestTurn ?? 0, (event) => {
+      modkh?.observe(event);
       if (event.type === 'tool.call' && isCommandTool(event.attrs?.input)) {
         commandToolCalls += 1;
       }
@@ -632,6 +635,14 @@ async function runRecording(
       shell: shell ? 'on' : 'off',
     });
 
+    if (process.env.MODKH_TOOL_RECORD_FILE) {
+      try {
+        modkh = await openModkhFrames();
+        launch.env.AGENTICREPLAY_MODKH_FRAMES = modkh.path;
+      } catch {
+        writer.markCaptureIncomplete('modkh_transport_unavailable');
+      }
+    }
     let childResult: ChildResult;
     const restoreOutput = out.deferTerminal();
     try {
@@ -656,6 +667,14 @@ async function runRecording(
       writer.markCaptureIncomplete('storage_failure');
       out.warn('capture.storage_failure', { detail: String(err) });
     });
+
+    if (modkh) {
+      try {
+        await captureOptional(() => modkh!.drain(writer, deriver));
+      } catch {
+        writer.markCaptureIncomplete('modkh_frame_write_failed');
+      }
+    }
 
     /** The turn an out-of-band frame belongs to: the last one that had begun when it happened. */
     function turnAt(at: number): number {
@@ -998,6 +1017,8 @@ async function runRecording(
       .catch(() => undefined);
     await writer.close().catch(() => undefined);
     throw err;
+  } finally {
+    await modkh?.close().catch(() => out.warn('modkh_transport_cleanup_failed', {}));
   }
 }
 

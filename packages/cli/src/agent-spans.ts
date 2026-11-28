@@ -336,7 +336,7 @@ export async function installAgentSpans(runDir: string): Promise<AgentSpanCaptur
 }
 
 /** Prefixes of the transport directories agenticreplay mints, for {@link sweepStaleTransports}. */
-const TRANSPORT_PREFIXES = ['agenticreplay-spans-', 'agenticreplay-shell-'];
+const TRANSPORT_PREFIXES = ['agenticreplay-spans-', 'agenticreplay-shell-', 'agenticreplay-modkh-'];
 
 /** Names the process that minted a transport, so a sweep can ask whether it is still running. */
 export const TRANSPORT_OWNER = 'owner.pid';

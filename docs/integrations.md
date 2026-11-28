@@ -15,6 +15,15 @@ clients that use `fetch` with a hard-coded provider URL. `exec --tls-intercept` 
 for configured TLS hosts when an environment redirect is unavailable. Check `agenticreplay doctor`
 for local prerequisites and `agenticreplay list` after recording.
 
+MoDKH can record tool execution even when the conversation ends before the next model request.
+Set `MODKH_TOOL_RECORD_FILE` to an absolute JSONL file path before starting a compatible MoDKH
+CLI. During recording, AgenticReplay gives the child a separate run-specific file for these
+observations. It imports only identifiers, execution states and fixed reason codes when the child
+exits. If the proxy already captured a matching result, the execution note references that result.
+Repeated provider IDs with ambiguous attribution retain separate host identities. A command whose
+last state is `unknown` has no confirmed outcome. Background acceptance carries the job ID and
+settlement is a later observation.
+
 Python integrations can add action spans for supported framework SDKs. These spans complement the
 API trace with framework operations; they do not replace the agent's normal calls or responses.
 
