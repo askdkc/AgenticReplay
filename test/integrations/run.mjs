@@ -287,11 +287,23 @@ async function traceText(runDir) {
  */
 async function installed(needs) {
   if (needs === undefined) return undefined;
+  // Import the actual framework in the agent, where a broken installation reports its
+  // traceback. Only a missing module (or its parent namespace) should skip a check.
+  const probe = `from importlib.util import find_spec
+import sys
+parts = sys.argv[1].split(".")
+for end in range(1, len(parts) + 1):
+    if find_spec(".".join(parts[:end])) is None:
+        sys.exit(3)
+`;
   for (const module of Array.isArray(needs) ? needs : [needs]) {
     try {
-      await exec('python', ['-c', `import ${module}`], { timeout: 30_000 });
-    } catch {
-      return module;
+      await exec('python', ['-c', probe, module], { timeout: 30_000 });
+    } catch (error) {
+      if (error.code === 3 || error.code === 'ENOENT') return module;
+      throw new Error(
+        `could not inspect ${module}: ${error.stderr?.trim().split('\n').at(-1) || error.message}`,
+      );
     }
   }
   return undefined;
