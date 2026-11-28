@@ -132,7 +132,8 @@ export async function openModkhFrames() {
         read += part.bytesRead;
       }
       const lines = bytes.subarray(0, read).toString().split('\n');
-      if (lines.pop()) writer.markCaptureIncomplete('modkh_frames_partial');
+      if (lines.pop() || read !== bytes.length)
+        writer.markCaptureIncomplete('modkh_frames_partial');
       type Frame = ReturnType<typeof frame>;
       const ordered: { key: string; row: Frame }[] = [];
       const last = new Map<string, Frame>();
@@ -160,17 +161,31 @@ export async function openModkhFrames() {
         const call = unique ? deriver.seqOf(id) : undefined;
         const observed = unique ? seen?.results[0] : undefined;
         const receiptSeq = observed ?? receipts.get(key);
+        if (observed !== undefined) receipts.set(key, observed);
+        const sourceKey = f.source_attempt
+          ? JSON.stringify([f.session, f.turn, f.source_attempt, f.source_ordinal])
+          : undefined;
         // Job acceptance is the result returned to the model. Later job settlement is a separate observation.
         const delivered =
           f.state === 'accepted' ||
           (f === last.get(key) &&
             !f.job_id &&
             f.state !== 'candidate' &&
+            f.state !== 'reused' &&
             !['dispatch_pending', 'command_started', 'response_discarded'].includes(f.reason));
         // A host-only result retains its own identity when several calls reuse a provider ID.
         // Never attach it to a guessed proxy occurrence.
         const result = delivered && receiptSeq === undefined && !seen?.results.length;
-        const cause = delivered ? (receiptSeq ?? call) : f.job_id ? receiptSeq : undefined;
+        const cause =
+          f.state === 'reused'
+            ? sourceKey === undefined
+              ? undefined
+              : receipts.get(sourceKey)
+            : delivered
+              ? (receiptSeq ?? call)
+              : f.job_id
+                ? receiptSeq
+                : undefined;
         const event = await writer.append({
           type: result ? 'tool.result' : 'note',
           actor: 'harness',

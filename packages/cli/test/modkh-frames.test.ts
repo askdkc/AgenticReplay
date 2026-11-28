@@ -27,6 +27,13 @@ it('keeps reused provider IDs separate, allows only metadata and reports damaged
         output: 'private payload',
         args: ['private payload'],
       },
+      {
+        ...base,
+        attempt: randomUUID(),
+        state: 'reused',
+        reason: 'saved_result',
+        source: { attempt: other.attempt, ordinal: other.ordinal },
+      },
       { ...job, state: 'completed', reason: 'command_exited' },
       { ...other, state: 'completed', reason: 'private payload' },
     ].map((row) => JSON.stringify(row));
@@ -47,6 +54,7 @@ it('keeps reused provider IDs separate, allows only metadata and reports damaged
       ['tool.result', 'accepted', undefined],
       ['note', 'not-executed', undefined],
       ['tool.result', 'completed', undefined],
+      ['note', 'reused', [2]],
       ['note', 'completed', [0]],
     ]);
     expect(events[1]?.attrs?.attempt).not.toEqual(events[2]?.attrs?.attempt);

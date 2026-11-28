@@ -519,6 +519,17 @@ async function runRecording(
     if (fs) await appendSnapshot(fs, writer, out, requestTurn ?? 0);
   }
 
+  let framesDrained = false;
+  async function drainModkh(): Promise<void> {
+    if (!modkh || framesDrained) return;
+    framesDrained = true;
+    try {
+      await captureOptional(() => modkh!.drain(writer, deriver));
+    } catch {
+      writer.markCaptureIncomplete('modkh_frame_write_failed');
+    }
+  }
+
   let diagnosed = false;
   async function diagnoseToolCalls(): Promise<void> {
     if (diagnosed) return;
@@ -668,13 +679,7 @@ async function runRecording(
       out.warn('capture.storage_failure', { detail: String(err) });
     });
 
-    if (modkh) {
-      try {
-        await captureOptional(() => modkh!.drain(writer, deriver));
-      } catch {
-        writer.markCaptureIncomplete('modkh_frame_write_failed');
-      }
-    }
+    await drainModkh();
 
     /** The turn an out-of-band frame belongs to: the last one that had begun when it happened. */
     function turnAt(at: number): number {
@@ -1010,6 +1015,7 @@ async function runRecording(
       writer.markCaptureIncomplete('proxy_shutdown_failed'),
     );
     await writes.drain().catch(() => writer.markCaptureIncomplete('storage_failure'));
+    await drainModkh();
     await diagnoseToolCalls();
     if (fs) await fs.dispose().catch(() => undefined);
     await writer
