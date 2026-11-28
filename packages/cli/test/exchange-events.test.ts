@@ -33,7 +33,7 @@ describe('ExchangeEventDeriver', () => {
     const writer = {
       append: async (event: { type: string; causes?: number[] }) => {
         written.push({ type: event.type, causes: event.causes });
-        return { seq: written.length - 1 };
+        return { ...event, seq: written.length - 1 };
       },
     };
     for (let turn = 0; turn < 64; turn++) {
@@ -139,18 +139,8 @@ describe('ExchangeEventDeriver', () => {
 
   it('closes a tool call using the result carried by the NEXT request', () => {
     const d = new ExchangeEventDeriver();
-    d.derive(
-      exchange({
-        canonicalResponse: {
-          id: 'msg_0',
-          model: 'claude-opus-5',
-          stop_reason: 'tool_use',
-          content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }],
-          usage: { input_tokens: 10, output_tokens: 3 },
-        },
-      }),
-      1,
-    );
+
+    d.restore({ type: 'tool.call', seq: 7, attrs: { tool_use_id: 'tu_1', name: 'bash' } });
     expect(d.unresolved().map((p) => p.id)).toEqual(['tu_1']);
 
     const next = d.derive(
@@ -179,6 +169,7 @@ describe('ExchangeEventDeriver', () => {
     expect(next[0]!.attrs.name).toBe('bash');
     expect(next[0]!.attrs.is_error).toBe(true);
     expect(next[0]!.payload).toBe('FAIL');
+    d.restore({ type: 'tool.result', seq: 8, causes: [7], attrs: next[0]!.attrs });
     expect(d.unresolved()).toHaveLength(0);
   });
 
@@ -219,20 +210,9 @@ describe('ExchangeEventDeriver', () => {
     // to answer with. The recorder does that lookup *after* derive returns, which is why deleting
     // early broke it silently — no error, just an empty field on every tool result ever recorded.
     const d = new ExchangeEventDeriver();
-    d.derive(
-      exchange({
-        canonicalResponse: {
-          id: 'msg_0',
-          model: 'claude-opus-5',
-          stop_reason: 'tool_use',
-          content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }],
-          usage: { input_tokens: 10, output_tokens: 3 },
-        },
-      }),
-      1,
-    );
+
     // The writer assigns the seq and hands it back, exactly as `record` does.
-    d.markPending('tu_1', 7);
+    d.restore({ type: 'tool.call', seq: 7, attrs: { tool_use_id: 'tu_1', name: 'bash' } });
 
     const next = d.derive(
       exchange({
@@ -287,18 +267,7 @@ describe('ExchangeEventDeriver', () => {
 
   it('does not re-emit results for calls already closed on an earlier turn', () => {
     const d = new ExchangeEventDeriver();
-    d.derive(
-      exchange({
-        canonicalResponse: {
-          id: 'm',
-          model: 'm',
-          stop_reason: 'tool_use',
-          content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }],
-          usage: { input_tokens: 1, output_tokens: 1 },
-        },
-      }),
-      1,
-    );
+
     const withResult = {
       model: 'm',
       messages: [
@@ -308,25 +277,22 @@ describe('ExchangeEventDeriver', () => {
         },
       ],
     };
-    d.derive(exchange({ canonicalRequest: withResult }), 2);
+    d.restore({ type: 'tool.call', seq: 7, attrs: { tool_use_id: 'tu_1' } });
+    d.restore({
+      type: 'tool.result',
+      seq: 8,
+      causes: [7],
+      attrs: { tool_use_id: 'tu_1' },
+      payload: 'ok',
+    });
     const third = d.derive(exchange({ canonicalRequest: withResult }), 3);
     expect(third.filter((e) => e.type === 'tool.result')).toHaveLength(0);
   });
 
   it('reports a tool call whose result never arrived rather than dropping it', () => {
     const d = new ExchangeEventDeriver();
-    d.derive(
-      exchange({
-        canonicalResponse: {
-          id: 'm',
-          model: 'm',
-          stop_reason: 'tool_use',
-          content: [{ type: 'tool_use', id: 'tu_orphan', name: 'bash', input: {} }],
-          usage: { input_tokens: 1, output_tokens: 1 },
-        },
-      }),
-      1,
-    );
+
+    d.restore({ type: 'tool.call', seq: 7, attrs: { tool_use_id: 'tu_orphan' } });
     expect(d.unresolved().map((p) => p.id)).toEqual(['tu_orphan']);
   });
 
@@ -457,6 +423,7 @@ it('releases a known OpenAI call when a separate image observation follows its r
   const events: Array<{ type: string; causes?: number[] }> = [];
   const writer = {
     append: async (event: { type: string; causes?: number[] }) => ({
+      ...event,
       seq: events.push(event) - 1,
     }),
   };
@@ -492,4 +459,177 @@ it('releases a known OpenAI call when a separate image observation follows its r
   ).toEqual([[callSeq]]);
   expect(deriver.seqOf('frame')).toBeUndefined();
   expect(deriver.unresolved()).toEqual([]);
+});
+
+describe('persisted tool calls', () => {
+  const call = exchange({
+    canonicalResponse: {
+      ...exchange().canonicalResponse!,
+      content: [{ type: 'tool_use', id: 'call_1', name: 'command', input: {} }],
+    },
+  });
+  const result = exchange({
+    canonicalRequest: {
+      model: 'fixture',
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'observed' }],
+        },
+      ],
+    },
+  });
+  it.each(['tool.call', 'tool.result'])(
+    'bases pending calls on disk when %s fails',
+    async (failure) => {
+      const d = new ExchangeEventDeriver();
+      let seq = 0;
+      const writer = {
+        append: async (event: { type: string }) => {
+          if (event.type === failure) throw new Error('write failed');
+          return { ...event, seq: seq++ };
+        },
+      };
+      if (failure === 'tool.call') {
+        await expect(appendDerivedEvents(writer as never, d, call, 1)).rejects.toThrow(
+          'write failed',
+        );
+        expect(d.unresolved()).toEqual([]);
+      } else {
+        await appendDerivedEvents(writer as never, d, call, 1);
+        await expect(appendDerivedEvents(writer as never, d, result, 2)).rejects.toThrow(
+          'write failed',
+        );
+        expect(d.unresolved().map((c) => c.id)).toEqual(['call_1']);
+      }
+    },
+  );
+});
+
+it('keeps attempts with a reused ID independent, including after restoring the persisted events', async () => {
+  const d = new ExchangeEventDeriver();
+  const events: Array<{
+    seq: number;
+    type: string;
+    attrs?: Record<string, unknown>;
+    causes?: number[];
+  }> = [];
+  const writer = {
+    append: async (init: (typeof events)[number]) => {
+      const event = { ...init, seq: events.length };
+      events.push(event);
+      return event;
+    },
+  };
+  const use = (attempt: number) => ({
+    type: 'tool_use' as const,
+    id: 'reused',
+    name: 'lookup',
+    input: { attempt },
+  });
+  const receipt = {
+    role: 'user' as const,
+    content: [{ type: 'tool_result' as const, tool_use_id: 'reused', content: 'done' }],
+  };
+  for (const attempt of [1, 2]) {
+    const e = exchange({
+      canonicalResponse: { ...exchange().canonicalResponse!, content: [use(attempt)] },
+    });
+    await appendDerivedEvents(writer as never, d, e, attempt);
+  }
+  const reply = (attempt?: number) =>
+    exchange({
+      canonicalRequest: {
+        model: 'fixture',
+        messages: [
+          ...(attempt ? [{ role: 'assistant' as const, content: [use(attempt)] }] : []),
+          receipt,
+        ],
+      },
+    });
+  await appendDerivedEvents(writer as never, d, reply(), 3);
+  expect(d.unresolved()).toHaveLength(2);
+  expect(events.find((e) => e.type === 'tool.result')).toMatchObject({
+    attrs: { correlation: 'ambiguous' },
+  });
+  const recovered = new ExchangeEventDeriver();
+  for (const event of events) recovered.restore(event);
+  await appendDerivedEvents(writer as never, recovered, reply(2), 4);
+  await appendDerivedEvents(writer as never, recovered, reply(2), 5);
+  const calls = events.filter((e) => e.type === 'tool.call');
+  expect(recovered.unresolved().map((c) => c.seq)).toEqual([calls[0]!.seq]);
+  await appendDerivedEvents(writer as never, recovered, reply(1), 6);
+  expect(events.filter((e) => e.type === 'tool.result').map((e) => e.causes)).toEqual([
+    undefined,
+    [calls[1]!.seq],
+    [calls[0]!.seq],
+  ]);
+  expect(recovered.unresolved()).toEqual([]);
+});
+
+it.each(['tool.call', 'tool.result'])(
+  'ignores a saved %s when the writer receipt has no correlation key',
+  async (type) => {
+    const d = new ExchangeEventDeriver();
+    d.restore({ type: 'tool.call', seq: 8, attrs: { tool_use_id: 'original' } });
+    const writer = {
+      append: async () => ({
+        type,
+        seq: 9,
+        attrs: { payload_omitted: 'event_storage_limit' },
+        causes: [8],
+      }),
+    };
+    const e = exchange({
+      canonicalResponse: {
+        ...exchange().canonicalResponse!,
+        content: [{ type: 'tool_use', name: 'lookup', id: 'new', input: {} }],
+      },
+      canonicalRequest: {
+        model: 'fixture',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'original', content: 'done' }],
+          },
+        ],
+      },
+    });
+    await appendDerivedEvents(writer as never, d, e, 1);
+    expect(d.unresolved().map((c) => c.id)).toEqual(['original']);
+  },
+);
+
+it('recovers legacy ID-only results only for a unique saved call', () => {
+  const d = new ExchangeEventDeriver();
+  const attrs = { tool_use_id: 'legacy' };
+  d.restore({ type: 'tool.call', seq: 1, attrs });
+  d.restore({ type: 'tool.result', seq: 2, attrs });
+  expect(d.unresolved()).toEqual([]);
+  d.restore({ type: 'tool.call', seq: 3, attrs });
+  d.restore({ type: 'tool.result', seq: 4, attrs });
+  expect(d.unresolved().map((c) => c.seq)).toEqual([3]);
+});
+
+it('leaves indistinguishable attempts open even when the request echoes their tool arguments', () => {
+  const d = new ExchangeEventDeriver();
+  const attrs = { tool_use_id: 'same', name: 'lookup', input: { q: 'q' } };
+  for (const turn of [1, 2]) d.restore({ type: 'tool.call', seq: turn, turn, attrs });
+  const [result] = d.deriveToolResults(
+    {
+      model: 'fixture',
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'same', name: 'lookup', input: attrs.input }],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'same', content: 'reply' }] },
+      ],
+    },
+    'known',
+  );
+  expect(result?.attrs.correlation).toBe('ambiguous');
+  expect(result?.callSeq).toBeUndefined();
+  d.restore({ type: 'tool.result', seq: 3, attrs: result!.attrs, payload: 'reply' });
+  expect(d.unresolved().map((c) => c.seq)).toEqual([1, 2]);
 });

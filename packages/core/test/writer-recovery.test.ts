@@ -191,3 +191,64 @@ it('reports a segment a sealed run names and the directory lacks instead of read
     await rm(dir.slice(0, dir.lastIndexOf('/runs/')), { recursive: true, force: true });
   }
 });
+
+it('seals readable JSONL after a partial result write in a new segment', async () => {
+  const root = await mkdtemp('/tmp/ar-tool-write-');
+  const writer = await TraceWriter.create(root, {
+    cwd: root,
+    argv: [],
+    adapter: { id: 'fixture' },
+    agenticreplayVersion: 'test',
+    storageLimits: { eventBytes: 400, runEventBytes: 8192 },
+  });
+  const probe = await open(join(root, 'probe'), 'w');
+  const prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = prototype.writeFile;
+  const spy = vi.spyOn(prototype, 'writeFile').mockImplementation(async function (
+    this: any,
+    data: any,
+    ...rest: any[]
+  ) {
+    if (typeof data === 'string' && data.includes('"type":"tool.result"')) {
+      await original.call(this, data.slice(0, 24), ...rest);
+      throw Object.assign(new Error('full disk'), { code: 'ENOSPC' });
+    }
+    return original.call(this, data, ...rest);
+  });
+  try {
+    await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+    const call = await writer.append({
+      type: 'tool.call',
+      actor: 'model',
+      attrs: { tool_use_id: 'call_1' },
+    });
+    await expect(
+      writer.append({
+        type: 'tool.result',
+        actor: 'harness',
+        attrs: { tool_use_id: 'call_1' },
+        causes: [call.seq],
+        payload: 'result'.repeat(100),
+      }),
+    ).rejects.toMatchObject({ code: 'ENOSPC' });
+    await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+    const manifest = await writer.close();
+    expect(manifest.capture?.status).toBe('incomplete');
+    const segments = manifest.integrity!.segments!;
+    expect(segments).toHaveLength(2);
+    const files = await Promise.all(
+      segments.map((s) => readFile(join(writer.runDir, s.name), 'utf8')),
+    );
+    expect(
+      files
+        .join('')
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line).type),
+    ).toEqual(['run.start', 'tool.call', 'run.end']);
+  } finally {
+    spy.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});

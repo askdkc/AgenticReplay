@@ -6,6 +6,7 @@ import type {
 } from '@agenticreplay/plugin-api';
 import type { RecordedExchange } from '@agenticreplay/proxy';
 import type { TraceWriter } from '@agenticreplay/core';
+import type { TraceEvent } from '@agenticreplay/schema';
 
 /**
  * Turning intercepted model exchanges into trace events.
@@ -23,7 +24,6 @@ import type { TraceWriter } from '@agenticreplay/core';
 export interface PendingToolCall {
   id: string;
   name: string;
-  input: unknown;
   /** seq of the tool.call event, so the tool.result can point back at it. */
   seq: number;
   turn: number;
@@ -40,8 +40,11 @@ export interface DerivedEvent {
   actor: 'agent' | 'model' | 'harness';
   attrs: Record<string, unknown>;
   payload?: unknown;
-  /** Index into the pending map, resolved to a real seq by the caller. */
-  causesToolId?: string;
+  /** Persisted call this observed result answers. */
+  callSeq?: number;
+  /** Private deduplication key for unlinked observations. Never written as event content. */
+  unmatchedKey?: string;
+  contextFingerprint?: string;
   /**
    * Positions of earlier events *in this same batch* that caused this one.
    *
@@ -70,29 +73,37 @@ function hasErrorReceipt(content: string): boolean {
   }
 }
 
+interface SavedCall extends PendingToolCall {
+  signature?: string;
+  closed: boolean;
+}
+
+function matchCall(calls: SavedCall[], echo: string | undefined): SavedCall | undefined {
+  if (calls.length <= 1) return calls[0];
+  // An omitted or redacted input could match any echo. Closing either attempt would be a guess.
+  if (!echo || calls.some((call) => call.signature === undefined)) return;
+  const matching = calls.filter((call) => call.signature === echo);
+  if (matching.length === 1) return matching[0];
+}
+
 export class ExchangeEventDeriver {
-  readonly #pending = new Map<string, PendingToolCall>();
-  /**
-   * Tool results already turned into events. Necessary because the conversation is resent in
-   * full every turn: without this, a result would be re-emitted on every subsequent request and
-   * a long run would accumulate one duplicate per turn per tool call.
-   */
-  readonly #closed = new Set<string>();
+  // Keep each persisted call occurrence, including closed ones: a resent result for an
+  // earlier attempt must not answer a newer call that happens to reuse its provider ID.
+  readonly #calls = new Map<string, SavedCall[]>();
+  readonly #unmatched = new Set<string>();
   /**
    * Retrieval contexts already emitted, by fingerprint.
    *
    * A conversation is resent in full every turn, so without this a multi-turn RAG session would
-   * re-emit the first turn's passages on every request after it — the same duplication `#closed`
-   * prevents for tool results, one event type over.
+   * re-emit the first turn's passages on every request after it.
    */
   readonly #seenContext = new Set<string>();
 
-  /** Tool calls that were issued but whose result never came back. */
+  /** Saved call occurrences for which no matching result was persisted. */
   unresolved(): PendingToolCall[] {
-    // A pending entry now outlives the result that answered it, so that the recorder can still
-    // resolve the call's seq for `causes` after derive has returned. `#closed` is the authority on
-    // whether a call was actually answered; "still in #pending" no longer means "unanswered".
-    return [...this.#pending.values()].filter((p) => !this.#closed.has(p.id));
+    return Array.from(this.#calls.values()).flatMap((calls) =>
+      calls.filter((call) => !call.closed),
+    );
   }
 
   /**
@@ -111,8 +122,8 @@ export class ExchangeEventDeriver {
     // wire: the passages are in the prompt. See `retrievalContext`.
     const retrieved = retrievalContext(exchange.canonicalRequest);
     if (retrieved && !this.#seenContext.has(retrieved.fingerprint)) {
-      this.#seenContext.add(retrieved.fingerprint);
       events.push({
+        contextFingerprint: retrieved.fingerprint,
         type: 'retrieval.context',
         // The harness retrieved these; agenticreplay only read them out of what it sent.
         actor: 'harness',
@@ -222,8 +233,6 @@ export class ExchangeEventDeriver {
         attrs: { tool_use_id: use.id, name: use.name, input: use.input },
         causesIndex: [responseAt],
       });
-      // seq is assigned by the writer; the caller patches it back in via markPending.
-      this.#pending.set(use.id, { id: use.id, name: use.name, input: use.input, seq: -1, turn });
     }
 
     return events;
@@ -243,73 +252,126 @@ export class ExchangeEventDeriver {
     const events: DerivedEvent[] = [];
     // Responses sends each result as a separate input item, sometimes followed by
     // compaction or reasoning. Scan earlier items only for calls this run observed.
-    for (let index = start; index < request.messages.length; index++) {
+    const emitted = new Set<number | string>();
+    const echoed = new Map<string, string | undefined>();
+    for (let index = 0; index < request.messages.length; index++) {
       const message = request.messages[index]!;
-      if (message.role !== 'user') continue;
+      if (message.role === 'assistant') {
+        if (request.messages[index - 1]?.role !== 'assistant') echoed.clear();
+        for (const block of message.content) {
+          if (block.type === 'tool_use' && (this.#calls.get(block.id)?.length ?? 0) > 1) {
+            echoed.set(
+              block.id,
+              echoed.has(block.id) ? undefined : callSignature(block.name, block.input),
+            );
+          }
+        }
+        continue;
+      }
+      if (index < start) continue;
       for (const result of message.content) {
-        if (
-          result.type !== 'tool_result' ||
-          !result.tool_use_id ||
-          this.#closed.has(result.tool_use_id)
-        )
-          continue;
-        const pending = this.#pending.get(result.tool_use_id);
-        if (!pending && (scope === 'known' || message !== trailing)) continue;
+        if (result.type !== 'tool_result' || !result.tool_use_id) continue;
+        const id = result.tool_use_id;
+        const calls = this.#calls.get(id) ?? [];
+        if (!calls.length && (scope === 'known' || message !== trailing)) continue;
+        const call = matchCall(calls, echoed.get(id));
+        if (call?.closed) continue;
+        const ambiguous = calls.length > 1 && !call;
+        const key = call?.seq ?? unmatchedKey(id, calls.at(-1)?.seq, result.content);
+        if (emitted.has(key) || (typeof key === 'string' && this.#unmatched.has(key))) continue;
+        emitted.add(key);
         events.push({
           type: 'tool.result',
           actor: 'harness',
           attrs: {
             tool_use_id: result.tool_use_id,
-            name: pending?.name ?? 'unknown',
+            name: call?.name ?? 'unknown',
+            ...(ambiguous ? { correlation: 'ambiguous' } : {}),
             is_error: result.is_error ?? hasErrorReceipt(result.content),
             bytes: result.content.length,
           },
           payload: result.content,
-          causesToolId: result.tool_use_id,
+          callSeq: call?.seq,
+          ...(typeof key === 'string' ? { unmatchedKey: key } : {}),
         });
-        // Keep the call until the writer has resolved its causal sequence number.
-        this.#closed.add(result.tool_use_id);
       }
     }
     return events;
   }
 
-  markPending(toolUseId: string, seq: number): void {
-    const p = this.#pending.get(toolUseId);
-    if (p) p.seq = seq;
-  }
-
-  /** Restore only persisted tool identities; raw prompts and credentials are never needed. */
-  restore(event: {
-    type: string;
-    seq: number;
-    turn?: number;
-    attrs?: Record<string, unknown>;
-  }): void {
+  /** Apply the writer receipt (or the same JSONL event during recovery). */
+  restore(
+    event: {
+      type: string;
+      seq: number;
+      turn?: number;
+      attrs?: Record<string, unknown>;
+      causes?: number[];
+      payload?: unknown;
+      redacted?: string[];
+    },
+    candidate?: DerivedEvent,
+  ): void {
+    if (event.type === 'retrieval.context' && candidate?.contextFingerprint) {
+      this.#seenContext.add(candidate.contextFingerprint);
+    }
     const id = event.attrs?.tool_use_id;
-    if (typeof id !== 'string') return;
-    if (event.type === 'tool.call')
-      this.#pending.set(id, {
+    if (typeof id !== 'string' || !id) return;
+    const calls = this.#calls.get(id) ?? [];
+    if (event.type === 'tool.call') {
+      const name = String(event.attrs?.name ?? 'unknown');
+      calls.push({
         id,
-        name: String(event.attrs?.name ?? 'unknown'),
-        input: event.attrs?.input,
-        turn: event.turn ?? 0,
+        name,
         seq: event.seq,
+        turn: event.turn ?? 0,
+        closed: false,
+        signature:
+          event.attrs?.input === undefined || event.redacted?.length
+            ? undefined
+            : callSignature(name, event.attrs.input),
       });
-    if (event.type === 'tool.result') this.#closed.add(id);
+      this.#calls.set(id, calls);
+    } else if (event.type === 'tool.result') {
+      // Older records can have an ID but no causal edge. Only a single saved occurrence is
+      // identifiable in that format. An explicit ambiguous observation never closes a call.
+      const call = event.causes?.length
+        ? calls.find((candidate) => event.causes!.includes(candidate.seq))
+        : calls.length === 1 && event.attrs?.correlation !== 'ambiguous'
+          ? calls[0]
+          : undefined;
+      if (call) call.closed = true;
+      else if (candidate?.unmatchedKey) this.#unmatched.add(candidate.unmatchedKey);
+      else if (typeof event.payload === 'string') {
+        this.#unmatched.add(unmatchedKey(id, calls.at(-1)?.seq, event.payload));
+      }
+    }
   }
 
   seqOf(toolUseId: string): number | undefined {
-    const seq = this.#pending.get(toolUseId)?.seq;
-    return seq === undefined || seq < 0 ? undefined : seq;
+    const calls = this.#calls.get(toolUseId);
+    return calls?.length === 1 && !calls[0]!.closed ? calls[0]!.seq : undefined;
   }
+}
 
-  /** Causal lookups are done once the batch is written; keep only IDs for deduplication. */
-  releaseCompleted(): void {
-    for (const id of this.#pending.keys()) {
-      if (this.#closed.has(id)) this.#pending.delete(id);
-    }
-  }
+function callSignature(name: string, input: unknown): string {
+  // Object key order has no meaning in JSON tool arguments.
+  const json = JSON.stringify([name, input], (_key, value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, (value as Record<string, unknown>)[key]]),
+        )
+      : value,
+  );
+  return createHash('sha256').update(json).digest('hex');
+}
+
+function unmatchedKey(id: string, lastSeq: number | undefined, content: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify([id, lastSeq, content]))
+    .digest('hex');
 }
 
 /**
@@ -422,16 +484,10 @@ export async function appendDerivedEvents(
   deriver: ExchangeEventDeriver,
   exchange: RecordedExchange,
   turn: number,
-  /**
-   * Each derived event as it is written.
-   *
-   * The recorder needs to know whether the agent ran any commands, so it can say when the shell
-   * layer was on and saw none of them. That is only knowable from what the model asked for, and
-   * this is the one place the derived events exist.
-   */
-  onDerived?: (derived: DerivedEvent) => void,
+  /** The event actually stored, including any redaction or size-limit omissions. */
+  onWritten?: (event: TraceEvent) => void,
 ): Promise<void> {
-  await appendDerivedBatch(writer, deriver, deriver.derive(exchange, turn), turn, onDerived);
+  await appendDerivedBatch(writer, deriver, deriver.derive(exchange, turn), turn, onWritten);
 }
 
 /** Persist results carried by a request without projecting an incomplete exchange as a model call. */
@@ -449,36 +505,26 @@ async function appendDerivedBatch(
   deriver: ExchangeEventDeriver,
   events: DerivedEvent[],
   turn: number,
-  onDerived?: (derived: DerivedEvent) => void,
+  onWritten?: (event: TraceEvent) => void,
 ): Promise<void> {
   /** `written[i]` is the seq of the i-th derived event, which is what `causesIndex` refers to. */
   const written: number[] = [];
-  try {
-    for (const derived of events) {
-      const causes: number[] = [];
-      if (derived.causesToolId) {
-        const seq = deriver.seqOf(derived.causesToolId);
-        if (seq !== undefined) causes.push(seq);
-      }
-      for (const index of derived.causesIndex ?? []) {
-        const seq = written[index];
-        if (seq !== undefined) causes.push(seq);
-      }
-      const event = await writer.append({
-        type: derived.type,
-        actor: derived.actor,
-        turn,
-        attrs: derived.attrs,
-        payload: derived.payload as never,
-        ...(causes.length > 0 ? { causes } : {}),
-      });
-      written.push(event.seq);
-      onDerived?.(derived);
-      if (derived.type === 'tool.call') {
-        deriver.markPending(String(derived.attrs['tool_use_id']), event.seq);
-      }
+  for (const derived of events) {
+    const causes: number[] = derived.callSeq === undefined ? [] : [derived.callSeq];
+    for (const index of derived.causesIndex ?? []) {
+      const seq = written[index];
+      if (seq !== undefined) causes.push(seq);
     }
-  } finally {
-    deriver.releaseCompleted();
+    const event = await writer.append({
+      type: derived.type,
+      actor: derived.actor,
+      turn,
+      attrs: derived.attrs,
+      payload: derived.payload as never,
+      ...(causes.length > 0 ? { causes } : {}),
+    });
+    written.push(event.seq);
+    deriver.restore(event, derived);
+    onWritten?.(event);
   }
 }

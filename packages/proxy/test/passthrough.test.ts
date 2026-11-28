@@ -547,3 +547,43 @@ describe('passthrough carries the credentials a gateway needs', () => {
     expect(up.calls[0]!.headers['authorization']).toBe('Bearer sk-gateway-key');
   });
 });
+
+it('drains final request observations after a client disconnects', async () => {
+  const started = Promise.withResolvers<void>();
+  const disconnected = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const seen: NetExchange[] = [];
+  const proxy = await createProxy({
+    mode: 'record',
+    fetchImpl: async (_url, init) => {
+      init?.signal?.addEventListener('abort', () => disconnected.resolve(), { once: true });
+      started.resolve();
+      await finish.promise;
+      throw new Error('client disconnected');
+    },
+    onNetExchange: (e) => {
+      seen.push(e);
+    },
+  });
+  const controller = new AbortController();
+  const client = fetch(proxy.url + '/v1/chat/completions', {
+    method: 'POST',
+    body: JSON.stringify({ model: 'fixture', messages: [] }),
+    signal: controller.signal,
+    headers: { 'content-type': 'application/json' },
+  }).catch(() => undefined);
+  await started.promise;
+  controller.abort();
+  await disconnected.promise;
+  const closed = proxy.close().then(() => seen.length);
+  // The socket has closed. The handler still owns an observation.
+  const release = setTimeout(() => finish.resolve(), 25);
+  try {
+    expect(await closed).toBe(1);
+    expect(seen[0]?.abandoned).toBe(true);
+  } finally {
+    clearTimeout(release);
+    finish.resolve();
+    await client;
+  }
+});

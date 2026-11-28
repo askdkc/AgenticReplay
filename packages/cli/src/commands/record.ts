@@ -453,7 +453,7 @@ async function runRecording(
   /** Model exchanges the proxy actually captured — the number the warning below turns on. */
   let modelExchanges = 0;
   /**
-   * Tool calls that ran a command, counted from the model exchanges rather than from the shim.
+   * Command tools requested in the recorded model exchanges.
    *
    * This is the evidence half of the shell-shim check. The shim reports success when it installs,
    * which says nothing about whether the harness ever went through it: Claude Code on Windows
@@ -507,13 +507,31 @@ async function runRecording(
   async function persist(exchange: RecordedExchange): Promise<void> {
     const requestTurn = exchange.requestId ? requestTurns.get(exchange.requestId) : undefined;
     if (requestTurn === undefined) writer.markCaptureIncomplete('missing_model_correlation');
-    await appendDerivedEvents(writer, deriver, exchange, requestTurn ?? 0, (derived) => {
-      if (derived.type === 'tool.call' && isCommandTool(derived.attrs['input'])) {
+    await appendDerivedEvents(writer, deriver, exchange, requestTurn ?? 0, (event) => {
+      if (event.type === 'tool.call' && isCommandTool(event.attrs?.input)) {
         commandToolCalls += 1;
       }
     });
 
     if (fs) await appendSnapshot(fs, writer, out, requestTurn ?? 0);
+  }
+
+  let diagnosed = false;
+  async function diagnoseToolCalls(): Promise<void> {
+    if (diagnosed) return;
+    diagnosed = true;
+    const calls = deriver.unresolved().map(({ id, seq }) => ({ tool_use_id: id, seq }));
+    if (!calls.length) return;
+    try {
+      await writer.append({
+        type: 'note',
+        actor: 'agenticreplay',
+        turn,
+        attrs: { rule: 'unresolved_tool_calls', calls },
+      });
+    } catch {
+      writer.markCaptureIncomplete('unresolved_diagnostic_write_failed');
+    }
   }
 
   let proxyClosing: Promise<void> | undefined;
@@ -630,6 +648,10 @@ async function runRecording(
     }
     const { exitCode, interrupted } = childResult;
 
+    // Before the trace is sealed, not after. A tunnel's record is only complete when its socket
+    // closes, and closing the proxy is what closes the ones an exiting agent left open — so a
+    // `proxy.close()` after `writer.close()` produced tunnel records with nowhere to go.
+    await (proxyClosing = proxy.close());
     await writes.drain().catch((err: unknown) => {
       writer.markCaptureIncomplete('storage_failure');
       out.warn('capture.storage_failure', { detail: String(err) });
@@ -760,26 +782,6 @@ async function runRecording(
 
     if (mcp) await captureOptional(() => drainMcpFrames(mcp!, writer, turnAt, turn));
 
-    const orphans = deriver.unresolved();
-    if (orphans.length > 0) {
-      await captureOptional(() =>
-        writer.append({
-          type: 'note',
-          actor: 'agenticreplay',
-          turn,
-          attrs: { rule: 'unresolved_tool_calls', ids: orphans.map((o) => o.id) },
-        }),
-      );
-    }
-
-    // Before the trace is sealed, not after. A tunnel's record is only complete when its socket
-    // closes, and closing the proxy is what closes the ones an exiting agent left open — so a
-    // `proxy.close()` after `writer.close()` produced tunnel records with nowhere to go.
-    await (proxyClosing = proxy.close());
-    await writes.drain().catch((err: unknown) => {
-      writer.markCaptureIncomplete('storage_failure');
-      out.warn('capture.storage_failure', { detail: String(err) });
-    });
     // The CA dies with the run. `dispose` is idempotent and best-effort: failing to delete a key is
     // worth a warning, never worth losing the trace the user was recording.
     if (ca) {
@@ -819,6 +821,8 @@ async function runRecording(
         }),
       );
     }
+
+    await diagnoseToolCalls();
 
     const observed = networkExchanges;
     if (requestTurns.size !== networkExchanges) writer.markCaptureIncomplete('unfinalized_request');
@@ -956,16 +960,14 @@ async function runRecording(
      * what only the shim can see — the real exit code, the real duration, and which stream each byte
      * came from — while the commands still appear as tool calls, so nothing looks wrong.
      *
-     * The condition is evidence, not a platform check: commands demonstrably ran and the layer that
-     * was supposed to see them saw none of them, whatever the reason.
+     * A model request and an empty frame log leave execution status unknown.
      */
     if (shell && shellFrames === 0 && commandToolCalls > 0) {
       out.warn('shell.ineffective', {
         commands: commandToolCalls,
         captured: 0,
-        cause: 'the harness ran its shell without going through the PATH shim',
-        effect: 'exit codes, durations and the stdout/stderr split are not in this trace',
-        next: 'record with --no-shell, which claims nothing rather than claiming this',
+        observation: 'the model requested command tools and the shell shim observed no commands',
+        effect: 'shell execution status is unknown',
       });
     }
 
@@ -985,8 +987,11 @@ async function runRecording(
     };
   } catch (err) {
     // Stop accepting traffic and finish tunnel capture before draining writes and sealing the trace.
-    await (proxyClosing ?? proxy.close()).catch(() => undefined);
-    await writes.drain().catch(() => undefined);
+    await (proxyClosing ?? proxy.close()).catch(() =>
+      writer.markCaptureIncomplete('proxy_shutdown_failed'),
+    );
+    await writes.drain().catch(() => writer.markCaptureIncomplete('storage_failure'));
+    await diagnoseToolCalls();
     if (fs) await fs.dispose().catch(() => undefined);
     await writer
       .append({ type: 'run.end', actor: 'agenticreplay', turn, attrs: { error: String(err) } })

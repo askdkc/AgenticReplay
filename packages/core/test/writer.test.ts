@@ -1064,3 +1064,98 @@ describe('rotation across event files (spec §2.4)', () => {
     expect(integrity.state).toBe('mismatch');
   });
 });
+
+it('keeps only the tool key and causal edge when a tool event exceeds the file target', async () => {
+  const writer = await TraceWriter.create(runs, {
+    ...INIT,
+    storageLimits: { eventBytes: 512, runEventBytes: 8192 },
+  });
+  await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+  for (const type of ['tool.call', 'tool.result'] as const) {
+    await writer.append({
+      type,
+      actor: 'harness',
+      causes: [writer.seq - 1],
+      attrs: { tool_use_id: 'call_1', message: 'private detail', input: 'body'.repeat(1000) },
+      payload: 'private detail',
+    });
+  }
+  await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+  const manifest = await writer.close();
+  const segments = manifest.integrity!.segments!;
+  const callFile = segments.findIndex((segment) => segment.last_seq === 1);
+  expect(callFile).toBeGreaterThanOrEqual(0);
+  expect(segments[callFile + 1]?.first_seq).toBe(2);
+  for (const event of (await lines(writer)).slice(1, 3)) {
+    expect(event.attrs).toEqual({ tool_use_id: 'call_1', payload_omitted: 'event_storage_limit' });
+    expect(event.causes).toEqual([event.seq - 1]);
+    expect(event.payload).toBeUndefined();
+  }
+});
+
+it('rejects unsafe tool identities after redaction and keeps run.end writable after tool storage fills', async () => {
+  const writer = await TraceWriter.create(runs, { ...INIT, storageLimits: { eventBytes: 0 } });
+  await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+  for (const id of ['line\nbreak', 'a'.repeat(257), 'sk-' + 'x'.repeat(28)]) {
+    const e = await writer.append({
+      type: 'tool.call',
+      actor: 'model',
+      attrs: { tool_use_id: id, input: 'private body' },
+    });
+    expect(e.attrs?.tool_use_id).toBeUndefined();
+  }
+  let rejected = false;
+  for (let i = 0; i < 100; i++) {
+    try {
+      await writer.append({
+        type: 'tool.call',
+        actor: 'model',
+        attrs: { tool_use_id: 'valid_' + i },
+      });
+    } catch (error) {
+      expect(String(error)).toContain('diagnostic storage limit');
+      rejected = true;
+      break;
+    }
+  }
+  expect(rejected).toBe(true);
+  await writer.append({ type: 'run.end', actor: 'agenticreplay', attrs: { exit_code: 0 } });
+  const manifest = await writer.close(0);
+  expect(manifest.capture?.status).toBe('incomplete');
+  expect(manifest.capture?.issues).toEqual(
+    expect.arrayContaining(['invalid_tool_use_id', 'diagnostic_storage_limit']),
+  );
+  const events = await lines(writer);
+  expect(events.at(-1)?.type).toBe('run.end');
+  expect(JSON.stringify(events)).not.toContain('private body');
+  expect(JSON.stringify(events)).not.toContain('sk-' + 'x'.repeat(28));
+});
+
+it('records an incomplete capture when the unresolved diagnostic exceeds its reserve', async () => {
+  const writer = await TraceWriter.create(runs, {
+    ...INIT,
+    storageLimits: { eventBytes: 128 * 1024, runEventBytes: 128 * 1024 },
+  });
+  await writer.append({ type: 'run.start', actor: 'agenticreplay' });
+  const calls = [];
+  for (let i = 0; i < 340; i++) {
+    const id = 'a'.repeat(247) + i;
+    const call = await writer.append({
+      type: 'tool.call',
+      actor: 'model',
+      attrs: { tool_use_id: id },
+    });
+    calls.push({ seq: call.seq, tool_use_id: id });
+  }
+  await expect(
+    writer.append({
+      type: 'note',
+      actor: 'agenticreplay',
+      attrs: { rule: 'unresolved_tool_calls', calls },
+    }),
+  ).rejects.toThrow('diagnostic storage limit');
+  await writer.append({ type: 'run.end', actor: 'agenticreplay' });
+  const manifest = await writer.close();
+  expect(manifest.capture?.issues).toContain('diagnostic_storage_limit');
+  expect((await lines(writer)).at(-1)?.type).toBe('run.end');
+});

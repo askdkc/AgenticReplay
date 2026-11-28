@@ -133,6 +133,43 @@ export class DiagnosticStorageLimitError extends Error {
   }
 }
 
+/** Provider correlation keys accepted in compact records and terminal diagnostics. */
+function isToolUseId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    !/[^A-Za-z0-9_-]/.test(value)
+  );
+}
+
+/** Format recorder-owned references after ordinary envelope redaction. Keeping IDs under
+ * tool_use_id during the scan applies the same protocol-ID policy as the saved call. */
+function unresolvedDiagnostic(event: TraceEvent): Record<string, unknown> | undefined {
+  if (
+    event.type !== 'note' ||
+    event.actor !== 'agenticreplay' ||
+    event.attrs?.rule !== 'unresolved_tool_calls' ||
+    !Array.isArray(event.attrs.calls)
+  )
+    return;
+  const ids: string[] = [];
+  const call_seqs: number[] = [];
+  for (const call of event.attrs.calls) {
+    if (
+      !isToolUseId(call?.tool_use_id) ||
+      !Number.isSafeInteger(call.seq) ||
+      call.seq < 0 ||
+      call.seq >= event.seq
+    ) {
+      throw new Error('invalid unresolved tool call reference');
+    }
+    ids.push(call.tool_use_id);
+    call_seqs.push(call.seq);
+  }
+  return { rule: 'unresolved_tool_calls', observation: 'result_not_observed', ids, call_seqs };
+}
+
 const DIAGNOSTIC_BYTES = 64 * 1024;
 const END_BYTES = 4096;
 /**
@@ -756,7 +793,7 @@ export class TraceWriter {
    * Open the next event file and make it the live one.
    *
    * The failed file is closed first and its size recorded, so what the run already wrote stays
-   * readable whatever happens next. Creation is exclusive (`wx`): a file already there is either
+   * readable whatever happens next. Creation is exclusive (`ax`): a file already there is either
    * this writer's abandoned rotation from a crash — which the resume path reuses — or another
    * process's, and neither should be appended to by guessing.
    *
@@ -784,7 +821,8 @@ export class TraceWriter {
     const closedEvents = this.#segmentEvents;
     let next: FileHandle;
     try {
-      next = await open(join(this.#runDir, nextName), 'wx', FILE_MODE);
+      // O_APPEND follows the truncated EOF after rolling back a partial write.
+      next = await open(join(this.#runDir, nextName), 'ax', FILE_MODE);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'EEXIST') {
@@ -989,6 +1027,18 @@ export class TraceWriter {
       })),
     );
     let out = JSON.parse(scrubbed.value) as TraceEvent;
+    const toolEvent = out.type === 'tool.call' || out.type === 'tool.result';
+    if (
+      toolEvent &&
+      out.attrs &&
+      'tool_use_id' in out.attrs &&
+      !isToolUseId(out.attrs.tool_use_id)
+    ) {
+      delete out.attrs.tool_use_id;
+      this.markCaptureIncomplete('invalid_tool_use_id');
+    }
+    const unresolved = unresolvedDiagnostic(out);
+    if (unresolved) out.attrs = unresolved;
     if (Object.keys(operationalPaths).length) out.attrs = { ...out.attrs, ...operationalPaths };
     // The complete payload was already scanned above. Scanning it again as part of the envelope
     // doubles work and can apply a different policy to inline and spilled bodies.
@@ -1037,17 +1087,31 @@ export class TraceWriter {
         if (exhausted !== undefined) this.markCaptureIncomplete(exhausted);
         // Keep a bounded diagnostic, never the unbounded payload/attrs that filled the store.
         const attrs: Record<string, unknown> = { payload_omitted: omitted };
-        for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
-          const value = out.attrs?.[key];
-          if (typeof value === 'string') attrs[key] = value.slice(0, 96);
-          else if (typeof value === 'number' || typeof value === 'boolean') attrs[key] = value;
+        if (toolEvent) {
+          if (isToolUseId(out.attrs?.tool_use_id)) attrs.tool_use_id = out.attrs.tool_use_id;
+          if (out.attrs?.correlation === 'ambiguous') attrs.correlation = 'ambiguous';
+        } else if (!unresolved) {
+          for (const key of ['reason', 'message', 'error', 'exit_code', 'status']) {
+            const value = out.attrs?.[key];
+            if (typeof value === 'string') attrs[key] = value.slice(0, 96);
+            else if (typeof value === 'number' || typeof value === 'boolean') attrs[key] = value;
+          }
         }
-        out = { seq, ts, mono_us, turn, type: init.type, actor: init.actor, attrs };
+        out = {
+          seq,
+          ts,
+          mono_us,
+          turn,
+          type: init.type,
+          actor: init.actor,
+          attrs: unresolved ?? attrs,
+          ...(toolEvent && out.causes ? { causes: out.causes } : {}),
+        };
         line = `${JSON.stringify(out)}\n`;
         const allowance =
           init.type === 'run.end'
             ? DIAGNOSTIC_BYTES
-            : init.type === 'error'
+            : init.type === 'error' || unresolved
               ? DIAGNOSTIC_BYTES - END_BYTES
               : END_BYTES;
         // The bounded record has to fit whatever bounded the write: the file, the run, or both.

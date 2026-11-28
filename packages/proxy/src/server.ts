@@ -523,8 +523,9 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const stats: ProxyStats = { liveCalls: 0, intercepted: 0, tunnelled: 0, passedThrough: 0 };
   const redactor = new Redactor();
 
+  const activeRequests = new Set<Promise<void>>();
   const server = createServer((req, res) => {
-    void (interception?.forwardDirect ?? handle)(req, res).catch((err: unknown) => {
+    const handled = (interception?.forwardDirect ?? handle)(req, res).catch((err: unknown) => {
       // Whatever failed, its message may name the origin it was given — and this body reaches
       // the agent, which prints it. See {@link withoutCredentials}.
       if (res.destroyed || res.writableEnded) return;
@@ -534,6 +535,11 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
       }
       json(res, 500, { error: { message: withoutCredentials(String(err)) } });
     });
+    activeRequests.add(handled);
+    void handled.then(
+      () => activeRequests.delete(handled),
+      () => activeRequests.delete(handled),
+    );
   });
 
   /**
@@ -1742,6 +1748,8 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyHandle> {
         interception?.close();
         (server as Server).close((err) => (err ? reject(err) : resolve()));
       });
+      // A disconnected socket can close before its request handler publishes its final observation.
+      await Promise.allSettled(activeRequests);
       await interception?.drain();
     },
   };

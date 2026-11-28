@@ -88,9 +88,12 @@ while the tests were re-run twice.
 `detectLoops` in `packages/viewer/src/render.ts` is about forty lines and reads nothing but the
 public format, which is the point: it is the model to copy for an analyzer of your own.
 
-The only `note` events a recording contains are the two `agenticreplay record` writes itself —
-`fs_snapshot_skipped`, when a workspace snapshot failed and that turn has no checkpoint, and
-`unresolved_tool_calls`, when the run ended with a tool call whose result never came back.
+An `fs_snapshot_skipped` note identifies a turn whose workspace snapshot failed.
+At shutdown, `unresolved_tool_calls` lists saved calls with no matching saved result.
+In new recordings, each entry in `ids` has a corresponding event sequence number in `call_seqs`.
+That number identifies the call even when two attempts used the same ID. A result marked
+`correlation: ambiguous` has no causal link to either attempt. The proxy alone cannot establish
+whether the harness executed a call whose result is missing.
 
 ## 3. Open the timeline
 

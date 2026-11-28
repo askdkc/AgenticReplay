@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { eventSegmentIndex } from '../packages/schema/dist/index.js';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { verifyToolCorrelation } from './tool-correlation-smoke.mjs';
 
 const exec = promisify(execFile);
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -315,6 +316,8 @@ try {
   mcpProcess.stdin.end();
   if (!mcpProcess.killed) mcpProcess.kill('SIGTERM');
 
+  await verifyToolCorrelation(bin, consumerDir, smokeEnv);
+
   console.log(
     JSON.stringify(
       {
@@ -329,6 +332,7 @@ try {
           'record endpoint body',
           'sealed complete run',
           'event file integrity',
+          'segmented tool results during proxy shutdown',
           'show',
           'list',
           'events',

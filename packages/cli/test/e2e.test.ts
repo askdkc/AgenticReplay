@@ -5,8 +5,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TraceReader, listRuns, resolveRunSelector, runGraph, chainTo } from '@agenticreplay/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  TraceWriter,
+  TraceReader,
+  listRuns,
+  resolveRunSelector,
+  runGraph,
+  chainTo,
+} from '@agenticreplay/core';
 import { AgenticReplay } from '../src/api.js';
 import { isBlobRef, validateEvent, validateManifest } from '@agenticreplay/schema';
 import { parseArgs } from '../src/args.js';
@@ -123,6 +130,46 @@ describe('end to end: record and inspect', () => {
     const call = events.find((e) => e.type === 'tool.call');
     expect(call?.attrs?.name).toBe('edit_file');
   });
+
+  it.each(['tool.call', 'tool.result'] as const)(
+    'diagnoses only persisted calls when %s cannot be written',
+    async (failure) => {
+      const append = TraceWriter.prototype.append;
+      const spy = vi.spyOn(TraceWriter.prototype, 'append').mockImplementation(function (
+        this: TraceWriter,
+        event,
+      ) {
+        if (event.type === failure) return Promise.reject(new Error('injected recording failure'));
+        return append.call(this, event);
+      });
+      vi.stubEnv('AGENTICREPLAY_EVENT_FILE_BYTES', '1500');
+      try {
+        const run = await record();
+        const reader = await TraceReader.open(run.runDir);
+        expect(reader.manifest().capture?.status).toBe('incomplete');
+        expect(reader.manifest().integrity!.segments!.length).toBeGreaterThan(1);
+        const events = await reader.events();
+        const calls = events.filter((e) => e.type === 'tool.call');
+        const receipts = events.filter((e) => e.type === 'tool.result');
+        const missing = calls.filter(
+          (call) =>
+            !receipts.some(
+              (r) =>
+                r.causes?.includes(call.seq) && r.attrs?.tool_use_id === call.attrs?.tool_use_id,
+            ),
+        );
+        expect(missing).toHaveLength(failure === 'tool.call' ? 0 : 1);
+        const notes = events.filter((e) => e.attrs?.rule === 'unresolved_tool_calls');
+        expect(notes).toHaveLength(missing.length);
+        expect(notes[0]?.attrs?.ids ?? []).toEqual(missing.map((e) => e.attrs?.tool_use_id));
+        expect(notes[0]?.attrs?.call_seqs ?? []).toEqual(missing.map((e) => e.seq));
+        expect(events.at(-1)?.type).toBe('run.end');
+      } finally {
+        spy.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it('captures the filesystem change the agent made', async () => {
     const result = await record();

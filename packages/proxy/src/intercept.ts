@@ -496,7 +496,12 @@ export function attachTlsIntercept(
     return undefined;
   };
   const open = new Set<Socket | TLSSocket>();
-  const websocketCaptures = new Set<Promise<void>>();
+  const activeCaptures = new Set<Promise<void>>();
+  function track(capture: Promise<void>): void {
+    activeCaptures.add(capture);
+    const finished = () => activeCaptures.delete(capture);
+    void capture.then(finished, finished);
+  }
   const directOrigin = options.directCodexOrigin;
 
   const upgrade = (
@@ -521,10 +526,7 @@ export function attachTlsIntercept(
         budget,
         callbacks: options,
         secretHeaders: SECRET_REQUEST_HEADERS,
-        track: (drained) => {
-          websocketCaptures.add(drained);
-          void drained.then(() => websocketCaptures.delete(drained));
-        },
+        track,
       });
       return;
     }
@@ -612,34 +614,38 @@ export function attachTlsIntercept(
       if (req.httpVersionMajor >= 2) return;
       const req1 = req as unknown as IncomingMessage;
       const res1 = res as unknown as ServerResponse;
-      void forward(req1, res1).catch((err: unknown) => {
-        if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({ error: { message: `agenticreplay tls-intercept: ${String(err)}` } }),
-        );
-      });
+      track(
+        forward(req1, res1).catch((err: unknown) => {
+          if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({ error: { message: `agenticreplay tls-intercept: ${String(err)}` } }),
+          );
+        }),
+      );
     });
 
     server.on('stream', (stream: ServerHttp2Stream, headers) => {
-      void forwardH2(stream, headers).catch((err: unknown) => {
-        // Reported as well as answered, because the guard below returns without writing anything
-        // when the client has already gone -- and a failure nobody is left to receive is exactly
-        // the one worth having in the run's failure list.
-        reportH2(stream.session?.socket, err, 'forward');
-        // Guarded for the same reason as the response path: by the time a failure surfaces the
-        // client may be gone, and respond/end would then throw out of a rejection handler.
-        if (stream.destroyed) return;
-        try {
-          if (!stream.headersSent) stream.respond({ ':status': 502 });
-          stream.end(
-            JSON.stringify({
-              error: { message: `agenticreplay tls-intercept h2: ${String(err)}` },
-            }),
-          );
-        } catch {
-          stream.destroy();
-        }
-      });
+      track(
+        forwardH2(stream, headers).catch((err: unknown) => {
+          // Reported as well as answered, because the guard below returns without writing anything
+          // when the client has already gone -- and a failure nobody is left to receive is exactly
+          // the one worth having in the run's failure list.
+          reportH2(stream.session?.socket, err, 'forward');
+          // Guarded for the same reason as the response path: by the time a failure surfaces the
+          // client may be gone, and respond/end would then throw out of a rejection handler.
+          if (stream.destroyed) return;
+          try {
+            if (!stream.headersSent) stream.respond({ ':status': 502 });
+            stream.end(
+              JSON.stringify({
+                error: { message: `agenticreplay tls-intercept h2: ${String(err)}` },
+              }),
+            );
+          } catch {
+            stream.destroy();
+          }
+        }),
+      );
     });
 
     server.on('upgrade', onUpgrade);
@@ -1301,6 +1307,8 @@ export function attachTlsIntercept(
     counters.tunnelled += 1;
     const origin = netConnect(target.port, target.host);
     open.add(origin);
+    // Tunnel metadata is published by the close listener below.
+    track(new Promise<void>((resolve) => origin.once('close', () => resolve())));
 
     const finish = (error?: string): void => {
       if (settled) return;
@@ -1389,7 +1397,7 @@ export function attachTlsIntercept(
       open.clear();
     },
     drain: async () => {
-      while (websocketCaptures.size) await Promise.all(websocketCaptures);
+      while (activeCaptures.size) await Promise.allSettled(activeCaptures);
     },
   };
 }
